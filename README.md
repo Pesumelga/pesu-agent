@@ -1,6 +1,6 @@
-# Pesu Agent - Slack Desktop UI Automation & Message Parser (MVP 0 & MVP 1)
+# Pesu Agent - Slack Desktop UI Automation & Message Parser (MVP 0 ~ MVP 1.2)
 
-Windows 환경에서 실행 중인 Slack 데스크톱 애플리케이션의 **Microsoft UI Automation (UIA) Tree**를 안전하게 탐색하고, 현재 화면에 노출된 가시적 메시지를 구조화된 데이터로 추출하는 개인용 로컬 에이전트 프로젝트입니다.
+Windows 환경에서 실행 중인 Slack 데스크톱 애플리케이션의 **Microsoft UI Automation (UIA) Tree**를 안전하게 탐색하고, 현재 화면에 노출된 가시적 메시지를 구조화된 데이터로 추출 및 보정하는 개인용 로컬 에이전트 프로젝트입니다.
 
 ---
 
@@ -13,9 +13,15 @@ Windows 환경에서 실행 중인 Slack 데스크톱 애플리케이션의 **Mi
   - ⭕ 실행 중인 Slack 창의 Accessibility / UI 계층 정보만 순수하게 읽어옵니다.
 - **동적 창 탐색**: 특정 프로세스 ID(PID)나 회사/워크스페이스/채널명을 하드코딩하지 않고, 실행 중인 Slack 데스크톱 메인 창을 감지합니다.
 - **방어적 파싱**: 개별 UI 속성이나 subtree 오류가 발생해도 전체 파싱이 중단되지 않습니다.
-- **가시적 메시지 정규화 (MVP 1)**:
-  - 작성자(`author`), Slack 원본 시간(`timestamp_raw`), 멘션(`mentions`), 링크(`links`), 본문(`text`), 컨텍스트(`context`), 트리 깊이(`tree_depth`) 추출
-  - 동일 메시지 컨테이너의 subtree 내에서만 속성을 조합하여 메시지 간 데이터 혼합 방지
+- **메시지 신뢰성 및 작성자 보정 (MVP 1.1)**:
+  - `author_raw`: UIA subtree에서 실제 발견된 원본 작성자
+  - `author_resolved`: 직접 발견 또는 동일 컨테이너 직전 메시지로부터 상속된 보정 작성자
+  - `author_resolution`: 보정 상태 구분 (`explicit`, `inherited_from_previous_message`, `unresolved`)
+  - 컨테이너 경계(채널/스레드 등)를 넘는 잘못된 상속 방지 및 첫 화면 작성자 부재 시 추측 없이 `unresolved` 처리
+- **Scroll-Safe Message Identity & Fingerprint (MVP 1.2)**:
+  - `message_fingerprint`: 스크롤 뷰포트에 따라 변할 수 있는 `author_resolved`를 제외하고, UIA 불변 속성(`context`, `timestamp_raw`, `text`, `mentions`, `links`, `uia_message_id`)만을 조합하여 생성한 불변 SHA-256 해시값.
+  - `viewport_index`: 현재 뷰포트 내 표시 순서(0부터 시작).
+  - 중첩 글머리 기호(`p-rich_text_list`)의 자식 ListItem을 별도 메시지로 분리하지 않고 상위 메시지 본문으로 통합.
 - **UI Virtualization 인식**:
   - `scope = "visible_uia_only"`, `is_complete_conversation = false` 메타데이터를 명시하여 현재 화면 노출 영역과 전체 대화를 명확히 구분합니다.
 
@@ -45,7 +51,7 @@ pip install -r requirements.txt
 
 ## 🚀 실행 방법
 
-### 1. 가시적 메시지 파싱 (MVP 1)
+### 1. 가시적 메시지 파싱 및 Scroll-Safe Identity (MVP 1.2)
 
 Slack 데스크톱 앱을 실행한 상태에서 아래 명령을 실행합니다.
 
@@ -78,32 +84,49 @@ python scripts/inspect_slack.py --max-depth 25 --max-elements 3000 --output outp
 
 ```json
 {
-  "captured_at": "2026-08-20T04:17:23.057855+00:00",
-  "slack_window_title": "* 채널명 - 워크스페이스 - Slack",
-  "message_count": 12,
+  "captured_at": "2026-08-20T05:54:59.123456+00:00",
+  "slack_window_title": "김학진(DM) - Alfred - Slack",
+  "message_count": 28,
   "scope": "visible_uia_only",
   "is_complete_conversation": false,
-  "excluded_candidates_count": 3,
+  "excluded_candidates_count": 17,
+  "explicit_author_count": 23,
+  "inherited_author_count": 5,
+  "unresolved_author_count": 0,
+  "unique_fingerprints_count": 28,
+  "duplicate_fingerprint_groups_count": 0,
   "messages": [
     {
-      "author": "홍길동",
-      "timestamp_raw": "오늘, 오후 12:29:12",
-      "text": "업무 전달 알림 [담당자] @김영희 [상담건] https://example.com/item/123",
-      "mentions": ["@김영희"],
-      "links": ["https://example.com/item/123"],
-      "context": "channel",
-      "source_node_name": "홍길동 오후 12:29 ...",
-      "tree_depth": 15
-    },
-    {
-      "author": null,
-      "timestamp_raw": "오늘, 오후 12:30:00",
-      "text": "추가 확인 부탁드립니다.",
+      "viewport_index": 0,
+      "author": "이주영",
+      "author_raw": "이주영",
+      "author_resolved": "이주영",
+      "author_resolution": "explicit",
+      "timestamp_raw": "2월 24일, 오전 9:24:21",
+      "text": "넵",
       "mentions": [],
       "links": [],
       "context": "channel",
-      "source_node_name": "12:30 추가 확인 부탁드립니다.",
-      "tree_depth": 15
+      "source_container": "List:sr-only:14",
+      "source_node_name": "이주영 오전 9:24 넵",
+      "tree_depth": 15,
+      "message_fingerprint": "7c1fb74c6e2e533890f5b12..."
+    },
+    {
+      "viewport_index": 1,
+      "author": "김학진",
+      "author_raw": null,
+      "author_resolved": "김학진",
+      "author_resolution": "inherited_from_previous_message",
+      "timestamp_raw": "2월 24일, 오전 9:24:38",
+      "text": "지금?",
+      "mentions": [],
+      "links": [],
+      "context": "channel",
+      "source_container": "List:sr-only:14",
+      "source_node_name": "9:24지금?",
+      "tree_depth": 15,
+      "message_fingerprint": "8088dc39d268276c2437df4..."
     }
   ]
 }
@@ -113,7 +136,7 @@ python scripts/inspect_slack.py --max-depth 25 --max-elements 3000 --output outp
 
 ## 🧪 테스트 실행
 
-오프라인 단위 테스트 (Slack 미실행 상태에서도 전체 16개 테스트 통과):
+오프라인 단위 테스트 (Slack 미실행 상태에서도 전체 17개 테스트 통과):
 
 ```powershell
 pytest
@@ -127,8 +150,12 @@ pytest -m "live_slack or not live_slack"
 
 ---
 
-## ⚠️ 현재 알려진 제한사항
+## ⚠️ Scroll-Safe Identity 및 중복 처리 원칙
 
-1. **UI Virtualization (가상화 리스트)**: Slack 데스크톱(Electron)의 메시지 리스트는 화면에 현재 렌더링된 뷰포트 영역 위주로 UIA 트리에 노출됩니다. 스크롤 밖의 과거 대화는 화면에 렌더링되지 않으므로 현재 결과가 전체 대화가 아닙니다.
-2. **연속 메시지(Consecutive Messages)의 작성자 생략**: Slack UI 특성상 동일 작성자가 연속으로 보낸 메시지는 두 번째 메시지부터 작성자 버튼이 렌더링되지 않으므로 `author`가 `null`로 추출됩니다.
-3. **트레이 최소화 상태**: Slack 창이 시스템 트레이로 완전히 숨겨져(Minimized to tray) 렌더링되지 않는 경우, UIA Tree 상에서 자식 요소가 비어 있거나 창 핸들을 찾지 못할 수 있습니다.
+1. **Fingerprint의 뷰포트 불변성 (Scroll-Safe)**:
+   - `author_resolved`는 스크롤 위치에 따라 상속 여부가 바뀔 수 있으므로 fingerprint 해시 생성 시 제외됩니다.
+   - 따라서 동일 메시지는 뷰포트 상단에 노출되든 하단에 노출되든 동일한 `message_fingerprint`를 가집니다.
+2. **동일 본문 반복 전송 건**:
+   - 봇 알림이나 짧은 응답(예: "넵", 동일 템플릿 알림)이 동일 시간대/컨텍스트에서 정확히 같은 내용으로 중복 전송된 경우 동일 fingerprint를 가질 수 있으며, 이는 파서 오류가 아닌 실제 내용 중복입니다. UIA `automation_id`의 타임스탬프(`ts`)가 노출되는 경우 이를 함께 반영하여 고유성을 강화합니다.
+3. **가상화(Virtualization) 고려**:
+   - `viewport_index`는 현재 화면 내 순서이며, MVP 2 스크롤 수집 시 이전/이후 뷰포트의 `message_fingerprint`를 연결하여 중복 없는 전체 대화 스트림을 구축할 수 있습니다.

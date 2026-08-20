@@ -1,8 +1,9 @@
 #!/usr/bin/env python
-"""Slack Visible Message Parser CLI (MVP 1).
+"""Slack Visible Message Parser CLI (MVP 1.2: Scroll-Safe Message Identity).
 
 현재 Slack 데스크톱 앱의 UI Automation Tree에서 가시적 메시지 목록을 추출하여
-콘솔에 출력하고 JSON 파일로 저장합니다.
+작성자 보정(Author Resolution), viewport_index, 및 Scroll-Safe Fingerprint를 생성하고,
+콘솔 상세 출력 및 JSON 파일로 저장합니다.
 
 사용법:
     # 실시간 실행 중인 Slack에서 바로 파싱
@@ -48,7 +49,7 @@ from pesu_agent.parsers.slack_message_parser import SlackMessageParser
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Slack 화면에 노출된 가시적 메시지 추출 파서 (MVP 1)",
+        description="Slack 화면에 노출된 가시적 메시지 추출 및 Scroll-Safe Identity 파서 (MVP 1.2)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -97,8 +98,8 @@ def main() -> int:
 
     console.print(
         Panel(
-            "[bold cyan]Slack Visible Message Parser[/bold cyan] [dim](MVP 1: Read-Only)[/dim]\n"
-            "[white]현재 Slack 화면(UIA Tree)에 노출된 가시적 메시지를 구조화된 데이터로 추출합니다.[/white]\n"
+            "[bold cyan]Slack Visible Message Parser[/bold cyan] [dim](MVP 1.2: Scroll-Safe Message Identity)[/dim]\n"
+            "[white]현재 Slack 화면(UIA Tree)의 가시적 메시지를 추출하고 Scroll-Safe Fingerprint 및 viewport_index를 부여합니다.[/white]\n"
             "[dim yellow]※ UI Virtualization으로 인해 화면에 보이는 메시지만 수집되며 전체 대화가 아닙니다.[/dim yellow]",
             border_style="cyan",
         )
@@ -162,19 +163,32 @@ def main() -> int:
     console.print(f"\n[bold green]Found {result.message_count} visible Slack messages[/bold green]\n")
 
     for i, msg in enumerate(result.messages, 1):
-        author_display = msg.author if msg.author else "[dim](None - 연속 메시지)[/dim]"
+        if msg.author_resolution == "explicit":
+            author_badge = f"[bold green]{msg.author_resolved}[/bold green] [dim cyan](explicit)[/dim cyan]"
+        elif msg.author_resolution == "inherited_from_previous_message":
+            author_badge = (
+                f"[bold yellow]{msg.author_resolved}[/bold yellow] "
+                f"[dim italic](inherited from prev message)[/dim italic]"
+            )
+        else:
+            author_badge = "[dim red](unresolved - no author found)[/dim red]"
+
         time_display = msg.timestamp_raw if msg.timestamp_raw else "[dim](None)[/dim]"
         mentions_display = ", ".join(msg.mentions) if msg.mentions else "[dim]None[/dim]"
         links_display = ", ".join(msg.links) if msg.links else "[dim]None[/dim]"
+        fp_short = msg.message_fingerprint[:16] + "..." if msg.message_fingerprint else "[dim]None[/dim]"
 
-        console.print(f"[bold cyan][{i}][/bold cyan]")
-        console.print(f"[bold]Author:[/bold] {author_display}")
+        console.print(f"[bold cyan][{i}][/bold cyan] [dim](viewport_index: {msg.viewport_index})[/dim]")
+        console.print(f"[bold]Author:[/bold] {author_badge}")
+        if msg.author_raw != msg.author_resolved:
+            console.print(f"[dim]  └ Raw Author in UIA: {msg.author_raw!r}[/dim]")
         console.print(f"[bold]Time:[/bold] {time_display}")
         if msg.mentions:
             console.print(f"[bold]Mentions:[/bold] [yellow]{mentions_display}[/yellow]")
         if msg.links:
             console.print(f"[bold]Links:[/bold] [blue]{links_display}[/blue]")
         console.print(f"[bold]Context:[/bold] [dim]{msg.context}[/dim]")
+        console.print(f"[bold]Fingerprint:[/bold] [dim cyan]{fp_short}[/dim cyan] [dim](Scroll-Safe SHA-256)[/dim]")
         console.print(f"[bold]Text:[/bold] {msg.text}")
         console.print("")
 
@@ -184,21 +198,66 @@ def main() -> int:
     file_size_kb = saved_path.stat().st_size / 1024
 
     # 4. 요약 테이블 출력
-    summary_table = Table(title="메시지 파싱 실행 요약", border_style="cyan", show_header=True)
-    summary_table.add_column("항목", style="bold cyan", width=26)
+    summary_table = Table(title="메시지 파싱 및 Scroll-Safe Identity 요약", border_style="cyan", show_header=True)
+    summary_table.add_column("항목", style="bold cyan", width=30)
     summary_table.add_column("값", style="white")
 
     summary_table.add_row("Slack 창 제목", result.slack_window_title)
-    summary_table.add_row("추출된 가시적 메시지 수", f"[bold green]{result.message_count} 개[/bold green]")
+    summary_table.add_row("추출된 가시적 메시지 수 (Total)", f"[bold green]{result.message_count} 개[/bold green]")
+    summary_table.add_row(
+        "  ├ 직접 발견된 작성자 (Explicit)",
+        f"[green]{result.explicit_author_count} 개[/green]",
+    )
+    summary_table.add_row(
+        "  ├ 직전 메시지 상속 (Inherited)",
+        f"[yellow]{result.inherited_author_count} 개[/yellow]",
+    )
+    summary_table.add_row(
+        "  └ 미확인 작성자 (Unresolved)",
+        f"[red]{result.unresolved_author_count} 개[/red]",
+    )
+    summary_table.add_row(
+        "고유 Fingerprint 수 (Unique)",
+        f"[bold green]{result.unique_fingerprints_count} 개[/bold green]",
+    )
+    summary_table.add_row(
+        "Fingerprint 중복 그룹 수 (Duplicates)",
+        f"{result.duplicate_fingerprint_groups_count} 개",
+    )
     summary_table.add_row(
         "제외된 비메시지 후보 수",
-        f"{result.excluded_candidates_count} 개 (구분선/공백/시스템 항목)",
+        f"{result.excluded_candidates_count} 개 [dim](구분선/공백/글머리기호/액션버튼)[/dim]",
     )
-    summary_table.add_row("수집 범위 (Scope)", f"{result.scope} (화면 노출 영역만)")
-    summary_table.add_row("전체 대화 여부", f"{result.is_complete_conversation} (가상화 제한)")
+    summary_table.add_row("수집 범위 (Scope)", f"{result.scope} [dim](화면 노출 영역만)[/dim]")
+    summary_table.add_row("전체 대화 여부", f"{result.is_complete_conversation} [dim](가상화 제한)[/dim]")
     summary_table.add_row("JSON 저장 위치", f"{saved_path.resolve()} ({file_size_kb:.1f} KB)")
 
     console.print(summary_table)
+
+    # 5. 중복 그룹이 있는 경우 상세 출력
+    fp_groups: dict[str, list] = {}
+    for m in result.messages:
+        fp_groups.setdefault(m.message_fingerprint, []).append(m)
+
+    dup_groups = {fp: msgs for fp, msgs in fp_groups.items() if len(msgs) > 1}
+    if dup_groups:
+        console.print("\n[bold yellow]── 중복 Fingerprint 그룹 검토 ──[/bold yellow]")
+        for fp, group in dup_groups.items():
+            console.print(f"[bold red]Group: {fp[:16]}... ({len(group)}건)[/bold red]")
+            for item in group:
+                console.print(
+                    f"  - [v_idx={item.viewport_index}] Author: {item.author_resolved} | Time: {item.timestamp_raw} | Text: {item.text[:60]!r}"
+                )
+
+    # 6. Unresolved 메시지가 있는 경우 상세 출력
+    unresolved_list = [m for m in result.messages if m.author_resolution == "unresolved"]
+    if unresolved_list:
+        console.print("\n[bold yellow]── Unresolved 작성자 메시지 검토 ──[/bold yellow]")
+        for item in unresolved_list:
+            console.print(
+                f"  - [v_idx={item.viewport_index}] Time: {item.timestamp_raw} | Node: {item.source_node_name[:40]!r} | Text: {item.text[:60]!r}"
+            )
+
     console.print(
         f"\n[bold green]✓ 성공:[/bold green] 가시적 메시지가 [bold underline]{saved_path}[/bold underline] 에 저장되었습니다.\n"
     )
