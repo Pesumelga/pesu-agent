@@ -145,48 +145,85 @@ class SlackSearch:
         return mentions, links
 
     async def open_search_ui(self, timeout_sec: float = 8.0) -> bool:
-        """방어적 다중 셀렉터와 폴링으로 Slack 전역 검색창을 활성화합니다."""
-        js_find_and_open = """
+        """방어적 다중 셀렉터, CDP 가상 마우스 클릭 및 폴링으로 Slack 전역 검색창을 활성화합니다."""
+        js_find_rect = """
         (() => {
             // 1. 이미 입력창이 존재하는지 확인
             const input = document.querySelector('input[data-qa="top_nav_search__input"]') ||
                           document.querySelector('input[data-qa="search_input"]') ||
                           document.querySelector('.p-top_nav__search input') ||
-                          document.querySelector('input.c-search_autocomplete__input');
+                          document.querySelector('[data-qa="search_input_box"]') ||
+                          document.querySelector('[data-qa="focusable_search_input"]') ||
+                          document.querySelector('.c-search__input_box .ql-editor');
             if (input) {
-                input.focus();
-                return { ready: true, via: 'existing_input', qa: input.getAttribute('data-qa') };
+                return { ready: true, via: 'existing_input' };
             }
 
-            // 2. 검색 버튼이 로드되었으면 클릭
+            // 2. 검색 버튼이 로드되었으면 Bounding Rect 반환 및 클릭 시도
             const btn = document.querySelector('[data-qa="top_nav_search"]') ||
                         document.querySelector('button[aria-label*="검색"]') ||
                         document.querySelector('button[aria-label*="Search"]') ||
                         document.querySelector('.p-top_nav__search');
             if (btn) {
-                btn.click();
-                return { ready: false, clicked: true, qa: btn.getAttribute('data-qa') };
+                const r = btn.getBoundingClientRect();
+                return {
+                    ready: false,
+                    rect: { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) },
+                    qa: btn.getAttribute('data-qa')
+                };
             }
 
-            return { ready: false, clicked: false };
+            return { ready: false };
         })()
         """
         start_t = asyncio.get_event_loop().time()
         while asyncio.get_event_loop().time() - start_t < timeout_sec:
-            res = await self.cdp.evaluate_js(js_find_and_open)
-            if res and (res.get("ready") or res.get("ok")):
-                logger.info(f"검색 UI 활성화 완료: {res}")
-                return True
+            res = await self.cdp.evaluate_js(js_find_rect)
+            if res:
+                if res.get("ready") or res.get("ok"):
+                    logger.info(f"검색 UI 활성화 완료: {res}")
+                    return True
+                if res.get("rect"):
+                    # CDP 가상 마우스 클릭 디스패치 (OS 마우스 비침범)
+                    rx, ry = res["rect"]["x"], res["rect"]["y"]
+                    await self.cdp.dispatch_mouse_event(type_="mousePressed", x=rx, y=ry, button="left", click_count=1)
+                    await self.cdp.dispatch_mouse_event(type_="mouseReleased", x=rx, y=ry, button="left", click_count=1)
+                    logger.info(f"검색 버튼 CDP 가상 마우스 클릭 완료 ({rx}, {ry})")
+                    await asyncio.sleep(0.5)
+                    return True
             await asyncio.sleep(0.5)
 
         logger.warning("검색 UI 트리거 요소를 찾지 못했습니다.")
         return False
 
-    async def enter_query_and_search(self, query: str, timeout_sec: float = 3.5) -> dict[str, Any]:
-        """전역 검색창을 대기/탐색하여 쿼리를 입력하고 Enter를 전송합니다."""
+    async def enter_query_and_search(self, query: str, timeout_sec: float = 4.0) -> dict[str, Any]:
+        """전역 검색창(Quill Rich Editor 또는 Input)을 대기/탐색하여 쿼리를 입력하고 Enter를 전송합니다."""
         js_enter = f"""
         (() => {{
-            // 사이드바 필터(sidebar-text-filter)를 명시적으로 제외하고 전역 검색창만 선택
+            // 1. Quill Rich Editor (Slack 신규 UI) 탐색
+            const editor = document.querySelector('[data-qa="search_input_box"] [contenteditable="true"]') ||
+                           document.querySelector('[data-qa="focusable_search_input"] [contenteditable="true"]') ||
+                           document.querySelector('.c-search__input_box .ql-editor') ||
+                           document.querySelector('[data-qa="texty_input"]');
+            if (editor) {{
+                editor.focus();
+                while (editor.firstChild) {{
+                    editor.removeChild(editor.firstChild);
+                }}
+                const p = document.createElement('p');
+                p.textContent = {json.dumps(query)};
+                editor.appendChild(p);
+                editor.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                editor.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                return {{
+                    ok: true,
+                    type: 'quill_editor',
+                    tag: editor.tagName,
+                    value: editor.innerText || editor.textContent
+                }};
+            }}
+
+            // 2. 표준 Input (Slack 클래식 UI) 탐색
             let input = document.querySelector('input[data-qa="top_nav_search__input"]') ||
                         document.querySelector('input[data-qa="search_input"]') ||
                         document.querySelector('.p-top_nav__search input') ||
@@ -195,7 +232,6 @@ class SlackSearch:
                         document.querySelector('input[data-qa="query_input"]');
 
             if (!input) {{
-                // fallback: 사이드바 필터가 아닌 텍스트 입력창 탐색
                 const candidates = Array.from(document.querySelectorAll('input[type="text"], input:not([type]), input[type="search"]'));
                 input = candidates.find(el => {{
                     const qa = el.getAttribute('data-qa') || '';
@@ -204,49 +240,27 @@ class SlackSearch:
                 }});
             }}
 
-            if (!input) {{
-                const allInputs = Array.from(document.querySelectorAll('input, button, [role]')).map(el => ({{
-                    tag: el.tagName.toLowerCase(),
-                    qa: el.getAttribute('data-qa'),
-                    id: el.id,
-                    cls: el.className,
-                    aria: el.getAttribute('aria-label'),
-                    type: el.getAttribute('type')
-                }}));
-                return {{ ok: false, error: 'no_suitable_global_search_input', dom_elements: allInputs.slice(0, 30) }};
+            if (input) {{
+                input.focus();
+                input.value = '';
+                const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+                if (nativeSetter) {{
+                    nativeSetter.call(input, {json.dumps(query)});
+                }} else {{
+                    input.value = {json.dumps(query)};
+                }}
+                input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                input.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                return {{
+                    ok: true,
+                    type: 'standard_input',
+                    qa: input.getAttribute('data-qa'),
+                    value: input.value,
+                    is_active: document.activeElement === input
+                }};
             }}
 
-            // 1. 기존 검색어 완전 초기화
-            input.focus();
-            input.value = '';
-
-            // 2. React Native/DOM value descriptor setter
-            const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-            if (nativeSetter) {{
-                nativeSetter.call(input, {json.dumps(query)});
-            }} else {{
-                input.value = {json.dumps(query)};
-            }}
-
-            input.dispatchEvent(new Event('input', {{ bubbles: true }}));
-            input.dispatchEvent(new Event('change', {{ bubbles: true }}));
-
-            // 3. DOM Keydown Enter 이벤트
-            input.dispatchEvent(new KeyboardEvent('keydown', {{
-                key: 'Enter',
-                code: 'Enter',
-                keyCode: 13,
-                which: 13,
-                bubbles: true,
-                cancelable: true
-            }}));
-
-            return {{
-                ok: true,
-                qa: input.getAttribute('data-qa'),
-                value: input.value,
-                is_active: document.activeElement === input
-            }};
+            return {{ ok: false, error: 'no_suitable_global_search_input' }};
         }})()
         """
         start_t = asyncio.get_event_loop().time()
@@ -263,7 +277,7 @@ class SlackSearch:
             logger.warning(f"DOM 검색어 입력 실패: {last_res}")
             return last_res
 
-        # 4. CDP Input 가상 키 이벤트로 네이티브 수준의 Enter 전송
+        # 3. CDP Input 가상 키 이벤트로 네이티브 수준의 Enter 전송
         await self.cdp.dispatch_key_event(
             type_="rawKeyDown", key="Enter", code="Enter", windows_virtual_key_code=13
         )
@@ -393,6 +407,12 @@ class SlackSearch:
         """Slack 검색 UI에 현재 표시된 query 텍스트와 결과 0건 여부를 조회합니다."""
         js_observed = """
         (() => {
+            const editorElem = document.querySelector('[data-qa="search_input_box"] [contenteditable="true"]') ||
+                               document.querySelector('[data-qa="focusable_search_input"] [contenteditable="true"]') ||
+                               document.querySelector('.c-search__input_box .ql-editor') ||
+                               document.querySelector('[data-qa="texty_input"]');
+            const editorVal = editorElem ? (editorElem.innerText || editorElem.textContent || '').trim() : '';
+
             const headerElem = document.querySelector('[data-qa="search_query_text"]') ||
                                document.querySelector('.p-search_results__query') ||
                                document.querySelector('[data-qa="search_header_title"]') ||
@@ -410,7 +430,7 @@ class SlackSearch:
             ).length;
 
             return {
-                observed: headerText || inputVal,
+                observed: editorVal || headerText || inputVal,
                 is_empty: !!emptyNotice || itemsCount === 0,
                 items_count: itemsCount
             };
@@ -470,7 +490,7 @@ class SlackSearch:
             """
             for _ in range(20):
                 chk = await self.cdp.evaluate_js(js_ready)
-                if chk and chk.get("ready"):
+                if isinstance(chk, dict) and chk.get("ready"):
                     break
                 await asyncio.sleep(0.5)
 
@@ -499,7 +519,7 @@ class SlackSearch:
 
                 obs_q, is_empty = await self.get_observed_query_state()
                 observed_query = obs_q
-                query_verified = (observed_query.strip().lower() == query.strip().lower())
+                query_verified = bool(query.strip().lower() in observed_query.strip().lower())
 
                 initial_results = await self.parse_current_visible_results(query)
                 current_signature = self.compute_result_signature(query, initial_results)

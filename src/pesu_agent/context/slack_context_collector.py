@@ -125,10 +125,13 @@ class SlackMessageContext(BaseModel):
     target_verified: bool = Field(default=False, description="Target Message 정밀 검증 일치 여부")
     verification_reason: str = Field(default="", description="검증 결과 설명")
 
-    # 상태 복원 및 결과 분리 지표 (MVP 3.1.1)
+    # 상태 복원 및 결과 분리 지표 (MVP 3.1.1 & MVP 3.2)
     context_collection_succeeded: bool = Field(default=False, description="문맥 수집 성공 여부")
     state_restore_attempted: bool = Field(default=False, description="원래 Slack 상태 복원 시도 여부")
     state_restore_succeeded: bool = Field(default=False, description="원래 Slack 상태 복원 성공 여부")
+    restore_pending: bool = Field(
+        default=False, description="원래 상태 복원 보류 여부 (사용자 Foreground 사용으로 인한 복원 대기)"
+    )
     overall_status: str = Field(
         default="FAILED",
         description="전체 작업 상태: SUCCESS, PARTIAL_SUCCESS_CONTEXT_COLLECTED_RESTORE_FAILED, INTERRUPTED_BY_USER, FAILED",
@@ -360,15 +363,31 @@ class SlackContextCollector:
             restored_visible_message_fingerprints=after_state.visible_message_fingerprints,
         )
 
+    async def wait_for_slack_background(
+        self, timeout_sec: float = 3.0, poll_interval: float = 0.5
+    ) -> bool:
+        """Slack이 Background(비활성) 상태가 될 때까지 대기합니다. Background 복귀 시 True 반환."""
+        waited = 0.0
+        while waited < timeout_sec:
+            if not is_slack_foreground():
+                return True
+            await asyncio.sleep(poll_interval)
+            waited += poll_interval
+        return not is_slack_foreground()
+
     async def collect_context(
         self,
         target_result: SlackSearchResult,
         max_before: int = 20,
         max_after: int = 20,
         check_user_interference: bool = True,
+        restore_on_finish: bool = True,
+        bg_wait_timeout_sec: float = 3.0,
     ) -> SlackMessageContext:
         """
-        검색 결과 1건의 Target permalink로 이동하여 검증 및 전후 문맥을 수집하고 원래 상태를 복원합니다.
+        검색 결과 1건의 Target permalink로 이동하여 검증 및 전후 문맥을 수집합니다.
+        restore_on_finish=True인 경우 원래 상태를 즉시 복원하고, False인 경우(Batch 조사 모드)
+        복원 책임을 상위 세션 수집기(SlackEvidenceCollector)에 위임합니다.
         """
         # 1. 수명주기 및 시작 전 Foreground 간섭 확인
         status = self.lifecycle_manager.get_status()
@@ -388,6 +407,7 @@ class SlackContextCollector:
                 context_collection_succeeded=False,
                 state_restore_attempted=False,
                 state_restore_succeeded=False,
+                restore_pending=False,
                 overall_status="INTERRUPTED_BY_USER",
                 interruption_reason="user_opened_slack",
             )
@@ -431,6 +451,7 @@ class SlackContextCollector:
                     context_collection_succeeded=False,
                     state_restore_attempted=False,
                     state_restore_succeeded=True,
+                    restore_pending=False,
                     overall_status="INTERRUPTED_BY_USER",
                     interruption_reason="user_opened_slack",
                     before_state=before_state,
@@ -527,6 +548,54 @@ class SlackContextCollector:
             dom_data = await self.cdp.evaluate_js(js_extract) or {}
             target_idx = dom_data.get("target_idx", -1)
             raw_messages = dom_data.get("messages", [])
+
+            # 조사 도중(Main Renderer 변경 후) 사용자 활성화 감지 시 Yield 정책 적용
+            if check_user_interference and is_slack_foreground():
+                logger.warning(
+                    "조사 도중(Renderer 변경 후) 사용자가 Slack을 활성화했습니다. 모든 Agent 탐색을 즉시 중단합니다."
+                )
+                restore_pending = True
+                state_restore_attempted = False
+                state_restore_succeeded = False
+                restoration_metrics = None
+
+                # 사용자가 보고 있는 동안에는 navigation 복원을 하지 않고 Background 복귀를 대기합니다.
+                logger.info(
+                    f"Slack Foreground 감지: Background 복귀 대기 중 (최대 {bg_wait_timeout_sec}초)..."
+                )
+                became_bg = await self.wait_for_slack_background(timeout_sec=bg_wait_timeout_sec)
+                if became_bg:
+                    logger.info("Slack이 Background로 복귀하여 원래 상태 복원을 수행합니다.")
+                    state_restore_attempted = True
+                    restoration_metrics = await self.restore_view_state(before_state)
+                    state_restore_succeeded = (
+                        restoration_metrics.url_restored
+                        and restoration_metrics.conversation_restored
+                        and (
+                            restoration_metrics.scroll_restored
+                            or restoration_metrics.viewport_restored
+                        )
+                    )
+                    restore_pending = not state_restore_succeeded
+                else:
+                    logger.warning(
+                        "사용자가 여전히 Slack을 사용 중입니다. 간섭 방지를 위해 상태 복원을 보류(restore_pending=True)합니다."
+                    )
+                    restore_pending = True
+
+                return SlackMessageContext(
+                    target=target_result,
+                    target_verified=False,
+                    verification_reason="조사 도중 사용자가 Slack을 활성화하여 즉시 중단됨",
+                    context_collection_succeeded=False,
+                    state_restore_attempted=state_restore_attempted,
+                    state_restore_succeeded=state_restore_succeeded,
+                    restore_pending=restore_pending,
+                    overall_status="INTERRUPTED_BY_USER",
+                    interruption_reason="user_opened_slack",
+                    before_state=before_state,
+                    restoration_metrics=restoration_metrics,
+                )
 
             # 6. Target Identity 검증 및 분할
             target_verified = False
@@ -627,35 +696,44 @@ class SlackContextCollector:
                 logger.warning(verification_reason)
 
             # 7. 사후 원래 상태 복원 (State Restoration)
-            state_restore_attempted = True
-            restoration_metrics = await self.restore_view_state(before_state)
-            after_state = SlackViewState(
-                url=restoration_metrics.restored_url or "",
-                channel_id=restoration_metrics.restored_channel_id,
-                conversation_name=restoration_metrics.restored_conversation_name,
-                scroll_top=restoration_metrics.restored_scroll_top or 0,
-                visible_message_fingerprints=restoration_metrics.restored_visible_message_fingerprints,
-            )
-
-            # 최종 복원 성공 조건: URL 일치 AND 채널 일치 AND (스크롤 일치 OR 뷰포트 일치)
-            state_restore_succeeded = (
-                restoration_metrics.url_restored
-                and restoration_metrics.conversation_restored
-                and (
-                    restoration_metrics.scroll_restored
-                    or restoration_metrics.viewport_restored
+            # restore_on_finish=False인 경우(Batch 조사 모드) 복원을 상위 세션에 위임
+            if restore_on_finish:
+                state_restore_attempted = True
+                restoration_metrics = await self.restore_view_state(before_state)
+                after_state = SlackViewState(
+                    url=restoration_metrics.restored_url or "",
+                    channel_id=restoration_metrics.restored_channel_id,
+                    conversation_name=restoration_metrics.restored_conversation_name,
+                    scroll_top=restoration_metrics.restored_scroll_top or 0,
+                    visible_message_fingerprints=restoration_metrics.restored_visible_message_fingerprints,
                 )
-            )
+                state_restore_succeeded = (
+                    restoration_metrics.url_restored
+                    and restoration_metrics.conversation_restored
+                    and (
+                        restoration_metrics.scroll_restored
+                        or restoration_metrics.viewport_restored
+                    )
+                )
+                restore_pending = False
+            else:
+                state_restore_attempted = False
+                state_restore_succeeded = False
+                restore_pending = False
+                restoration_metrics = None
+                after_state = None
 
             # 8. Overall Status 결정
             overall_status = "FAILED"
             interruption_reason = None
-            if context_collection_succeeded and state_restore_succeeded:
-                overall_status = "SUCCESS"
-            elif context_collection_succeeded and not state_restore_succeeded:
-                overall_status = "PARTIAL_SUCCESS_CONTEXT_COLLECTED_RESTORE_FAILED"
-                interruption_reason = "restore_failed"
-            elif not context_collection_succeeded:
+            if context_collection_succeeded:
+                if restore_on_finish:
+                    overall_status = "SUCCESS" if state_restore_succeeded else "PARTIAL_SUCCESS_CONTEXT_COLLECTED_RESTORE_FAILED"
+                    interruption_reason = None if state_restore_succeeded else "restore_failed"
+                else:
+                    overall_status = "SUCCESS"
+                    interruption_reason = None
+            else:
                 overall_status = "FAILED"
                 interruption_reason = "target_lost"
 
@@ -666,6 +744,7 @@ class SlackContextCollector:
                 context_collection_succeeded=context_collection_succeeded,
                 state_restore_attempted=state_restore_attempted,
                 state_restore_succeeded=state_restore_succeeded,
+                restore_pending=restore_pending,
                 overall_status=overall_status,
                 interruption_reason=interruption_reason,
                 before_state=before_state,

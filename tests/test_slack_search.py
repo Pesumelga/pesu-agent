@@ -124,6 +124,7 @@ async def test_search_freshness_guard_and_session_id():
     mock_cdp = MagicMock(spec=SlackCdpAdapter)
     mock_cdp.__aenter__ = AsyncMock(return_value=mock_cdp)
     mock_cdp.__aexit__ = AsyncMock(return_value=None)
+    mock_cdp.evaluate_js = AsyncMock(return_value={"ready": True})
     mock_cdp.dispatch_key_event = AsyncMock()
 
     searcher = SlackSearch(cdp_adapter=mock_cdp, lifecycle_manager=mock_lifecycle)
@@ -162,6 +163,7 @@ async def test_search_zero_results():
     mock_cdp = MagicMock(spec=SlackCdpAdapter)
     mock_cdp.__aenter__ = AsyncMock(return_value=mock_cdp)
     mock_cdp.__aexit__ = AsyncMock(return_value=None)
+    mock_cdp.evaluate_js = AsyncMock(return_value={"ready": True})
     mock_cdp.dispatch_key_event = AsyncMock()
 
     searcher = SlackSearch(cdp_adapter=mock_cdp, lifecycle_manager=mock_lifecycle)

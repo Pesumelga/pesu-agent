@@ -57,10 +57,20 @@ class SlackCdpAdapter:
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._msg_id = 0
         self._connected_target: Optional[dict[str, Any]] = None
+        self._ref_count = 0
 
     @property
     def is_connected(self) -> bool:
-        return self._ws is not None and not self._ws.closed
+        if self._ws is None:
+            return False
+        if hasattr(self._ws, "state"):
+            state = getattr(self._ws, "state")
+            if hasattr(state, "name"):
+                return state.name == "OPEN"
+            return state == 1
+        if hasattr(self._ws, "closed"):
+            return not self._ws.closed
+        return True
 
     def get_cdp_targets(self) -> list[dict[str, Any]]:
         """CDP HTTP 엔드포인트(/json)로부터 활성 타깃 목록을 조회합니다."""
@@ -106,7 +116,11 @@ class SlackCdpAdapter:
         )
 
     async def connect(self) -> None:
-        """Slack Agent Mode 상태를 검증하고 CDP WebSocket 세션을 연결합니다."""
+        """Slack Agent Mode 상태를 검증하고 CDP WebSocket 세션을 연결합니다 (재진입 지원)."""
+        if self.is_connected:
+            self._ref_count += 1
+            return
+
         # 1. 사전 수명주기 상태 확인
         status: SlackStatusResult = self.lifecycle.get_status()
         if status.status != SlackAgentModeStatus.AGENT_READY:
@@ -134,10 +148,16 @@ class SlackCdpAdapter:
             ping_interval=20,
             ping_timeout=10,
         )
+        self._ref_count = 1
         logger.info("CDP WebSocket 세션 연결 성공.")
 
-    async def disconnect(self) -> None:
-        """WebSocket 세션을 안전하게 종료합니다."""
+    async def disconnect(self, force: bool = False) -> None:
+        """WebSocket 세션을 안전하게 종료합니다 (재진입 참조 카운트 적용)."""
+        if self._ref_count > 1 and not force:
+            self._ref_count -= 1
+            return
+
+        self._ref_count = 0
         if self._ws:
             try:
                 await self._ws.close()
@@ -191,6 +211,66 @@ class SlackCdpAdapter:
                     raise RuntimeError(f"JS 실행 예외: {exception_details}")
                 return result_obj.get("result", {}).get("value")
 
+    async def send_cdp_command(
+        self,
+        method: str,
+        params: Optional[dict[str, Any]] = None,
+        timeout_sec: Optional[float] = None,
+    ) -> Any:
+        """임의의 CDP 메소드를 호출하고 응답을 수신합니다."""
+        if not self.is_connected:
+            raise SlackCdpError("CDP WebSocket이 연결되어 있지 않습니다.")
+
+        self._msg_id += 1
+        req_id = self._msg_id
+        payload = {
+            "id": req_id,
+            "method": method,
+            "params": params or {},
+        }
+
+        timeout = timeout_sec or self.timeout_sec
+        await self._ws.send(json.dumps(payload))
+
+        start_time = asyncio.get_event_loop().time()
+        while True:
+            if asyncio.get_event_loop().time() - start_time > timeout:
+                raise asyncio.TimeoutError(f"CDP {method} 응답 타임아웃 ({timeout}s)")
+
+            raw_msg = await asyncio.wait_for(self._ws.recv(), timeout=timeout)
+            resp = json.loads(raw_msg)
+
+            if resp.get("id") == req_id:
+                if "error" in resp:
+                    raise RuntimeError(f"CDP 에러 ({method}): {resp['error']}")
+                return resp.get("result", {})
+
+    async def dispatch_mouse_event(
+        self,
+        type_: str,
+        x: int,
+        y: int,
+        button: str = "left",
+        click_count: int = 1,
+    ) -> None:
+        """CDP Input.dispatchMouseEvent를 통해 가상 마우스 이벤트를 전송합니다 (OS 마우스 비침범)."""
+        if not self.is_connected:
+            raise SlackCdpError("CDP WebSocket이 연결되어 있지 않습니다.")
+
+        self._msg_id += 1
+        payload = {
+            "id": self._msg_id,
+            "method": "Input.dispatchMouseEvent",
+            "params": {
+                "type": type_,
+                "x": x,
+                "y": y,
+                "button": button,
+                "clickCount": click_count,
+            },
+        }
+        await self._ws.send(json.dumps(payload))
+
     async def dispatch_key_event(
         self,
         type_: str,
@@ -198,6 +278,7 @@ class SlackCdpAdapter:
         key: str = "",
         code: str = "",
         windows_virtual_key_code: int = 0,
+        modifiers: int = 0,
     ) -> None:
         """CDP Input.dispatchKeyEvent를 통해 가상 키 이벤트를 전송합니다."""
         if not self.is_connected:
@@ -213,6 +294,7 @@ class SlackCdpAdapter:
                 "key": key,
                 "code": code,
                 "windowsVirtualKeyCode": windows_virtual_key_code,
+                "modifiers": modifiers,
             },
         }
         await self._ws.send(json.dumps(payload))

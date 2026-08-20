@@ -206,8 +206,11 @@ class SlackLifecycleManager:
 
         # Slack Agent Mode 기동
         logger.info(f"Slack Agent Mode 기동: {slack_binary} --remote-debugging-port={self.cdp_port}")
-        if sys.platform == "win32" and hasattr(os, "startfile"):
-            os.startfile(slack_binary, "open", arguments=f"--remote-debugging-port={self.cdp_port}")
+        if sys.platform == "win32":
+            # WMI Win32_Process.Create를 사용하여 부모 프로세스나 Job Object와 완전히 분리된 독립 데스크톱 프로세스로 기동
+            cmd_line = f'"{slack_binary}" --remote-debugging-port={self.cdp_port}'
+            ps_cmd = f"Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{CommandLine = '{cmd_line}'}}"
+            subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd], check=False)
         else:
             subprocess.Popen([slack_binary, f"--remote-debugging-port={self.cdp_port}"])
 
