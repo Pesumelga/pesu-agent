@@ -1,17 +1,17 @@
-"""Adapters package for external desktop applications."""
+"""Adapters package."""
 
-from pesu_agent.adapters.slack_desktop import (
-    InspectionResult,
-    RectangleModel,
-    SlackDesktopAdapter,
-    SlackElementNode,
-    SlackNotFoundError,
+from pesu_agent.adapters.slack_cdp import (
+    SlackCdpAdapter,
+    SlackCdpError,
+    SlackNotReadyError,
+    SlackTargetNotFoundError,
 )
+from pesu_agent.adapters.slack_desktop import SlackDesktopAdapter
 
 __all__ = [
     "SlackDesktopAdapter",
-    "SlackElementNode",
-    "InspectionResult",
-    "RectangleModel",
-    "SlackNotFoundError",
+    "SlackCdpAdapter",
+    "SlackCdpError",
+    "SlackNotReadyError",
+    "SlackTargetNotFoundError",
 ]

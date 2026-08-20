@@ -1,19 +1,14 @@
-"""Slack Visible Message Parser (MVP 1.2: Scroll-Safe Message Identity).
+"""Slack Visible Message Parser (MVP 1.2 & MVP 2: Scroll-Safe Message Identity).
 
 UI Automation Tree로부터 현재 Slack 화면에 노출된 메시지를 파싱하여
 구조화된 SlackMessage 객체 목록으로 정규화하고,
 스크롤 세션 간 안정적인 메시지 식별(Scroll-Safe Message Identity)을 보장합니다.
 
-MVP 1.2 주요 변경사항:
-- Scroll-Safe Fingerprint: 뷰포트 위치에 따라 변할 수 있는 `author_resolved`를 fingerprint 해시 입력에서 제외하고,
-  UIA 고유 속성(context, timestamp_raw, text, mentions, links, UIA automation_id ts)만을 조합하여 뷰포트 독립적 결정론적 해시 생성.
-- `viewport_index`: 현재 UIA 뷰포트 내 표시 순서(0부터 시작) 기록.
-- 중첩 리스트(Rich Text Bullet ListItem) 처리: 메시지 본문 내부의 글머리 기호 목록이 별도 최상위 메시지로 오인 수집되지 않도록 방지.
-- 지표 확장: unique_fingerprints_count, duplicate_fingerprint_groups_count 추가.
-
-주의:
-- message_fingerprint는 Slack 서버의 공식 메시지 ID가 아니라 로컬 스크롤/수집 세션 중복 제거용 식별자입니다.
-- UI Virtualization으로 인해 화면에 렌더링된 메시지만 수집되며 전체 대화가 아닙니다.
+MVP 2 개선사항:
+- 컨텍스트 정밀 판별 (`dm`, `channel`, `thread`, `search_result`, `unknown`)
+- `uia_message_id`: UIA AutomationId에서 추출된 타임스탬프 ID 후보 보존 (예: '1771892661.466919')
+- `conversation_name`, `conversation_key` 식별자 추가
+- Scroll-Safe Fingerprint 불변성 유지
 """
 
 from __future__ import annotations
@@ -71,7 +66,7 @@ class SlackMessage(BaseModel):
     )
     context: str = Field(
         default="unknown",
-        description="메시지 컨텍스트 ('channel', 'thread', 'search_result', 'unknown')",
+        description="메시지 컨텍스트 ('channel', 'dm', 'thread', 'search_result', 'unknown')",
     )
     source_container: str = Field(
         default="",
@@ -85,6 +80,18 @@ class SlackMessage(BaseModel):
         default=0,
         description="UIA 트리 계층 깊이",
     )
+    uia_message_id: Optional[str] = Field(
+        default=None,
+        description="UIA AutomationId에서 추출된 타임스탬프 ID 후보 (예: '1771892661.466919', Slack 공식 ID 아님)",
+    )
+    conversation_key: str = Field(
+        default="",
+        description="현재 대화 컨테이너 고유 식별자",
+    )
+    conversation_name: str = Field(
+        default="",
+        description="현재 대화/채널/DM 이름",
+    )
     message_fingerprint: str = Field(
         default="",
         description="스크롤 중복 제거용 Scroll-Safe SHA-256 해시 (Slack 공식 서버 ID가 아닌 로컬 세션 식별자)",
@@ -96,6 +103,12 @@ class SlackVisibleMessagesResult(BaseModel):
 
     captured_at: str = Field(description="추출 시각 (ISO-8601 UTC)")
     slack_window_title: str = Field(description="Slack 창 제목")
+    conversation_name: str = Field(default="", description="현재 대화/채널/DM 이름")
+    conversation_key: str = Field(default="", description="현재 대화 컨테이너 고유 식별자")
+    context: str = Field(
+        default="unknown",
+        description="현재 대화 컨텍스트 ('channel', 'dm', 'thread', 'search_result', 'unknown')",
+    )
     message_count: int = Field(description="추출된 메시지 수")
     scope: str = Field(
         default="visible_uia_only",
@@ -208,14 +221,14 @@ class SlackMessageParser:
         return name.startswith("http://") or name.startswith("https://")
 
     @classmethod
-    def extract_uia_message_id(cls, automation_id: str) -> str:
-        """Slack UIA automation_id (예: 'message-list_1771892661.466919')에서 타임스탬프 ID를 추출합니다."""
+    def extract_uia_message_id(cls, automation_id: str) -> Optional[str]:
+        """Slack UIA automation_id (예: 'message-list_1771892661.466919')에서 타임스탬프 ID 후보를 추출합니다."""
         if not automation_id:
-            return ""
+            return None
         match = re.search(r"message-list_(\d+\.\d+)", automation_id)
         if match:
             return match.group(1)
-        return ""
+        return None
 
     @classmethod
     def compute_fingerprint(
@@ -225,22 +238,22 @@ class SlackMessageParser:
         text: str,
         mentions: list[str],
         links: list[str],
-        uia_message_id: str = "",
+        uia_message_id: Optional[str] = None,
     ) -> str:
         """스크롤 세션 간 안정적인 Scroll-Safe SHA-256 fingerprint를 생성합니다.
 
         중요한 설계 원칙:
         - `author_resolved`는 스크롤/뷰포트 위치에 따라 첫 가시 메시지 여부가 바뀌며 달라질 수 있으므로
           fingerprint 해시 입력에서 의도적으로 제외합니다.
-        - 오직 UIA에서 메시지 자체에 직접 노출되는 불변 속성(context, timestamp_raw, text, mentions, links, uia_message_id)만 사용합니다.
+        - 오직 UIA에서 메시지 자체에 직접 노출되는 불변 속성만 사용합니다.
 
         주의:
-        - 이것은 Slack 서버의 공식 메시지 ID가 아니라 로컬 스크롤/수집 세션 중복 제거용 식별자입니다.
+        - 이것은 Slack 서버의 공식 메시지 ID가 아니라 로컬 세션 중복 제거용 식별자입니다.
         """
         norm_mentions = ",".join(sorted(mentions))
         norm_links = ",".join(sorted(links))
-        # 공백 정규화된 텍스트
         norm_text = re.sub(r"\s+", " ", text).strip()
+        uia_id_str = uia_message_id.strip() if uia_message_id else ""
 
         raw_payload = (
             f"{context.strip()}|"
@@ -248,9 +261,73 @@ class SlackMessageParser:
             f"{norm_text}|"
             f"{norm_mentions}|"
             f"{norm_links}|"
-            f"{uia_message_id.strip()}"
+            f"{uia_id_str}"
         )
         return hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+
+    @classmethod
+    def parse_conversation_info(
+        cls,
+        window_title: str,
+        ancestor_path: list[SlackElementNode],
+    ) -> tuple[str, str, str]:
+        """(context, conversation_name, conversation_key)를 정밀 판별합니다."""
+        title_lower = window_title.lower()
+
+        # 1. DM 판별: 제목에 (DM), (다이렉트 메시지), 또는 조상에 dm/im 관련 클래스/이름
+        has_dm_marker = (
+            "(dm)" in title_lower
+            or "(다이렉트 메시지)" in window_title
+            or "다이렉트 메시지" in window_title
+            or any("다이렉트 메시지" in (anc.name or "") for anc in ancestor_path)
+            or any("im_browser" in (anc.class_name or "") for anc in ancestor_path)
+        )
+
+        # 2. Thread 판별
+        has_thread_marker = (
+            "스레드" in window_title
+            or "thread" in title_lower
+            or any("thread" in (anc.automation_id or "").lower() for anc in ancestor_path)
+            or any("thread" in (anc.class_name or "").lower() for anc in ancestor_path)
+            or any("스레드" in (anc.name or "") for anc in ancestor_path)
+        )
+
+        # 3. Search 판별
+        has_search_marker = (
+            "검색" in window_title
+            or "search" in title_lower
+            or any("search" in (anc.automation_id or "").lower() for anc in ancestor_path)
+        )
+
+        # 4. Channel 판별
+        has_channel_marker = (
+            "(채널)" in window_title
+            or "#" in window_title
+            or "(공유 채널)" in window_title
+            or any("channel" in (anc.class_name or "").lower() for anc in ancestor_path)
+        )
+
+        if has_thread_marker:
+            context = "thread"
+        elif has_search_marker:
+            context = "search_result"
+        elif has_dm_marker:
+            context = "dm"
+        elif has_channel_marker:
+            context = "channel"
+        else:
+            context = "unknown"
+
+        # Conversation Name 정제
+        conversation_name = window_title.split(" - Slack")[0].split(" - ")[0].strip()
+        if not conversation_name or conversation_name == "Slack":
+            for anc in reversed(ancestor_path):
+                if anc.control_type in ("List", "Pane") and anc.name and anc.name != "Slack":
+                    conversation_name = anc.name.split(" (")[0].strip()
+                    break
+
+        conversation_key = f"{context}:{conversation_name or 'default'}"
+        return context, conversation_name, conversation_key
 
     @classmethod
     def determine_context(
@@ -259,28 +336,9 @@ class SlackMessageParser:
         ancestor_path: list[SlackElementNode],
         window_title: str,
     ) -> str:
-        """메시지가 위치한 컨텍스트(channel, thread, search_result, unknown)를 판별합니다."""
-        for anc in reversed(ancestor_path):
-            anc_id = (anc.automation_id or "").lower()
-            anc_cls = (anc.class_name or "").lower()
-            anc_name = (anc.name or "").lower()
-
-            if "thread" in anc_id or "thread" in anc_cls or "thread" in anc_name:
-                return "thread"
-            if "search" in anc_id or "search" in anc_cls or "search" in anc_name:
-                return "search_result"
-            if "message_pane" in anc_cls or "message-list" in anc_id or "channel" in anc_cls:
-                return "channel"
-
-        title_lower = window_title.lower()
-        if "스레드" in title_lower or "thread" in title_lower:
-            return "thread"
-        if "검색" in title_lower or "search" in title_lower:
-            return "search_result"
-        if "(채널)" in window_title or "#" in window_title or "slack" in title_lower:
-            return "channel"
-
-        return "unknown"
+        """메시지가 위치한 컨텍스트(dm, channel, thread, search_result, unknown)를 판별합니다."""
+        context, _, _ = cls.parse_conversation_info(window_title, ancestor_path)
+        return context
 
     @classmethod
     def get_container_identifier(cls, ancestor_path: list[SlackElementNode]) -> str:
@@ -317,6 +375,8 @@ class SlackMessageParser:
         container_node: SlackElementNode,
         context: str,
         source_container: str,
+        conversation_name: str = "",
+        conversation_key: str = "",
     ) -> Optional[SlackMessage]:
         """단일 메시지 컨테이너(ListItem 등)의 subtree를 순회하여 원본 속성을 추출합니다."""
         if self.is_non_message_candidate(container_node):
@@ -398,6 +458,7 @@ class SlackMessageParser:
             return None
 
         source_name = (container_node.name or "").replace("\r", " ").replace("\n", " ").strip()
+        uia_ts_id = self.extract_uia_message_id(container_node.automation_id)
 
         return SlackMessage(
             viewport_index=0,
@@ -413,6 +474,9 @@ class SlackMessageParser:
             source_container=source_container,
             source_node_name=source_name,
             tree_depth=container_node.depth,
+            uia_message_id=uia_ts_id,
+            conversation_name=conversation_name,
+            conversation_key=conversation_key,
             message_fingerprint="",
         )
 
@@ -431,8 +495,10 @@ class SlackMessageParser:
             resolved_title = window_title or (root_node.name if root_node else "Slack")
             captured_at = datetime.now(timezone.utc).isoformat()
 
+        # 대화 정보 분석
+        context, conv_name, conv_key = self.parse_conversation_info(resolved_title, [])
+
         # 1. 메시지 컨테이너 후보 수집 (최상위 메시지 ListItem 위주)
-        # 주의: 메시지 본문 내부의 중첩 글머리 기호 ListItem은 별도 메시지로 분리하지 않습니다.
         candidate_containers: list[tuple[SlackElementNode, list[SlackElementNode]]] = []
 
         def collect_candidates(node: SlackElementNode, path: list[SlackElementNode]):
@@ -454,13 +520,17 @@ class SlackMessageParser:
         last_author_by_container: dict[str, str] = {}
 
         for container_node, ancestor_path in candidate_containers:
-            ctx = self.determine_context(container_node, ancestor_path, resolved_title)
+            node_ctx, node_conv_name, node_conv_key = self.parse_conversation_info(
+                resolved_title, ancestor_path
+            )
             container_id = self.get_container_identifier(ancestor_path)
 
             msg = self.parse_raw_message_container(
                 container_node,
-                context=ctx,
+                context=node_ctx,
                 source_container=container_id,
+                conversation_name=node_conv_name,
+                conversation_key=node_conv_key,
             )
 
             if msg is None:
@@ -485,17 +555,14 @@ class SlackMessageParser:
             # 하위 호환성을 위해 author 필드 동기화
             msg.author = msg.author_resolved
 
-            # UIA Automation ID에서 timestamp ID 추출 (존재하는 경우)
-            uia_ts_id = self.extract_uia_message_id(container_node.automation_id)
-
-            # Scroll-Safe Fingerprint 생성 (author_resolved를 제외하여 스크롤 위치에 무관하게 항상 동일)
+            # Scroll-Safe Fingerprint 생성 (author_resolved 제외)
             msg.message_fingerprint = self.compute_fingerprint(
                 context=msg.context,
                 timestamp_raw=msg.timestamp_raw,
                 text=msg.text,
                 mentions=msg.mentions,
                 links=msg.links,
-                uia_message_id=uia_ts_id,
+                uia_message_id=msg.uia_message_id,
             )
 
             messages.append(msg)
@@ -517,6 +584,9 @@ class SlackMessageParser:
         result = SlackVisibleMessagesResult(
             captured_at=captured_at,
             slack_window_title=resolved_title,
+            conversation_name=conv_name,
+            conversation_key=conv_key,
+            context=context,
             message_count=len(messages),
             scope="visible_uia_only",
             is_complete_conversation=False,
@@ -530,10 +600,8 @@ class SlackMessageParser:
         )
 
         logger.info(
-            f"메시지 파싱 완료: {len(messages)}개 (explicit={explicit_count}, "
-            f"inherited={inherited_count}, unresolved={unresolved_count}), "
-            f"{excluded_count}개 후보 제외, 고유 fingerprint={unique_fingerprints_count}개, "
-            f"중복 그룹={duplicate_groups_count}개"
+            f"메시지 파싱 완료: {len(messages)}개 (context={context}, conv={conv_name}, "
+            f"explicit={explicit_count}, inherited={inherited_count}, unresolved={unresolved_count})"
         )
         return result
 
