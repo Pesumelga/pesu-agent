@@ -1,0 +1,50 @@
+{
+  "baseline_commit": "d1f8b3ee27d37660f2ad036bea7a0242fdc2415b",
+  "captured_at": "2026-09-14T17:00:00+09:00",
+  "artifacts": [
+    {
+      "path": "src/pesu_agent/investigation/workitem_synthesis.py",
+      "sha256": "e50bda50c2d47ee0e8f9a6a0268c44b9f9d03506e441215616eb27871fabe548"
+    },
+    {
+      "path": "src/pesu_agent/investigation/claim_verification.py",
+      "sha256": "1cb47ce10759993f5d88d002f1b37e4970b2d7cba61cd45c59b4d50388f26eeb"
+    },
+    {
+      "path": "src/pesu_agent/investigation/graph_models.py",
+      "sha256": "fc4b3e921c7cf9ca756866f839c598aa35065892e8f518c3d5256fdd1425a5d9"
+    },
+    {
+      "path": "src/pesu_agent/investigation/context_expansion.py",
+      "sha256": "7e1ef53fe80e2886f07e196ab7d848a7e99492ebea4b631e245095873a21869e"
+    },
+    {
+      "path": "tests/qualification_support/workitem_evaluator.py",
+      "sha256": "14b013e3b8b02f6a55766c6d5f7e5b295ee01a4bc03576eecca4f3cf44ad3146"
+    },
+    {
+      "path": "tests/fixtures/workitem_episode_membership_r3a_r3_fixtures.py",
+      "sha256": "56f6d7e72c038722f4e901e2e6d562722b11e31692519687d8b29f30e87c3587"
+    },
+    {
+      "path": "tests/fixtures/workitem_relation_r3b_r2_fixtures.py",
+      "sha256": "00a80bbaab747993f494c0c2190919d4d6a8c418ae9694d28144ae0f42cdf3c2"
+    },
+    {
+      "path": "tests/fixtures/workitem_lifecycle_ar2_fixtures.py",
+      "sha256": "59c3fbb4fa07d0f7c7a7706dd52abc83b889696748532be78a50aaa87ee712f7"
+    },
+    {
+      "path": "tests/fixtures/workitem_decisive_authority_r3c_v10_fixtures.py",
+      "sha256": "386bafb31dbeb306ca93c3a6b8e77b2ce5e18ca342b635ceb4b9ff2a70c5473d"
+    },
+    {
+      "path": "tests/fixtures/workitem_decisive_authority_r3c_r8_regression_manifest.py",
+      "sha256": "d4f4d78346fd15962e3c2d77257a4e27d230dee5532f184c48d6f83737c5cab8"
+    },
+    {
+      "path": "tests/fixtures/claim_verification_gold_fixtures.py",
+      "sha256": "f2366f7f59f4f95749534d92804436ad7fbffa3f219baab8eec8ca1ef5e7936d"
+    }
+  ]
+}
