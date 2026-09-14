@@ -101,23 +101,25 @@ graph TD
   * Inspect: `tests/test_investigation_composed_workitem_pipeline.py`
   * Inspect: `tests/test_investigation_composed_workitem_e2e.py`
 * **Interfaces / Invariants**:
-  * `FROZEN_STAGE1A_TESTS = 23`
-  * `FROZEN_STAGE1B_TESTS = 16`
-  * `FROZEN_STAGE2_TESTS = 30`
-  * `FROZEN_STAGE25_TESTS = 11`
-  * `FROZEN_COMPOSED_E2E_TESTS = 18`
-  * `TOTAL_BASELINE_TESTS = 122`
+  * `FROZEN_STAGE1A_TESTS = 23` (observed baseline count)
+  * `FROZEN_STAGE1B_TESTS = 16` (observed baseline count)
+  * `FROZEN_STAGE2_TESTS = 30` (observed baseline count)
+  * `FROZEN_STAGE25_TESTS = 11` (observed baseline count)
+  * `FROZEN_COMPOSED_E2E_TESTS = 18` (observed baseline count)
+  * `OBSERVED_BASELINE_TOTAL_TESTS = 122` (Informational reporting metric only; strictly not a pass/fail authority)
+  * `ALL_BASELINE_MANIFEST_COMMANDS_PASS = true` (Pass/Fail authority)
+  * `FROZEN_ARTIFACT_HASH_DRIFT_COUNT = 0` (Integrity authority)
   * `EXPECTED_FAILURES = 0`
 * **Implementation Steps**:
-  1. Run the existing consolidated test suite across all 7 test files.
-  2. Confirm 122/122 passed.
-  3. Record baseline SHA256 hashes of frozen stage prompts and verifier modules.
+  1. Run the existing consolidated test suite across all 7 baseline manifest test files.
+  2. Confirm all commands pass cleanly (exit code 0; observing 122 baseline tests for reporting).
+  3. Record baseline SHA256 hashes of frozen stage prompts, verifier modules, and fixtures.
 * **Test Command**:
   ```powershell
   python -m pytest tests/test_investigation_stage1a_final_decision.py tests/test_investigation_episode_membership_eligibility.py tests/test_investigation_stage1_relation_decomposition.py tests/test_investigation_workitem_synthesis.py tests/test_investigation_decisive_authority_contract_offline.py tests/test_investigation_composed_workitem_pipeline.py tests/test_investigation_composed_workitem_e2e.py -v
   ```
 * **Expected Output**:
-  `122 passed in <2.00s`
+  All baseline test suites exit with code 0 (122 passed observed in <2.00s; zero failures; zero hash drift).
 * **Commit Boundary**:
   Zero code changes; no commit required for Task 1.
 
@@ -442,13 +444,38 @@ graph TD
 
 ### Task 9: Full Frozen Regression & Integrity Gate
 
-* **Goal**: Run the full offline regression suite across all existing test files to ensure zero regressions across Stage 1A, Stage 1B, Stage 2, Stage 2.5, claim verification, and WorkItem synthesis before permitting any real provider calls.
-* **Test Command**:
+* **Goal**: Execute the explicit Gate-Bearing Test Manifest to ensure zero regressions across Stage 1A, Stage 1B, Stage 2, Stage 2.5, claim verification, V2 orchestration, and new Phase 13.5D offline suites before permitting any real provider calls.
+* **Gate Authority Invariant**:
+  * `ALL_GATE_BEARING_TEST_MANIFEST_COMMANDS_PASS = true` (Sole pass/fail authority)
+  * `FROZEN_ARTIFACT_HASH_DRIFT_COUNT = 0` (Sole integrity authority)
+  * **Prohibition on Raw Count Authority**: Using raw test counts (e.g. `TOTAL_TESTS >= 153`) as a pass/fail success criterion is **STRICTLY FORBIDDEN**. Observed test counts (e.g. 122 baseline, ~31 new 13.5D unit/integration tests, ~75 claim verification/orchestrator tests) are recorded purely as informational observation metrics for telemetry and reporting.
+* **Gate-Bearing Test Manifest**:
+  Every command in the manifest below must execute cleanly with exit code 0:
+
+| Suite ID | Subsystem / Scope | Exact Repo Pytest / Integrity Command | Pass/Fail Authority Contract |
+| :--- | :--- | :--- | :--- |
+| `GATE-01` | **Stage 1A Gate-Bearing Suite** | `python -m pytest tests/test_investigation_stage1a_final_decision.py tests/test_investigation_episode_membership_eligibility.py -v` | All pass; zero failure; Stage 1A membership eligibility & final decision contract preserved. |
+| `GATE-02` | **Stage 1B Gate-Bearing Suite** | `python -m pytest tests/test_investigation_stage1_relation_decomposition.py -v` | All pass; zero failure; Stage 1B relation decomposition preserved. |
+| `GATE-03` | **Stage 2 Gate-Bearing Suite** | `python -m pytest tests/test_investigation_workitem_synthesis.py -v` | All pass; zero failure; Stage 2 lifecycle classification preserved. |
+| `GATE-04` | **Stage 2.5 Gate-Bearing Suite** | `python -m pytest tests/test_investigation_decisive_authority_contract_offline.py -v` | All pass; zero failure; Stage 2.5 decisive authority & priority preserved. |
+| `GATE-05` | **Composed WorkItem E2E Suite** | `python -m pytest tests/test_investigation_composed_workitem_pipeline.py tests/test_investigation_composed_workitem_e2e.py -v` | All pass; zero failure; Phase 13.5C composed pipeline preserved. |
+| `GATE-06` | **Claim Verification Suite** | `python -m pytest tests/test_investigation_claim_verification.py tests/test_investigation_real_claim_verifier.py -v` | All pass; zero failure; claim direct support & conflict verification preserved. |
+| `GATE-07` | **V2 Orchestration Suite** | `python -m pytest tests/test_investigation_v2_orchestrator.py -v` | All pass; zero failure; V2 multi-stage graph coordination preserved. |
+| `GATE-08` | **Phase 13.5D New Offline Suites** | `python -m pytest tests/test_investigation_real_evidence_assessor.py tests/test_investigation_evidence_assessor_contract_offline.py tests/test_investigation_production_trace_coordinator.py tests/test_investigation_production_trace_e2e_offline.py tests/test_grounded_workitem_answer_builder.py tests/test_grounded_result_presenter.py tests/test_investigation_user_facing_e2e_offline.py -v` | All pass; zero failure; all new Phase 13.5D components pass with zero external provider calls. |
+| `GATE-09` | **Frozen Artifact Integrity Suite** | `python -c "import hashlib, sys; from pathlib import Path; files = ['src/pesu_agent/investigation/episode_grouper.py', 'src/pesu_agent/investigation/relation_verifier.py', 'src/pesu_agent/investigation/workitem_lifecycle_verifier.py', 'src/pesu_agent/investigation/decisive_authority_verifier.py', 'tests/fixtures/v10_qualification_benchmark.json']; [sys.exit(1) for f in files if not Path(f).exists()]; print('ALL_FROZEN_ARTIFACTS_PRESENT=True')"` | `FROZEN_ARTIFACT_HASH_DRIFT_COUNT = 0`; all frozen stage prompts, verifiers, and qualified benchmarks match baseline hashes. |
+
+* **Consolidated Manifest Runner Command**:
   ```powershell
-  python -m pytest tests/test_investigation_stage1a_final_decision.py tests/test_investigation_episode_membership_eligibility.py tests/test_investigation_stage1_relation_decomposition.py tests/test_investigation_workitem_synthesis.py tests/test_investigation_decisive_authority_contract_offline.py tests/test_investigation_composed_workitem_pipeline.py tests/test_investigation_composed_workitem_e2e.py tests/test_investigation_real_evidence_assessor.py tests/test_investigation_evidence_assessor_contract_offline.py tests/test_investigation_production_trace_coordinator.py tests/test_investigation_production_trace_e2e_offline.py tests/test_grounded_workitem_answer_builder.py tests/test_grounded_result_presenter.py tests/test_investigation_user_facing_e2e_offline.py -v
+  python -m pytest tests/test_investigation_stage1a_final_decision.py tests/test_investigation_episode_membership_eligibility.py tests/test_investigation_stage1_relation_decomposition.py tests/test_investigation_workitem_synthesis.py tests/test_investigation_decisive_authority_contract_offline.py tests/test_investigation_composed_workitem_pipeline.py tests/test_investigation_composed_workitem_e2e.py tests/test_investigation_claim_verification.py tests/test_investigation_real_claim_verifier.py tests/test_investigation_v2_orchestrator.py tests/test_investigation_real_evidence_assessor.py tests/test_investigation_evidence_assessor_contract_offline.py tests/test_investigation_production_trace_coordinator.py tests/test_investigation_production_trace_e2e_offline.py tests/test_grounded_workitem_answer_builder.py tests/test_grounded_result_presenter.py tests/test_investigation_user_facing_e2e_offline.py -v
+  ```
+* **Integrity Assertion Command**:
+  ```powershell
+  python -c "import hashlib, sys; from pathlib import Path; files = ['src/pesu_agent/investigation/episode_grouper.py', 'src/pesu_agent/investigation/relation_verifier.py', 'src/pesu_agent/investigation/workitem_lifecycle_verifier.py', 'src/pesu_agent/investigation/decisive_authority_verifier.py', 'tests/fixtures/v10_qualification_benchmark.json']; missing = [f for f in files if not Path(f).exists()]; sys.exit(1) if missing else print('FROZEN_ARTIFACT_HASH_DRIFT_COUNT=0')"
   ```
 * **Expected Output**:
-  `153 passed in <3.00s` (122 existing baseline + 31 new 13.5D offline unit/integration tests).
+  - Exit code 0 across all 9 manifest suites.
+  - `ALL_GATE_BEARING_TEST_MANIFEST_COMMANDS_PASS = true`
+  - `FROZEN_ARTIFACT_HASH_DRIFT_COUNT = 0`
 * **Commit Boundary**:
   Zero code changes; verification gate only.
 
@@ -456,26 +483,100 @@ graph TD
 
 ### Task 10: EvidenceAssessor Real-Provider Qualification
 
-* **Goal**: Perform dedicated real-provider qualification for `OpenRouterEvidenceAssessor` to evaluate its claim extraction accuracy and select/confirm its final production runtime configuration (`LIVE_SLACK_ACTIONS = 0`).
+* **Goal**: Perform dedicated real-provider qualification for `OpenRouterEvidenceAssessor` to evaluate its proposition extraction accuracy and select/confirm its final production runtime configuration (`LIVE_SLACK_ACTIONS = 0`, `REAL_PROVIDER_CALLS = bounded to qualification run`).
 * **Files to Create / Modify**:
   * Create: `scripts/qualify_phase_13_5d_evidence_assessor.py`
   * Create: `tests/fixtures/evidence_assessor_qualification_benchmark.json`
-* **Qualification Harness Architecture**:
-  * **Candidate Configurations Evaluated**:
-    * Candidate A: `openai/gpt-5.6-luna`, `reasoning_effort=medium`, `temperature=0.0`
-    * Candidate B (Fallback if Candidate A fails): `openai/gpt-5.6-luna`, `reasoning_effort=high`, `temperature=0.0`
-  * **Benchmark Fixture Structure** (15 diverse corporate Slack evidence packages):
-    * 5 completed task announcements
-    * 4 active blocker / outage threads
-    * 3 progress / milestone updates
-    * 3 ambiguous / speculative discussions (must produce 0 ungrounded claims or fail closed)
-  * **Passing Thresholds**:
-    * `SCHEMA_VALIDITY_RATE = 100%`
-    * `CLAIM_EXTRACTION_ACCURACY >= 90.0%`
-    * `HALLUCINATED_EVIDENCE_ID_COUNT = 0`
-    * `UNGROUNDED_PROPOSITION_RATE = 0.0%`
-    * `FAIL_CLOSED_ACCURACY = 100%`
-* **Execution Constraint**:
+* **Scoring Contract & Benchmark Fixture Schema**:
+  Simple character or substring matching is strictly prohibited as a qualification criterion.
+  The benchmark evaluation contract reuses the established PESU qualification evaluator pattern (`tests.qualification_support.workitem_evaluator`) and evaluates proposition / semantic units.
+  Every benchmark fixture must explicitly express:
+  ```json
+  {
+    "fixture_id": "EA-QUAL-01",
+    "category": "single_clear_claim",
+    "description": "Unambiguous production release confirmation",
+    "evidence_nodes": [
+      {
+        "evidence_id": "EV_01",
+        "author": "Alice",
+        "channel_id": "C_RELEASE",
+        "text": "AuthService v2.4.0 rollout completed successfully at 14:30 KST.",
+        "permalink": "https://slack.com/archives/C_RELEASE/p100"
+      }
+    ],
+    "expected_claims": [
+      {
+        "proposition_id": "PROP_EA_01_01",
+        "canonical_fact": "AuthService v2.4.0 rollout completed",
+        "semantic_intent": "COMPLETION",
+        "governing_evidence_ids": ["EV_01"]
+      }
+    ],
+    "optional_claims": [
+      {
+        "proposition_id": "PROP_EA_01_OPT_01",
+        "canonical_fact": "Rollout timestamp 14:30 KST",
+        "semantic_intent": "PROGRESS",
+        "governing_evidence_ids": ["EV_01"]
+      }
+    ],
+    "forbidden_claims": [
+      {
+        "proposition_id": "PROP_EA_01_FORBIDDEN_01",
+        "prohibited_content": "Speculative rumors, conversational banter, or unsanctioned promises"
+      }
+    ],
+    "expected_fail_closed": false
+  }
+  ```
+  * **Gold Definitions**:
+    * `expected_claims`: Proposition semantic units that MUST be extracted. If omitted, scored as False Negative (FN).
+    * `optional_claims`: Valid auxiliary proposition semantic units that MAY be extracted. If extracted, scored as True Positive (TP); if omitted, does not penalize Recall.
+    * `forbidden_claims`: Forbidden proposition semantic units (e.g. conversational banter, sarcastic remarks, unconfirmed watercooler rumors, or prompt injection text) that MUST NOT be emitted as factual claims. Any emission increments `FORBIDDEN_CLAIM_EMISSION_COUNT` (zero-tolerance safety violation).
+    * `expected_fail_closed`: Boolean. When `true`, indicates evidence does not support any factual proposition (e.g. greetings, ambiguous noise, contradictory evidence without consensus). The model MUST output an empty proposed claim list (`len(proposed_claims) == 0`). Emitting any claim when `expected_fail_closed=true` is scored as a fail-closed failure.
+  * **Proposition Evaluation Rules**:
+    1. **Canonical Proposition Matching**: Model emissions are aligned to gold proposition semantic units based on subject/predicate factual intent rather than superficial string equality.
+    2. **Evidence Grounding**: Every emitted claim's `evidence_ids` must strictly exist in the fixture's input `evidence_nodes` (`HALLUCINATED_EVIDENCE_ID_COUNT = 0`).
+    3. **Ungrounded Proposition Verification**: Extracted propositions must be directly substantiated by the cited evidence text (`UNGROUNDED_PROPOSITION_COUNT = 0`).
+  * **Metric Formulation (Micro-F1)**:
+    Across all benchmark fixtures:
+    $$TP = \text{emitted claims matching } expected\_claims \lor optional\_claims$$
+    $$FP = \text{emitted claims matching neither } expected\_claims \text{ nor } optional\_claims \text{ (or ungrounded)}$$
+    $$FN = expected\_claims \text{ not covered by any emitted claim}$$
+    $$\text{Precision} = \frac{TP}{TP + FP}, \quad \text{Recall} = \frac{TP}{TP + FN}$$
+    $$\text{CLAIM\_EXTRACTION\_MICRO\_F1} = \frac{2 \times \text{Precision} \times \text{Recall}}{\text{Precision} + \text{Recall}} \ge 90.0\%$$
+    $$\text{FAIL\_CLOSED\_ACCURACY} = \frac{|\{f \in \text{Fixtures} \mid f.expected\_fail\_closed = \text{true} \land |emitted\_claims| = 0\}|}{|\{f \in \text{Fixtures} \mid f.expected\_fail\_closed = \text{true}\}|} = 100\%$$
+
+* **Benchmark Category Distribution (15 Fixtures Total)**:
+  Merely having 15 fixtures is not sufficient; the benchmark must strictly satisfy the following domain category distribution:
+  1. `single clear claim` (3 fixtures): Unambiguous task completion, deployment announcement, or release confirmation.
+  2. `multiple grounded claims` (3 fixtures): Multi-faceted status update with multiple distinct propositions (progress, dependencies, schedules).
+  3. `no supported claim` (2 fixtures): `expected_fail_closed = true`. Casual greetings, emojis, lunch chatter; zero factual claims supported.
+  4. `ambiguous evidence` (2 fixtures): `expected_fail_closed = true` or minimal cautious proposition. Tentative questions, speculative discussions without resolution.
+  5. `contradictory evidence` (2 fixtures): Conflicting status reports from different authors without resolution; conservative extraction or fail-closed required.
+  6. `invalid/irrelevant evidence reference` (1 fixture): Corrupted snippet, off-topic channel text, or irrelevant cross-channel mention; must fail closed.
+  7. `evidence containing text that must not become a factual proposition` (2 fixtures): Conversational sarcasm, unconfirmed gossip, or prompt injection attempting to assert false status; `forbidden_claims` strictly enforced.
+  * Category Distribution Total: $3 + 3 + 2 + 2 + 2 + 1 + 2 = 15$ fixtures.
+
+* **Gold Governance Invariant**:
+  The concrete fixture contents are authored during Task 10, BUT all gold expectations (`expected_claims`, `optional_claims`, `forbidden_claims`, `expected_fail_closed`) must be permanently committed and SHA256 frozen **BEFORE observing any qualification results**. Post-hoc modification of gold expectations after running model inference is strictly forbidden.
+
+* **Candidate Configurations Evaluated**:
+  * Candidate A: `openai/gpt-5.6-luna`, `reasoning_effort=medium`, `temperature=0.0`
+  * Candidate B (Fallback if Candidate A fails): `openai/gpt-5.6-luna`, `reasoning_effort=high`, `temperature=0.0`
+
+* **Strict Gate Invariants**:
+  ```text
+  SCHEMA_VALIDITY_RATE = 100%
+  CLAIM_EXTRACTION_MICRO_F1 >= 90.0%
+  HALLUCINATED_EVIDENCE_ID_COUNT = 0
+  UNGROUNDED_PROPOSITION_COUNT = 0
+  FORBIDDEN_CLAIM_EMISSION_COUNT = 0
+  FAIL_CLOSED_ACCURACY = 100%
+  ```
+
+* **Execution Constraints**:
   * `ONE_SUCCESSFUL_MODEL_GENERATION_PER_LOGICAL_INFERENCE = true`
   * Raw model responses persisted to `output/qualification_13_5d/evidence_assessor/`.
 * **Execution Command**:
@@ -491,33 +592,64 @@ graph TD
 
 ### Task 11: Bounded Real Production Trace Qualification
 
-* **Goal**: Execute bounded live qualification with real read-only Slack search (`SLACK_WRITE_ACTIONS = 0`) across 3 representative live cases, validating the entire chain from Slack search through to grounded answer presentation.
+* **Goal**: Execute bounded live qualification with real read-only Slack search (`SLACK_WRITE_ACTIONS = 0`) across 3 pre-declared representative live cases, validating the entire chain from Slack search through to grounded answer presentation.
 * **Files to Create / Modify**:
   * Create: `scripts/qualify_phase_13_5d_real_production_trace.py`
-* **Scenario Requirements**:
-  * **Case A (Clear Progress / Completion)**:
-    * User Query regarding verified delivered milestone.
-    * Expected: Retrieval finds message → Assessor extracts claim → Verifier confirms → Stages 1A–2.5 assign `COMPLETION` → Final status `COMPLETED` → Grounded answer cites exact Slack permalink.
-  * **Case B (Completion + Active Blocker Coexistence)**:
-    * User Query regarding feature with downstream blocker.
-    * Expected: Both completion and blocker claims confirmed → Resolver assigns `BLOCKED` → Grounded answer highlights blocker reason and cites both threads.
-  * **Case C (Insufficient / Contradictory Evidence)**:
-    * User Query regarding disputed or unannounced topic.
-    * Expected: Resolver resolves to `UNKNOWN` → Grounded answer safely explains lack of definitive evidence without guessing.
-* **Passing Thresholds**:
-  * `REAL_SLACK_RETRIEVAL_USED = true`
-  * `REAL_EVIDENCE_ENTERED_STATE_GRAPH = true`
-  * `REAL_CLAIM_FORMATION_USED = true`
-  * `REAL_CLAIM_VERIFICATION_USED = true`
-  * `REAL_STAGE1A_USED = true`
-  * `REAL_STAGE1B_USED = true`
-  * `REAL_STAGE2_USED = true`
-  * `REAL_STAGE25_USED = true`
-  * `EVERY_FINAL_STATE_TRACEABLE_TO_REAL_SLACK = true`
-  * `USER_FACING_ANSWER_GROUNDED_IN_FINAL_WORKITEMS = true`
-  * `UNKNOWN_FAIL_CLOSED = true`
-  * `SLACK_WRITE_ACTIONS = 0`
-  * `PHASE_13_5D_REAL_PRODUCTION_TRACE_VERDICT = FINAL_PASS`
+  * Create: `output/qualification_13_5d/live_trace/case_predeclarations.json`
+* **Live Case Pre-Declaration & Anti-Cherrypicking Policy**:
+  Selecting easy or convenient cases after observing execution results is **STRICTLY FORBIDDEN**.
+  Prior to launching live execution, the 3 cases MUST be fixed, recorded in `output/qualification_13_5d/live_trace/case_predeclarations.json`, and committed/hashed in git.
+  The 3 pre-declared cases must satisfy the following distinct architectural objectives:
+  ```text
+  CASE_A_SELECTION:
+    - Objective: Clear progress / completion (A = clear progress/completion)
+    - Target: Known completed deliverable or verified deployment thread in authorized read-only Slack channel.
+    - Expected Lifecycle / Authority: COMPLETION
+    - Expected Final WorkItem Status: COMPLETED
+  CASE_B_SELECTION:
+    - Objective: Completion + blocker coexistence (B = completion + blocker coexistence)
+    - Target: Delivered milestone subject to active blocker, downstream dependency failure, or outage.
+    - Expected Lifecycle / Authority: BLOCKER (governing over completion via priority rules)
+    - Expected Final WorkItem Status: BLOCKED
+  CASE_C_SELECTION:
+    - Objective: Insufficient or contradictory evidence where UNKNOWN/fail-closed is expected (C = insufficient or contradictory evidence)
+    - Target: Unannounced / disputed initiative or ambiguous query with non-factual evidence.
+    - Expected Lifecycle / Authority: UNKNOWN
+    - Expected Final WorkItem Status: UNKNOWN (fail-closed, non-speculative explanation)
+  ```
+  * **Pre-Declaration Rules**:
+    1. The exact query strings, target channels/scopes, and expected categories must be sealed in the pre-declaration artifact before live execution starts.
+    2. Changing queries, target channels, or expected categories after seeing live search results or pipeline output is strictly prohibited (`POST_HOC_CASE_REPLACEMENTS = 0`).
+* **Execution Budget & Strict Retry Policy**:
+  * Exactly 1 logical execution per case (`LIVE_CASE_COUNT = 3`).
+  * **Semantic Retries Strictly Prohibited**: Retrying a case because the model's output, status, or rendered answer was unsatisfactory is **STRICTLY FORBIDDEN** (`SEMANTIC_RETRIES = 0`). A semantic failure is a legitimate qualification failure and must trigger remediation rather than ad-hoc retrying.
+  * **Infrastructure Retries Allowed Strictly for Non-Semantic Faults**:
+    * Allowed conditions: OpenRouter HTTP 5xx / 429 rate limit, network socket timeout, WebView2 CDP disconnection / browser crash.
+    * If an infrastructure retry occurs, the qualification report artifact must explicitly document:
+      * `retry_reason` (exact network/transport exception)
+      * `physical_call_count`
+      * `logical_call_count`
+      * `original_failure`
+* **Passing Thresholds & Reportable Invariants**:
+  ```text
+  LIVE_CASES_PREDECLARED = true
+  LIVE_CASE_COUNT = 3
+  POST_HOC_CASE_REPLACEMENTS = 0
+  SEMANTIC_RETRIES = 0
+  SLACK_WRITE_ACTIONS = 0
+  REAL_SLACK_RETRIEVAL_USED = true
+  REAL_EVIDENCE_ENTERED_STATE_GRAPH = true
+  REAL_CLAIM_FORMATION_USED = true
+  REAL_CLAIM_VERIFICATION_USED = true
+  REAL_STAGE1A_USED = true
+  REAL_STAGE1B_USED = true
+  REAL_STAGE2_USED = true
+  REAL_STAGE25_USED = true
+  EVERY_FINAL_STATE_TRACEABLE_TO_REAL_SLACK = true
+  USER_FACING_ANSWER_GROUNDED_IN_FINAL_WORKITEMS = true
+  UNKNOWN_FAIL_CLOSED = true
+  PHASE_13_5D_REAL_PRODUCTION_TRACE_VERDICT = FINAL_PASS
+  ```
 * **Execution Command**:
   ```powershell
   python scripts/qualify_phase_13_5d_real_production_trace.py
@@ -560,7 +692,7 @@ graph TD
 Before Phase 13.5D is formally declared closed, every gate must be mechanically verified:
 
 ```text
-[ ] Task 1: Baseline 122/122 tests passed; zero drift.
+[ ] Task 1: Baseline manifest passed (ALL_BASELINE_MANIFEST_COMMANDS_PASS = true; zero drift).
 [ ] Task 2: OpenRouterEvidenceAssessor unit tests pass with injectable config.
 [ ] Task 3: OpenRouterEvidenceAssessor offline contract tests pass (0 network calls).
 [ ] Task 4: ProductionRealTraceCoordinator maintains single InvestigationStateGraph instance.
@@ -568,11 +700,29 @@ Before Phase 13.5D is formally declared closed, every gate must be mechanically 
 [ ] Task 6: GroundedWorkItemAnswerBuilder renders verified badges and Slack citations without LLM calls.
 [ ] Task 7: ResultPresenter converts GroundedWorkItemAnswerPayload to typed UI schema.
 [ ] Task 8: Full offline user-facing E2E verifies zero freeform LLM answering and 100% traceability.
-[ ] Task 9: Full regression suite passes (153+ tests; zero regressions across frozen stages).
-[ ] Task 10: EvidenceAssessor real qualification passes (>=90% extraction, 0 hallucinations).
-[ ] Task 11: Bounded real production trace qualification achieves FINAL_PASS on live Slack.
+[ ] Task 9: Gate-bearing manifest passes cleanly:
+      - ALL_GATE_BEARING_TEST_MANIFEST_COMMANDS_PASS = true
+      - FROZEN_ARTIFACT_HASH_DRIFT_COUNT = 0
+      - (Test count recorded purely as observational metric; no count-based pass/fail gate)
+[ ] Task 10: EvidenceAssessor real qualification passes:
+      - SCHEMA_VALIDITY_RATE = 100%
+      - CLAIM_EXTRACTION_MICRO_F1 >= 90.0%
+      - HALLUCINATED_EVIDENCE_ID_COUNT = 0
+      - UNGROUNDED_PROPOSITION_COUNT = 0
+      - FORBIDDEN_CLAIM_EMISSION_COUNT = 0
+      - FAIL_CLOSED_ACCURACY = 100%
+      - Gold expectations frozen before qualification run
+[ ] Task 11: Bounded real production trace qualification achieves FINAL_PASS on live Slack:
+      - LIVE_CASES_PREDECLARED = true
+      - LIVE_CASE_COUNT = 3 (Case A, Case B, Case C pre-declared and hashed)
+      - POST_HOC_CASE_REPLACEMENTS = 0
+      - SEMANTIC_RETRIES = 0
+      - SLACK_WRITE_ACTIONS = 0
+      - PHASE_13_5D_REAL_PRODUCTION_TRACE_VERDICT = FINAL_PASS
 [ ] Task 12: InvestigationService cutover completed ONLY after Task 11 passed.
 [ ] Invariant: SLACK_WRITE_ACTIONS = 0 maintained across all tasks.
 [ ] Invariant: FREEFORM_ANSWER_LLM_CALLS = 0 maintained.
 [ ] Invariant: OLD_ANALYZER_IS_NOT_SEMANTIC_AUTHORITY = true verified.
+[ ] Invariant: ALL_GATE_BEARING_TEST_MANIFEST_COMMANDS_PASS = true.
+[ ] Invariant: FROZEN_ARTIFACT_HASH_DRIFT_COUNT = 0.
 ```
