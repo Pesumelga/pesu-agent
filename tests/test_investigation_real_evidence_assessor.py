@@ -430,3 +430,65 @@ async def test_distinguishable_provider_failure_and_legitimate_empty_assessment(
     assert assessor_safe.last_error is not None  # Failure reason strictly preserved!
     assert "OpenRouter 502 Bad Gateway" in str(assessor_safe.last_error)
 
+
+@pytest.mark.anyio
+async def test_provider_failure_then_successful_empty_does_not_leak_error_state():
+    """Call 1 fails, Call 2 succeeds with empty claims -> last_error must be None on Call 2."""
+    payload = _create_sample_payload()
+    mock_provider = MagicMock(spec=ModelProvider)
+    # Call 1 fails with provider error, Call 2 returns legitimate empty assessment
+    mock_provider.generate_structured = AsyncMock(
+        side_effect=[
+            RuntimeError("Provider 500 error"),
+            (InvestigationAssessment(proposed_claims=[]), None),
+        ]
+    )
+    assessor = OpenRouterEvidenceAssessor(provider=mock_provider, fail_closed_on_provider_error=True)
+
+    # Call 1: provider failure
+    res_1 = await assessor.assess(payload)
+    assert len(res_1.proposed_claims) == 0
+    assert assessor.last_error is not None
+    assert "Provider 500 error" in str(assessor.last_error)
+
+    # Call 2: legitimate empty assessment on same instance
+    res_2 = await assessor.assess(payload)
+    assert len(res_2.proposed_claims) == 0
+    assert assessor.last_error is None  # Error state strictly cleared!
+
+
+@pytest.mark.anyio
+async def test_provider_failure_then_successful_claim_does_not_leak_error_state():
+    """Call 1 fails, Call 2 succeeds with a valid claim -> last_error must be None on Call 2."""
+    payload = _create_sample_payload()
+    mock_provider = MagicMock(spec=ModelProvider)
+    success_assessment = InvestigationAssessment(
+        proposed_claims=[
+            ProposedClaim(
+                proposal_id="PROP_01",
+                statement="AuthService v2.4.0 rollout completed",
+                kind=ClaimKind.FACT,
+                semantic_type=ClaimSemanticType.OUTCOME,
+                supporting_evidence_ids=["EV_01"],
+            )
+        ]
+    )
+    mock_provider.generate_structured = AsyncMock(
+        side_effect=[
+            RuntimeError("Provider timeout"),
+            (success_assessment, None),
+        ]
+    )
+    assessor = OpenRouterEvidenceAssessor(provider=mock_provider, fail_closed_on_provider_error=True)
+
+    # Call 1: provider failure
+    res_1 = await assessor.assess(payload)
+    assert len(res_1.proposed_claims) == 0
+    assert assessor.last_error is not None
+
+    # Call 2: legitimate claim extraction on same instance
+    res_2 = await assessor.assess(payload)
+    assert len(res_2.proposed_claims) == 1
+    assert res_2.proposed_claims[0].proposal_id == "PROP_01"
+    assert assessor.last_error is None  # Error state strictly cleared!
+

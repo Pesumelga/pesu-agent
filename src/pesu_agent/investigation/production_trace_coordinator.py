@@ -105,6 +105,12 @@ class ProductionRealTraceCoordinator:
         self.config = config or WorkItemSynthesisConfig()
         self.seed_pool_builder = seed_pool_builder or InvestigationSeedPoolBuilder()
         self.evidence_assessor = evidence_assessor or OpenRouterEvidenceAssessor()
+        # Enforce typed exception propagation so coordinator never relies on mutable shared last_error
+        if hasattr(self.evidence_assessor, "fail_closed_on_provider_error"):
+            try:
+                self.evidence_assessor.fail_closed_on_provider_error = False
+            except Exception:
+                pass
         self.claim_verifier = claim_verifier or OpenRouterClaimVerifier()
         self.claim_verification_coordinator = (
             claim_verification_coordinator or ClaimVerificationCoordinator()
@@ -203,22 +209,6 @@ class ProductionRealTraceCoordinator:
                 graph=graph,
                 error_message=str(e),
                 stop_reason="PROVIDER_EXECUTION_FAILURE",
-            )
-
-        # Check preserved last_error in case assessor was configured with fail_closed_on_provider_error=True
-        if getattr(self.evidence_assessor, "last_error", None) is not None:
-            last_err = self.evidence_assessor.last_error
-            err_reason = (
-                "INVALID_PROVIDER_OUTPUT"
-                if isinstance(last_err, (EvidenceAssessmentSchemaError, ValueError))
-                else "PROVIDER_EXECUTION_FAILURE"
-            )
-            return ProductionTraceResult(
-                success=False,
-                question=question,
-                graph=graph,
-                error_message=str(last_err),
-                stop_reason=err_reason,
             )
 
         if not assessment.proposed_claims:

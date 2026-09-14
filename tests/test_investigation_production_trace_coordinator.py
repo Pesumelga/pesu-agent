@@ -11,8 +11,9 @@ Guarantees:
 
 from __future__ import annotations
 
-import pytest
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
+import pytest
 
 from pesu_agent.investigation.claim_verification import (
     ClaimVerificationAssessment,
@@ -496,3 +497,52 @@ def test_synchronous_wrapper_trace_and_synthesize():
     )
     assert res.success is True
     assert res.stop_reason == "NO_SUPPORTED_CLAIMS"
+
+
+@pytest.mark.anyio
+async def test_coordinator_sequential_and_concurrent_failure_isolation():
+    """Failures on a shared assessor instance do not leak into sequential or concurrent calls."""
+    candidates = _create_sample_candidates()
+    mock_provider = MagicMock(spec=ModelProvider)
+
+    async def dynamic_generate(messages, **kwargs):
+        # Inspect user message to determine whether to fail or return legitimate empty
+        user_msg = messages[-1].content
+        if "FAIL_CALL" in user_msg:
+            raise RuntimeError("Temporary 503 Service Unavailable")
+        return (InvestigationAssessment(proposed_claims=[]), None)
+
+    mock_provider.generate_structured = AsyncMock(side_effect=dynamic_generate)
+    assessor = OpenRouterEvidenceAssessor(provider=mock_provider)
+    coordinator = ProductionRealTraceCoordinator(evidence_assessor=assessor)
+
+    # 1. Sequential calls: Call 1 fails, Call 2 succeeds
+    res_fail = await coordinator.trace_and_synthesize_async(
+        question="FAIL_CALL question",
+        candidates=candidates,
+    )
+    assert res_fail.success is False
+    assert res_fail.stop_reason == "PROVIDER_EXECUTION_FAILURE"
+
+    res_ok = await coordinator.trace_and_synthesize_async(
+        question="OK_CALL question",
+        candidates=candidates,
+    )
+    assert res_ok.success is True
+    assert res_ok.stop_reason == "NO_SUPPORTED_CLAIMS"
+
+    # 2. Concurrent calls: Call A fails while Call B succeeds concurrently
+    task_a = coordinator.trace_and_synthesize_async(
+        question="FAIL_CALL concurrent",
+        candidates=candidates,
+    )
+    task_b = coordinator.trace_and_synthesize_async(
+        question="OK_CALL concurrent",
+        candidates=candidates,
+    )
+    res_a, res_b = await asyncio.gather(task_a, task_b)
+
+    assert res_a.success is False
+    assert res_a.stop_reason == "PROVIDER_EXECUTION_FAILURE"
+    assert res_b.success is True
+    assert res_b.stop_reason == "NO_SUPPORTED_CLAIMS"
