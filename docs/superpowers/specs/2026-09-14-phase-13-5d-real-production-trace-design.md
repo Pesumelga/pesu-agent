@@ -2,7 +2,7 @@
 
 > **Status**: PROPOSED (Design & Static Audit Only — No Implementation / No Live Actions)  
 > **Author**: Antigravity  
-> **Date**: 2026-09-14  
+> **Date**: 2026-09-14 (Refined Post-Review)  
 > **Target Branch / Workspace**: `c:\Users\HEUM\Documents\pesu-agent`  
 > **Prerequisites**: Phase 13.5C AR3 Closed (`COMPOSED_WORKITEM_E2E_VERDICT = FINAL_PASS`, `SAFE_TO_BEGIN_PHASE_13_5D = true`)
 
@@ -12,11 +12,12 @@
 
 The objective of **Phase 13.5D (Real Production Trace Integration)** is to bridge PESU's existing, verified read-only Slack retrieval infrastructure with the frozen, qualified multi-stage WorkItem reasoning pipeline (Stages 1A, 1B, 2, 2.5 + Downstream Reconciliation + Evidence-Backed Traceability) into an authoritative, end-to-end production flow.
 
-Upon qualification of Phase 13.5D:
+Upon full user-facing qualification of Phase 13.5D:
 1. The **new WorkItem pipeline becomes the sole production authority** for answering user inquiries about task status, blockers, and decisions.
 2. The legacy `InvestigationAnalyzer` path is permanently retired from semantic status authority.
 3. The final user-facing answer is strictly grounded in and projected from verifiable `WorkItemNode` states and their associated `WorkItemTraceabilityChain`s back to canonical Slack message permalinks.
 4. If the new pipeline cannot safely establish a definitive status due to contradictory evidence, material uncertainty, or missing claims, the system **fails closed to `UNKNOWN`**—the legacy analyzer is strictly forbidden from guessing or overriding an uncertain outcome.
+5. **Production Cutover Guard**: `InvestigationService` production routing is switched to the new pipeline **only after the entire end-to-end user-facing chain (including grounded answer presentation) passes qualification**.
 
 ---
 
@@ -83,9 +84,9 @@ flowchart TD
 * **Stage 1B (Relation)**: `WorkItemRelationCoordinator` with `OpenRouterWorkItemRelationVerifier` (Qualified in 13.5C AR3-R3B).
 * **Stage 2 (Lifecycle)**: `WorkItemLifecycleVerificationCoordinator` with `OpenRouterWorkItemLifecycleVerifier` (Qualified in 13.5C AR2).
 * **Stage 2.5 (Decisive Authority)**: `DecisiveLifecycleAuthorityCoordinator` with `OpenRouterDecisiveLifecycleAuthorityVerifier`:
-  * `model`: `openai/gpt-5.6-luna`
-  * `reasoning_effort`: `high`
-  * `temperature`: `0.0`
+  * `model`: `openai/gpt-5.6-luna` (**FROZEN**)
+  * `reasoning_effort`: `high` (**FROZEN**)
+  * `temperature`: `0.0` (**FROZEN**)
   * Candidate Independence rule: Strictly enforced; sibling conflict does not demote independent authority.
 * **Downstream Reconciliation**: `DeterministicDecisiveAuthorityFilter`:
   * Priority: `BLOCKER > COMPLETION > PROGRESS > PLAN > UNKNOWN`.
@@ -103,7 +104,7 @@ The static code audit evaluated each boundary between Real Slack retrieval and t
 | :--- | :---: | :--- | :--- |
 | **1. Real Slack Retrieval** | `CONFIRMED` | [`search_backend_factory.py`](file:///c:/Users/HEUM/Documents/pesu-agent/src/pesu_agent/search/slack_backend_factory.py), [`pesu_webview_host.py`](file:///c:/Users/HEUM/Documents/pesu-agent/src/pesu_agent/runtime/pesu_webview_host.py) | **Reuse as-is**: Production `PesuDirectHostSearchBackend` is verified and operational. |
 | **2. `EvidenceItem` → `EvidenceNode`** | `CONFIRMED` | [`context_expansion.py`](file:///c:/Users/HEUM/Documents/pesu-agent/src/pesu_agent/investigation/context_expansion.py#L153-L250) (`InvestigationSeedPoolBuilder.populate_seed_graph`) | **Reuse as-is**: Ingests, canonically dedupes, scopes, and populates `graph.evidence_nodes`. |
-| **3. `EvidenceNode` → real `ProposedClaim`** | **`MISSING`** | [`gap_assessment.py`](file:///c:/Users/HEUM/Documents/pesu-agent/src/pesu_agent/investigation/gap_assessment.py#L771-L800) defines `InvestigationEvidenceAssessor`, but **only `StubEvidenceAssessor` exists**. | **PROPOSED NEW ADAPTER**: Implement `OpenRouterEvidenceAssessor` conforming to `InvestigationEvidenceAssessor` protocol. |
+| **3. `EvidenceNode` → real `ProposedClaim`** | **`MISSING`** | [`gap_assessment.py`](file:///c:/Users/HEUM/Documents/pesu-agent/src/pesu_agent/investigation/gap_assessment.py#L771-L800) defines `InvestigationEvidenceAssessor`, but **only `StubEvidenceAssessor` exists**. | **PROPOSED NEW ADAPTER**: Implement `OpenRouterEvidenceAssessor` conforming to `InvestigationEvidenceAssessor` protocol with **injectable configuration** (not yet qualified). |
 | **4. Real Claim Verification** | `CONFIRMED` | [`claim_verification.py`](file:///c:/Users/HEUM/Documents/pesu-agent/src/pesu_agent/investigation/claim_verification.py#L290-L400) (`OpenRouterClaimVerifier`) | **Reuse as-is**: Fully qualified in Phase 13.4B with `openai/gpt-5.6-luna`. |
 | **5. Claim → Stage 1A** | `CONFIRMED` | [`workitem_synthesis.py`](file:///c:/Users/HEUM/Documents/pesu-agent/src/pesu_agent/investigation/workitem_synthesis.py#L3418) (`OpenRouterEpisodeMembershipGrouper`) | **Reuse as-is**: Formally frozen and qualified. |
 | **6. Stage 1A → Stage 1B** | `CONFIRMED` | [`workitem_synthesis.py`](file:///c:/Users/HEUM/Documents/pesu-agent/src/pesu_agent/investigation/workitem_synthesis.py#L3981) (`OpenRouterWorkItemRelationVerifier`) | **Reuse as-is**: Formally frozen and qualified. |
@@ -111,13 +112,13 @@ The static code audit evaluated each boundary between Real Slack retrieval and t
 | **8. Stage 2 → Stage 2.5** | `CONFIRMED` | [`workitem_synthesis.py`](file:///c:/Users/HEUM/Documents/pesu-agent/src/pesu_agent/investigation/workitem_synthesis.py#L4579) (`OpenRouterDecisiveLifecycleAuthorityVerifier`) | **Reuse as-is**: Qualified with `openai/gpt-5.6-luna + high`. |
 | **9. Stage 2.5 → Final WorkItem** | `CONFIRMED` | [`workitem_synthesis.py`](file:///c:/Users/HEUM/Documents/pesu-agent/src/pesu_agent/investigation/workitem_synthesis.py#L1182) (`DeterministicDecisiveAuthorityFilter`) | **Reuse as-is**: Reconciles priority and fail-closed rules. |
 | **10. Final WorkItem → Trace Bundle**| `CONFIRMED` | [`workitem_synthesis.py`](file:///c:/Users/HEUM/Documents/pesu-agent/src/pesu_agent/investigation/workitem_synthesis.py#L70-L160) (`build_work_item_traceability_chain`) | **Reuse as-is**: Verified 100% complete in 13.5C AR3. |
-| **11. Trace Bundle → User Answer** | **`MISSING`** | [`result_presenter.py`](file:///c:/Users/HEUM/Documents/pesu-agent/src/pesu_agent/ui/result_presenter.py) currently only renders legacy `AnalysisResult` from old `InvestigationAnalyzer`. | **PROPOSED NEW ADAPTER**: Implement `GroundedWorkItemAnswerSynthesizer` to render UI answer strictly from WorkItem states and traceability chains. |
+| **11. Trace Bundle → User Answer** | **`MISSING`** | [`result_presenter.py`](file:///c:/Users/HEUM/Documents/pesu-agent/src/pesu_agent/ui/result_presenter.py) currently only renders legacy `AnalysisResult` from old `InvestigationAnalyzer`. | **PROPOSED DETERMINISTIC BUILDER**: Implement `GroundedWorkItemAnswerBuilder` to project structured answer data deterministically from WorkItem states and traceability chains without freeform LLM guessing. |
 
 ---
 
 ## 5. Target Architecture
 
-The target production architecture introduces a single thin orchestration coordinator (`ProductionRealTraceCoordinator`) that executes the unified pipeline across a single `InvestigationStateGraph`:
+The target production architecture introduces a single thin orchestration coordinator (`ProductionRealTraceCoordinator`) that executes the unified pipeline across a single `InvestigationStateGraph`, terminating in a deterministic grounded answer builder:
 
 ```mermaid
 flowchart TD
@@ -134,7 +135,7 @@ flowchart TD
         Seeds --> SeedBuilder[InvestigationSeedPoolBuilder<br/>populate_seed_graph]
         SeedBuilder --> Graph[(Single InvestigationStateGraph<br/>EvidenceNodes)]
         
-        Graph --> Assessor[OpenRouterEvidenceAssessor<br/>PROPOSED: Real Claim Formation]
+        Graph --> Assessor[OpenRouterEvidenceAssessor<br/>PROPOSED: Real Claim Formation<br/>Injectable Config - Unqualified Candidate]
         Assessor --> Claims[ClaimNodes + ClaimEvidenceLinks]
         Claims --> Graph
         
@@ -155,10 +156,11 @@ flowchart TD
         TraceBuilder --> Chains[WorkItemTraceabilityChain Dict]
     end
 
-    subgraph Presentation_Layer [Proposed Grounded Presentation]
-        Chains --> AnswerSynth[GroundedWorkItemAnswerSynthesizer<br/>PROPOSED: Pure Representation Layer]
-        FinalNodes --> AnswerSynth
-        AnswerSynth --> FinalUI[UI Message: investigation.completed<br/>Final WorkItem Status + Grounded Explanation + Slack Citations]
+    subgraph Presentation_Layer [Proposed Grounded Presentation - Zero LLM Semantic Authority]
+        Chains --> AnswerBuilder[GroundedWorkItemAnswerBuilder<br/>PROPOSED: Pure Deterministic Data Model Builder]
+        FinalNodes --> AnswerBuilder
+        AnswerBuilder --> Presenter[ResultPresenter / UI Bridge<br/>Deterministic Markdown Renderer]
+        Presenter --> FinalUI[UI Message: investigation.completed<br/>Final WorkItem Status + Grounded Explanation + Slack Citations]
     end
 ```
 
@@ -187,20 +189,41 @@ flowchart TD
    * Computes final `WorkItemNode.status` and `traceability_chains`.
 
 ### 6.2. Proposed Minimal Wiring & Adapters (Phase 13.5D Additions)
-1. **`OpenRouterEvidenceAssessor`** (`[PROPOSED]`):
-   * **Role**: Real model adapter implementing abstract class `InvestigationEvidenceAssessor` ([`gap_assessment.py`](file:///c:/Users/HEUM/Documents/pesu-agent/src/pesu_agent/investigation/gap_assessment.py#L771)).
-   * **Input**: `AssessmentPayload` (contains question, actor scope summary, temporal scope summary, list of `AssessmentEvidenceItem`).
-   * **Output**: `InvestigationAssessment` containing `list[ProposedClaim]`.
-   * **Model Configuration**: `openai/gpt-5.6-luna`, `reasoning_effort=medium`, `temperature=0.0`.
-   * **Prompt Contract**: Objective extraction of empirical factual propositions from evidence text. Explicit prohibition of speculative or untraced propositions.
-   * **Untrusted Data Boundary**: Source Slack message texts are passive evaluation data. Embedded prompt injection attempts are strictly ignored.
-2. **`ProductionRealTraceCoordinator`** (`[PROPOSED]`):
-   * **Role**: Thin orchestration coordinator replacing `InvestigationOrchestrator` in production.
-   * **Responsibility**: Wires search execution → seed pool ingestion → claim assessment → claim verification → WorkItem decomposition → traceability validation.
-   * **Constraint**: Contains **zero new domain semantic rules**; acts solely as a sequential flow coordinator.
-3. **`GroundedWorkItemAnswerSynthesizer`** (`[PROPOSED]`):
-   * **Role**: Pure presentation layer converting validated `WorkItemNode` and `WorkItemTraceabilityChain` into clear Korean markdown for the UI.
-   * **Constraint**: Must NOT perform semantic reasoning or invent facts. If status is `UNKNOWN`, it must state that evidence is insufficient or conflicting rather than guessing completion.
+
+#### 1. `OpenRouterEvidenceAssessor` (`[PROPOSED]`)
+* **Role**: Real model adapter implementing abstract class `InvestigationEvidenceAssessor` ([`gap_assessment.py`](file:///c:/Users/HEUM/Documents/pesu-agent/src/pesu_agent/investigation/gap_assessment.py#L771)).
+* **Input**: `AssessmentPayload` (contains question, actor scope summary, temporal scope summary, list of `AssessmentEvidenceItem`).
+* **Output**: `InvestigationAssessment` containing `list[ProposedClaim]`.
+* **Runtime Configuration Architecture (Injectable, Non-Frozen)**:
+  * Parameters `provider`, `model`, `reasoning_effort`, `temperature` **must remain strictly injectable** through constructor parameters or configuration objects.
+  * **Explicit Governance Notice**: This adapter is **NOT yet declared as a production-qualified configuration**. Unlike Stage 2.5 (which is frozen at `openai/gpt-5.6-luna`, `reasoning_effort=high`, `temperature=0.0`), `OpenRouterEvidenceAssessor` has not completed dedicated real-model qualification.
+  * **Initial Qualification Candidate**: `model="openai/gpt-5.6-luna"`, `reasoning_effort="medium"`, `temperature=0.0`. This is designated solely as a candidate baseline to be qualified, distinct from any frozen production standard.
+  * **Agent Environment Separation**: The Antigravity development environment (Gemini 3.8 Flash / reasoning high) is an external execution environment and has zero relationship to the PESU runtime model configuration.
+* **Prompt Contract**: Objective extraction of empirical factual propositions from evidence text. Explicit prohibition of speculative or untraced propositions.
+* **Untrusted Data Boundary**: Source Slack message texts are passive evaluation data. Embedded prompt injection attempts are strictly ignored.
+
+#### 2. `ProductionRealTraceCoordinator` (`[PROPOSED]`)
+* **Role**: Thin orchestration coordinator replacing `InvestigationOrchestrator` in production.
+* **Responsibility**: Sequential wiring only: search execution → seed pool ingestion → claim assessment → claim verification → WorkItem decomposition → traceability validation → grounded answer construction.
+* **Constraint**: Contains **zero new domain semantic rules**; acts solely as a sequential flow coordinator.
+
+#### 3. `GroundedWorkItemAnswerBuilder` (`[PROPOSED]`)
+* **Role**: Pure deterministic data builder that projects validated `WorkItemNode` and `WorkItemTraceabilityChain` into structured grounded answer data.
+* **Input**:
+  * Final `WorkItemNode.status`
+  * Decisive authority decision(s)
+  * Lifecycle signal(s)
+  * Relation and episode membership (where needed)
+  * Governing Claim references and statements
+  * Evidence references and snippets
+  * Canonical Slack permalinks
+* **Output**:
+  * Structured grounded answer data (e.g. `GroundedWorkItemAnswerPayload`).
+* **Strict Semantic Invariants**:
+  * **Zero Semantic Authority**: This component never decides status, reinterprets lifecycle, or alters the graph.
+  * **YAGNI Compliance (Zero Freeform LLM in Phase 13.5D)**: Phase 13.5D does NOT introduce a freeform LLM generation step for user answers. A deterministic template/builder is used to guarantee 100% factual grounding and eliminate any risk of hallucinated task completion. (Any future LLM wording polish layer must remain a non-authoritative stylistic decorator subject to separate qualification).
+  * **Fail-Closed Presentation**: When status is `UNKNOWN`, the builder formats an explicit non-speculative statement that Slack evidence is either insufficient, ambiguous, or contradictory, and points to the relevant messages without guessing completion.
+  * **Renderer Integration**: Output data is rendered to Markdown/UI cards directly by extending `ResultPresenter` or through a thin deterministic renderer.
 
 ---
 
@@ -210,15 +233,16 @@ flowchart TD
 | :--- | :--- | :--- | :--- | :--- |
 | **Search** | `UserQuestion(question)` | `PesuDirectHostSearchBackend` | `list[EvidenceItem]` | `SLACK_WRITE_ACTIONS = 0` |
 | **Seed Ingestion** | `list[EvidenceItem]` | `InvestigationSeedPoolBuilder` | `InvestigationStateGraph.evidence_nodes` | Deduplicated canonically, no raw author Slack IDs |
-| **Claim Formation**| `AssessmentPayload` | `OpenRouterEvidenceAssessor` | `list[ProposedClaim]` | `semantic_type` required, `addresses_gap_ids` mapped |
+| **Claim Formation**| `AssessmentPayload` | `OpenRouterEvidenceAssessor` | `list[ProposedClaim]` | Injectable config (unqualified candidate); `semantic_type` required |
 | **Claim Verification**| `ClaimVerificationPayload` | `OpenRouterClaimVerifier` | `ClaimVerificationAssessment` | Direct support requires `DIRECT` strength and verified actor |
 | **Stage 1A (Membership)** | `WorkItemSynthesisPayload` | `OpenRouterEpisodeMembershipGrouper` | `EpisodeMembershipProposal` | WorkItems capped at 5; explicit claim accounting |
 | **Stage 1B (Relation)** | `WorkItemRelationVerificationPayload` | `OpenRouterWorkItemRelationVerifier` | `WorkItemRelationProposal` | Exactly 1 relation per member/context claim |
 | **Stage 2 (Lifecycle)** | `WorkItemLifecycleVerificationPayload` | `OpenRouterWorkItemLifecycleVerifier` | `WorkItemLifecycleVerificationProposal` | Signals: `COMPLETION`, `PROGRESS`, `PLAN`, `BLOCKER`, `CHURN`, `ABANDONED` |
-| **Stage 2.5 (Authority)** | `DecisiveLifecycleAuthorityPayload` | `OpenRouterDecisiveLifecycleAuthorityVerifier` | `DecisiveLifecycleAuthorityProposal` | Model: `openai/gpt-5.6-luna + high`; Candidate Independence |
+| **Stage 2.5 (Authority)** | `DecisiveLifecycleAuthorityPayload` | `OpenRouterDecisiveLifecycleAuthorityVerifier` | `DecisiveLifecycleAuthorityProposal` | **FROZEN CONFIG**: `openai/gpt-5.6-luna + high`; Candidate Independence |
 | **Reconciliation**| Coexisting confirmed links | `DeterministicDecisiveAuthorityFilter` | `WorkItemNode.status` | Priority: `BLOCKER > COMPLETION > PROGRESS > PLAN > UNKNOWN` |
 | **Traceability** | `InvestigationStateGraph` | `build_work_item_traceability_chain` | `WorkItemTraceabilityChain` | `EVERY_FINAL_STATE_HAS_TRACEABLE_CLAIM_EVIDENCE = true` |
-| **Presentation** | `WorkItemTraceabilityChain` + `WorkItemNode` | `GroundedWorkItemAnswerSynthesizer` | UI message payload (`answer`, `evidence_cards`) | Pure representation; never overrides `UNKNOWN` |
+| **Answer Building** | `WorkItemTraceabilityChain` + `WorkItemNode` | `GroundedWorkItemAnswerBuilder` | `GroundedWorkItemAnswerPayload` | **Deterministic data builder**; zero freeform LLM guessing |
+| **Presentation** | `GroundedWorkItemAnswerPayload` | `ResultPresenter` (or thin renderer) | UI message payload (`answer`, `evidence_cards`) | Pure deterministic representation; never overrides `UNKNOWN` |
 
 ---
 
@@ -242,17 +266,18 @@ InvestigationStateGraph created
 * Lossy transformations that drop claim-to-evidence links.
 
 ### 8.2. Traceability Invariant
-Every final `WorkItemNode.status` presented to the user must be fully resolvable through the following provenance path:
+Every substantive statement in the user answer must be fully resolvable through the following provenance path:
 ```text
-WorkItemNode.status
-  └── WorkItemClaimLink (decisive_authority == CONFIRMED)
-        ├── lifecycle_signal (COMPLETION / BLOCKER / PROGRESS / PLAN)
-        ├── relation (PRIMARY / OUTCOME / FOLLOW_UP)
-        ├── episode_membership (MEMBER / CONTEXT)
-        └── ClaimNode (claim_id)
-              └── ClaimEvidenceLink (relation == SUPPORTS, attribution_strength == DIRECT)
-                    └── EvidenceNode (evidence_id)
-                          └── canonical_permalink (https://slack.com/archives/...)
+User Answer Text
+  └── WorkItemNode.status
+        └── WorkItemClaimLink (decisive_authority == CONFIRMED)
+              ├── lifecycle_signal (COMPLETION / BLOCKER / PROGRESS / PLAN)
+              ├── relation (PRIMARY / OUTCOME / FOLLOW_UP)
+              ├── episode_membership (MEMBER / CONTEXT)
+              └── ClaimNode (claim_id)
+                    └── ClaimEvidenceLink (relation == SUPPORTS, attribution_strength == DIRECT)
+                          └── EvidenceNode (evidence_id)
+                                └── canonical_permalink (https://slack.com/archives/...)
 ```
 If `build_work_item_traceability_chain()` finds that any governing claim lacks a supporting `EvidenceNode` or has an unverified link, `trace.is_traceable` is `False`, forcing the WorkItem into an unverified/fail-closed presentation.
 
@@ -282,15 +307,15 @@ The production system must adhere to non-negotiable fail-closed invariants:
 
 All LLM provider interactions within Phase 13.5D are strictly budgeted and auditable:
 
-| Stage / Component | Target Model | Reasoning Effort | Temperature | Invariant / Governance Role |
+| Stage / Component | Model Configuration | Reasoning Effort | Temperature | Invariant / Governance Role |
 | :--- | :--- | :---: | :---: | :--- |
-| **Claim Assessor** (`[PROPOSED]`) | `openai/gpt-5.6-luna` | `medium` | `0.0` | 1 call per investigation; extracts empirical claims |
+| **Claim Assessor** (`[PROPOSED]`) | Injectable Config (Candidate: `openai/gpt-5.6-luna`) | Injectable Config (Candidate: `medium`) | `0.0` | **UNQUALIFIED CANDIDATE CONFIG**: 1 call per investigation; extracts empirical claims |
 | **Claim Verifier** (`OpenRouterClaimVerifier`) | `openai/gpt-5.6-luna` | `medium` | `0.0` | Bounded calls ($\le 2$ batches); validates claim-evidence support |
 | **Stage 1A (Membership)** | `openai/gpt-5.6-luna` | `medium` | `0.0` | 1 call per investigation; groups claims into WorkItems |
 | **Stage 1B (Relation)** | `openai/gpt-5.6-luna` | `medium` | `0.0` | 1 call per synthesized WorkItem |
 | **Stage 2 (Lifecycle)** | `openai/gpt-5.6-luna` | `medium` | `0.0` | 1 call per synthesized WorkItem |
-| **Stage 2.5 (Decisive Authority)** | `openai/gpt-5.6-luna` | `high` | `0.0` | **FROZEN CONFIGURATION**: High reasoning effort, 1 call per WorkItem |
-| **Answer Synthesis** (`[PROPOSED]`) | Optional / Rule-based | N/A | `0.0` | Deterministic template-based formatting preferred to avoid hallucination |
+| **Stage 2.5 (Decisive Authority)** | `openai/gpt-5.6-luna` | `high` | `0.0` | **FROZEN QUALIFIED CONFIGURATION**: High reasoning effort, 1 call per WorkItem |
+| **Answer Synthesis** (`[PROPOSED]`) | **NONE (Deterministic Builder)** | N/A | N/A | **YAGNI RULE**: Pure deterministic data projection; zero LLM calls for answer synthesis |
 
 * **Single Successful Generation Per Inference**:
   `ONE_SUCCESSFUL_MODEL_GENERATION_PER_LOGICAL_INFERENCE = true`. Retries are permitted only for transient HTTP 5xx errors, never for semantic mismatches.
@@ -320,7 +345,7 @@ Prior to running any live Slack queries, Phase 13.5D requires an offline, end-to
    * Construct `list[EvidenceItem]` fixtures representing realistic enterprise Slack conversations (e.g. migration rollout, outage triage, ambiguous spec discussion).
    * Feed into `ProductionRealTraceCoordinator` with stubbed or recorded model responses.
 2. **Offline Verification Suite**:
-   * Verify complete end-to-end data flow from `EvidenceItem` through to `WorkItemTraceabilityChain`.
+   * Verify complete end-to-end data flow from `EvidenceItem` through to `GroundedWorkItemAnswerPayload`.
    * Verify all 5 fail-closed conditions (unknown membership, unknown relation, unknown lifecycle, contradictory signals, material uncertainty).
    * Verify that zero live network requests occur (`LIVE_SLACK_ACTIONS = 0`).
 
@@ -346,14 +371,42 @@ Once offline qualification passes, a bounded live qualification session evaluate
 
 ## 14. Production Cutover Strategy
 
-When Phase 13.5D bounded live qualification reaches `FINAL_PASS`:
+### 14.1. Strict Prerequisite: User-Facing End-to-End PASS
+Production cutover in `InvestigationService` is performed **ONLY AFTER the full user-facing end-to-end pipeline passes qualification**.
 
+**Strictly Forbidden Sequence**:
+```text
+WorkItem pipeline PASS
+→ InvestigationService cutover
+→ user answer wiring
+(STRICTLY FORBIDDEN)
+```
+
+**Mandatory Qualification & Cutover Sequence**:
+```text
+1. Real Slack retrieval (PesuDirectHostSearchBackend)
+2. Evidence enters graph (InvestigationSeedPoolBuilder)
+3. Real ProposedClaim formation (OpenRouterEvidenceAssessor)
+4. Real Claim verification (OpenRouterClaimVerifier)
+5. Stage 1A Episode Membership (OpenRouterEpisodeMembershipGrouper)
+6. Stage 1B Relation (OpenRouterWorkItemRelationVerifier)
+7. Stage 2 Lifecycle (OpenRouterWorkItemLifecycleVerifier)
+8. Stage 2.5 Decisive Authority (OpenRouterDecisiveLifecycleAuthorityVerifier)
+9. Downstream Reconciliation (DeterministicDecisiveAuthorityFilter)
+10. Final WorkItem State (WorkItemNode.status)
+11. Complete Traceability (build_work_item_traceability_chain)
+12. Grounded user-facing answer (GroundedWorkItemAnswerBuilder + ResultPresenter)
+13. Full User-Facing E2E Qualification PASS
+14. InvestigationService production cutover
+```
+
+### 14.2. Cutover Mechanism
 1. **Routing Switch in `InvestigationService`**:
-   * In `_run_investigation_worker()`, replace instantiation of legacy `InvestigationOrchestrator` with `ProductionRealTraceCoordinator`.
-2. **Safe Coexistence**:
-   * Legacy `InvestigationOrchestrator` and `InvestigationAnalyzer` source files remain in the repository for historical test compatibility, but are detached from the active production UI dispatch route.
-3. **Presentation Cutover**:
-   * `present_investigation_result()` is updated or wrapped by `GroundedWorkItemAnswerSynthesizer` to consume `WorkItemSynthesisResult.traceability_chains` and display grounded WorkItem cards alongside canonical Slack permalinks.
+   * Once full user-facing E2E qualification passes, update `_run_investigation_worker()` to dispatch through `ProductionRealTraceCoordinator` and `GroundedWorkItemAnswerBuilder` instead of `InvestigationOrchestrator`.
+2. **Safe Fallback & Coexistence during Validation**:
+   * Until qualification passes, `InvestigationService` retains its existing path.
+   * Legacy `InvestigationOrchestrator` and `InvestigationAnalyzer` source files remain for historical test compatibility, but are detached from the active production UI dispatch route.
+   * Legacy analyzer is never invoked as a fallback for `UNKNOWN` states after cutover.
 
 ---
 
@@ -373,6 +426,7 @@ When Phase 13.5D bounded live qualification reaches `FINAL_PASS`:
 * Do NOT introduce external vector databases, persistent knowledge graphs, or caching servers.
 * Do NOT re-qualify frozen upstream stages.
 * Do NOT allow the legacy analyzer to act as an ungrounded fallback.
+* Do NOT introduce a freeform LLM generation layer for user-facing answers in Phase 13.5D.
 
 ---
 
@@ -392,7 +446,9 @@ REAL_STAGE2_USED = true
 REAL_STAGE25_USED = true
 
 EVERY_FINAL_STATE_TRACEABLE_TO_REAL_SLACK = true
+DETERMINISTIC_GROUNDED_ANSWER_BUILDER_USED = true
 USER_FACING_ANSWER_GROUNDED_IN_FINAL_WORKITEMS = true
+FULL_USER_FACING_E2E_QUALIFIED_BEFORE_CUTOVER = true
 
 UNKNOWN_FAIL_CLOSED = true
 
@@ -414,3 +470,4 @@ PHASE_13_5D_REAL_PRODUCTION_TRACE_VERDICT = FINAL_PASS
 | **Prompt Injection via Slack Text** | High | All message content is treated as untrusted data within dedicated XML/markdown data blocks. System prompts explicitly instruct models to ignore instructions in evidence. |
 | **Stale Slack Permalinks** | Low | Validate canonical permalinks using `validate_citation_permalink()` before rendering UI citation cards. |
 | **Model Demotion of Blockers** | Medium | Frozen Stage 2.5 Luna-High configuration has 100% qualified safety on blocker detection; Candidate Independence rule ensures sibling claims cannot suppress blockers. |
+| **Hallucination in Answer Synthesis** | Low | Mitigated completely by using deterministic `GroundedWorkItemAnswerBuilder` rather than freeform LLM answer synthesis in Phase 13.5D. |
