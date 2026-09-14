@@ -48,6 +48,7 @@ from pesu_agent.ui.result_presenter import (
     SLACK_TEXT_EXECUTABLE_AS_HTML,
     STALE_RESULT_CAN_OVERWRITE_CURRENT_QUERY,
     format_user_friendly_error,
+    present_grounded_investigation_result,
     present_investigation_result,
     validate_citation_permalink,
 )
@@ -97,6 +98,7 @@ __all__ = [
     "GroundedWorkItemAnswerBuilder",
     "GroundedWorkItemAnswerPayload",
     "GroundedWorkItemCard",
+    "present_grounded_investigation_result",
     "present_investigation_result",
     "format_user_friendly_error",
     "validate_citation_permalink",
