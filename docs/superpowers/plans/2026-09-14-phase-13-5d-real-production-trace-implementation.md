@@ -91,15 +91,31 @@ graph TD
 
 ### Task 1: Frozen Baseline & Integration Contract Verification
 
-* **Goal**: Establish the mechanical regression baseline across all frozen upstream stages (Stages 1A, 1B, 2, 2.5 and 13.5C Composed E2E) and verify frozen artifact hash consistency before creating new code.
-* **Files to Modify / Inspect**:
-  * Inspect: `tests/test_investigation_stage1a_final_decision.py`
-  * Inspect: `tests/test_investigation_episode_membership_eligibility.py`
-  * Inspect: `tests/test_investigation_stage1_relation_decomposition.py`
-  * Inspect: `tests/test_investigation_workitem_synthesis.py`
-  * Inspect: `tests/test_investigation_decisive_authority_contract_offline.py`
-  * Inspect: `tests/test_investigation_composed_workitem_pipeline.py`
-  * Inspect: `tests/test_investigation_composed_workitem_e2e.py`
+* **Goal**: Establish the mechanical regression baseline across all frozen upstream stages (Stages 1A, 1B, 2, 2.5 and 13.5C Composed E2E), compute the authoritative SHA256 baseline manifest across all frozen implementation and fixture files before any implementation starts, and seal it into the qualification artifact directory.
+* **Files to Inspect & Verify**:
+  * Authoritative Stage Implementations & Pipeline Logic:
+    * `src/pesu_agent/investigation/workitem_synthesis.py` (Contains Stage 1A EpisodeGrouper, Stage 1B RelationVerifier, Stage 2 LifecycleVerifier, Stage 2.5 DecisiveAuthorityVerifier, and synthesis coordinators)
+    * `src/pesu_agent/investigation/claim_verification.py` (Contains ClaimVerifier and ClaimVerificationCoordinator)
+    * `src/pesu_agent/investigation/graph_models.py` (Core InvestigationStateGraph, WorkItemNode, ClaimNode, EvidenceNode schemas)
+    * `src/pesu_agent/investigation/context_expansion.py` (InvestigationSeedPoolBuilder)
+    * `tests/qualification_support/workitem_evaluator.py` (Authoritative qualification evaluator contracts and thresholds)
+  * Authoritative Frozen Fixtures & Benchmarks:
+    * `tests/fixtures/workitem_episode_membership_r3a_r3_fixtures.py` (Stage 1A qualified benchmark)
+    * `tests/fixtures/workitem_relation_r3b_r2_fixtures.py` (Stage 1B qualified benchmark)
+    * `tests/fixtures/workitem_lifecycle_ar2_fixtures.py` (Stage 2 qualified benchmark)
+    * `tests/fixtures/workitem_decisive_authority_r3c_v10_fixtures.py` (Stage 2.5 qualified V10 benchmark)
+    * `tests/fixtures/workitem_decisive_authority_r3c_r8_regression_manifest.py` (Stage 2.5 regression manifest)
+    * `tests/fixtures/claim_verification_gold_fixtures.py` (Claim verification benchmark)
+  * Baseline Manifest Test Suites:
+    * `tests/test_investigation_stage1a_final_decision.py`
+    * `tests/test_investigation_episode_membership_eligibility.py`
+    * `tests/test_investigation_stage1_relation_decomposition.py`
+    * `tests/test_investigation_workitem_synthesis.py`
+    * `tests/test_investigation_decisive_authority_contract_offline.py`
+    * `tests/test_investigation_composed_workitem_pipeline.py`
+    * `tests/test_investigation_composed_workitem_e2e.py`
+* **Artifact to Create**:
+  * `output/qualification_13_5d/frozen_artifact_manifest.json` (Pre-implementation frozen baseline manifest)
 * **Interfaces / Invariants**:
   * `FROZEN_STAGE1A_TESTS = 23` (observed baseline count)
   * `FROZEN_STAGE1B_TESTS = 16` (observed baseline count)
@@ -108,20 +124,42 @@ graph TD
   * `FROZEN_COMPOSED_E2E_TESTS = 18` (observed baseline count)
   * `OBSERVED_BASELINE_TOTAL_TESTS = 122` (Informational reporting metric only; strictly not a pass/fail authority)
   * `ALL_BASELINE_MANIFEST_COMMANDS_PASS = true` (Pass/Fail authority)
+  * `FROZEN_BASELINE_CAPTURED_BEFORE_IMPLEMENTATION = true` (Baseline captured at pre-implementation commit)
+  * `FROZEN_BASELINE_REWRITES_AFTER_IMPLEMENTATION_START = 0` (Strictly forbidden to regenerate baseline during implementation to mask drift)
   * `FROZEN_ARTIFACT_HASH_DRIFT_COUNT = 0` (Integrity authority)
   * `EXPECTED_FAILURES = 0`
 * **Implementation Steps**:
-  1. Run the existing consolidated test suite across all 7 baseline manifest test files.
-  2. Confirm all commands pass cleanly (exit code 0; observing 122 baseline tests for reporting).
-  3. Record baseline SHA256 hashes of frozen stage prompts, verifier modules, and fixtures.
+  1. Run the consolidated baseline test suite across all 7 baseline test files. Confirm all pass cleanly with exit code 0 (observing 122 passed).
+  2. Query the current Git commit SHA (`git rev-parse HEAD`).
+  3. Calculate the SHA256 hash for each of the 11 authoritative frozen implementation and fixture files.
+  4. Write `output/qualification_13_5d/frozen_artifact_manifest.json` with the following schema:
+     ```json
+     {
+       "baseline_commit": "<commit-sha-before-implementation>",
+       "captured_at": "2026-09-14T...",
+       "artifacts": [
+         {
+           "path": "src/pesu_agent/investigation/workitem_synthesis.py",
+           "sha256": "e50bda50c2d47ee0..."
+         },
+         ...
+       ]
+     }
+     ```
+  5. Commit `output/qualification_13_5d/frozen_artifact_manifest.json` immediately before writing any Phase 13.5D production code. Regenerating or modifying this baseline after implementation has started is strictly prohibited.
 * **Test Command**:
   ```powershell
   python -m pytest tests/test_investigation_stage1a_final_decision.py tests/test_investigation_episode_membership_eligibility.py tests/test_investigation_stage1_relation_decomposition.py tests/test_investigation_workitem_synthesis.py tests/test_investigation_decisive_authority_contract_offline.py tests/test_investigation_composed_workitem_pipeline.py tests/test_investigation_composed_workitem_e2e.py -v
   ```
+* **Baseline Capture Command**:
+  ```powershell
+  python -c "import hashlib, json, subprocess; from pathlib import Path; commit = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode().strip(); files = ['src/pesu_agent/investigation/workitem_synthesis.py', 'src/pesu_agent/investigation/claim_verification.py', 'src/pesu_agent/investigation/graph_models.py', 'src/pesu_agent/investigation/context_expansion.py', 'tests/qualification_support/workitem_evaluator.py', 'tests/fixtures/workitem_episode_membership_r3a_r3_fixtures.py', 'tests/fixtures/workitem_relation_r3b_r2_fixtures.py', 'tests/fixtures/workitem_lifecycle_ar2_fixtures.py', 'tests/fixtures/workitem_decisive_authority_r3c_v10_fixtures.py', 'tests/fixtures/workitem_decisive_authority_r3c_r8_regression_manifest.py', 'tests/fixtures/claim_verification_gold_fixtures.py']; manifest = {'baseline_commit': commit, 'artifacts': [{'path': f, 'sha256': hashlib.sha256(Path(f).read_bytes()).hexdigest()} for f in files]}; Path('output/qualification_13_5d').mkdir(parents=True, exist_ok=True); Path('output/qualification_13_5d/frozen_artifact_manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8'); print('FROZEN_BASELINE_CAPTURED_BEFORE_IMPLEMENTATION=True')"
+  ```
 * **Expected Output**:
-  All baseline test suites exit with code 0 (122 passed observed in <2.00s; zero failures; zero hash drift).
+  - Baseline pytest exits with code 0 (122 passed observed in <2.00s; zero failures).
+  - Baseline capture outputs `FROZEN_BASELINE_CAPTURED_BEFORE_IMPLEMENTATION=True`.
 * **Commit Boundary**:
-  Zero code changes; no commit required for Task 1.
+  `git commit -m "chore(gate): freeze phase 13.5d baseline hash manifest"`
 
 ---
 
@@ -445,9 +483,11 @@ graph TD
 ### Task 9: Full Frozen Regression & Integrity Gate
 
 * **Goal**: Execute the explicit Gate-Bearing Test Manifest to ensure zero regressions across Stage 1A, Stage 1B, Stage 2, Stage 2.5, claim verification, V2 orchestration, and new Phase 13.5D offline suites before permitting any real provider calls.
-* **Gate Authority Invariant**:
+* **Gate Authority Invariants**:
   * `ALL_GATE_BEARING_TEST_MANIFEST_COMMANDS_PASS = true` (Sole pass/fail authority)
-  * `FROZEN_ARTIFACT_HASH_DRIFT_COUNT = 0` (Sole integrity authority)
+  * `FROZEN_BASELINE_CAPTURED_BEFORE_IMPLEMENTATION = true` (Baseline captured at pre-implementation commit)
+  * `FROZEN_BASELINE_REWRITES_AFTER_IMPLEMENTATION_START = 0` (Baseline cannot be rewritten after implementation starts)
+  * `FROZEN_ARTIFACT_HASH_DRIFT_COUNT = 0` (Sole integrity authority via actual SHA256 comparison against baseline manifest)
   * **Prohibition on Raw Count Authority**: Using raw test counts (e.g. `TOTAL_TESTS >= 153`) as a pass/fail success criterion is **STRICTLY FORBIDDEN**. Observed test counts (e.g. 122 baseline, ~31 new 13.5D unit/integration tests, ~75 claim verification/orchestrator tests) are recorded purely as informational observation metrics for telemetry and reporting.
 * **Gate-Bearing Test Manifest**:
   Every command in the manifest below must execute cleanly with exit code 0:
@@ -462,7 +502,7 @@ graph TD
 | `GATE-06` | **Claim Verification Suite** | `python -m pytest tests/test_investigation_claim_verification.py tests/test_investigation_real_claim_verifier.py -v` | All pass; zero failure; claim direct support & conflict verification preserved. |
 | `GATE-07` | **V2 Orchestration Suite** | `python -m pytest tests/test_investigation_v2_orchestrator.py -v` | All pass; zero failure; V2 multi-stage graph coordination preserved. |
 | `GATE-08` | **Phase 13.5D New Offline Suites** | `python -m pytest tests/test_investigation_real_evidence_assessor.py tests/test_investigation_evidence_assessor_contract_offline.py tests/test_investigation_production_trace_coordinator.py tests/test_investigation_production_trace_e2e_offline.py tests/test_grounded_workitem_answer_builder.py tests/test_grounded_result_presenter.py tests/test_investigation_user_facing_e2e_offline.py -v` | All pass; zero failure; all new Phase 13.5D components pass with zero external provider calls. |
-| `GATE-09` | **Frozen Artifact Integrity Suite** | `python -c "import hashlib, sys; from pathlib import Path; files = ['src/pesu_agent/investigation/episode_grouper.py', 'src/pesu_agent/investigation/relation_verifier.py', 'src/pesu_agent/investigation/workitem_lifecycle_verifier.py', 'src/pesu_agent/investigation/decisive_authority_verifier.py', 'tests/fixtures/v10_qualification_benchmark.json']; [sys.exit(1) for f in files if not Path(f).exists()]; print('ALL_FROZEN_ARTIFACTS_PRESENT=True')"` | `FROZEN_ARTIFACT_HASH_DRIFT_COUNT = 0`; all frozen stage prompts, verifiers, and qualified benchmarks match baseline hashes. |
+| `GATE-09` | **Frozen Artifact Integrity Suite** | `python -c "import hashlib, json, sys; from pathlib import Path; manifest = json.loads(Path('output/qualification_13_5d/frozen_artifact_manifest.json').read_text(encoding='utf-8')); mismatches = [e['path'] for e in manifest['artifacts'] if not Path(e['path']).exists() or hashlib.sha256(Path(e['path']).read_bytes()).hexdigest() != e['sha256']]; print(f'FROZEN_ARTIFACT_HASH_DRIFT_COUNT={len(mismatches)}'); sys.exit(1 if mismatches else 0)"` | `FROZEN_ARTIFACT_HASH_DRIFT_COUNT = 0`; loads baseline manifest captured in Task 1, computes actual SHA256 of all 11 authoritative frozen files, asserts 0 mismatches. Checking only file existence is strictly prohibited. |
 
 * **Consolidated Manifest Runner Command**:
   ```powershell
@@ -470,7 +510,7 @@ graph TD
   ```
 * **Integrity Assertion Command**:
   ```powershell
-  python -c "import hashlib, sys; from pathlib import Path; files = ['src/pesu_agent/investigation/episode_grouper.py', 'src/pesu_agent/investigation/relation_verifier.py', 'src/pesu_agent/investigation/workitem_lifecycle_verifier.py', 'src/pesu_agent/investigation/decisive_authority_verifier.py', 'tests/fixtures/v10_qualification_benchmark.json']; missing = [f for f in files if not Path(f).exists()]; sys.exit(1) if missing else print('FROZEN_ARTIFACT_HASH_DRIFT_COUNT=0')"
+  python -c "import hashlib, json, sys; from pathlib import Path; manifest = json.loads(Path('output/qualification_13_5d/frozen_artifact_manifest.json').read_text(encoding='utf-8')); mismatches = [e['path'] for e in manifest['artifacts'] if not Path(e['path']).exists() or hashlib.sha256(Path(e['path']).read_bytes()).hexdigest() != e['sha256']]; print(f'FROZEN_ARTIFACT_HASH_DRIFT_COUNT={len(mismatches)}'); sys.exit(1 if mismatches else 0)"
   ```
 * **Expected Output**:
   - Exit code 0 across all 9 manifest suites.
@@ -548,19 +588,39 @@ graph TD
     $$\text{CLAIM\_EXTRACTION\_MICRO\_F1} = \frac{2 \times \text{Precision} \times \text{Recall}}{\text{Precision} + \text{Recall}} \ge 90.0\%$$
     $$\text{FAIL\_CLOSED\_ACCURACY} = \frac{|\{f \in \text{Fixtures} \mid f.expected\_fail\_closed = \text{true} \land |emitted\_claims| = 0\}|}{|\{f \in \text{Fixtures} \mid f.expected\_fail\_closed = \text{true}\}|} = 100\%$$
 
-* **Benchmark Category Distribution (15 Fixtures Total)**:
-  Merely having 15 fixtures is not sufficient; the benchmark must strictly satisfy the following domain category distribution:
-  1. `single clear claim` (3 fixtures): Unambiguous task completion, deployment announcement, or release confirmation.
-  2. `multiple grounded claims` (3 fixtures): Multi-faceted status update with multiple distinct propositions (progress, dependencies, schedules).
-  3. `no supported claim` (2 fixtures): `expected_fail_closed = true`. Casual greetings, emojis, lunch chatter; zero factual claims supported.
-  4. `ambiguous evidence` (2 fixtures): `expected_fail_closed = true` or minimal cautious proposition. Tentative questions, speculative discussions without resolution.
-  5. `contradictory evidence` (2 fixtures): Conflicting status reports from different authors without resolution; conservative extraction or fail-closed required.
-  6. `invalid/irrelevant evidence reference` (1 fixture): Corrupted snippet, off-topic channel text, or irrelevant cross-channel mention; must fail closed.
-  7. `evidence containing text that must not become a factual proposition` (2 fixtures): Conversational sarcasm, unconfirmed gossip, or prompt injection attempting to assert false status; `forbidden_claims` strictly enforced.
+* **Benchmark Category Distribution (15 Fixtures Total) & Pre-Declared Single Gold Expectations**:
+  Merely having 15 fixtures is not sufficient; the benchmark must strictly satisfy the following domain category distribution. **Every fixture has exactly one deterministic, pre-declared expected outcome locked prior to execution**. Disjunctive expectations (e.g., "A or B acceptable at runtime") are strictly forbidden:
+  1. `single clear claim` (3 fixtures):
+     - `EA-SINGLE-01`: strictly `expected_fail_closed = false`, 1 expected completion claim.
+     - `EA-SINGLE-02`: strictly `expected_fail_closed = false`, 1 expected blocker claim.
+     - `EA-SINGLE-03`: strictly `expected_fail_closed = false`, 1 expected progress claim.
+  2. `multiple grounded claims` (3 fixtures):
+     - `EA-MULTI-01`: strictly `expected_fail_closed = false`, 2 expected grounded claims.
+     - `EA-MULTI-02`: strictly `expected_fail_closed = false`, 3 expected grounded claims across dependencies.
+     - `EA-MULTI-03`: strictly `expected_fail_closed = false`, 2 expected grounded claims (progress + blocker).
+  3. `no supported claim` (2 fixtures):
+     - `EA-NOSUPPORT-01`: strictly `expected_fail_closed = true` (casual greetings/lunch chatter; 0 claims).
+     - `EA-NOSUPPORT-02`: strictly `expected_fail_closed = true` (emoji reactions and thread banter; 0 claims).
+  4. `ambiguous evidence` (2 fixtures):
+     - `EA-AMBIGUOUS-01`: strictly `expected_fail_closed = true` (speculative inquiry without factual resolution; model MUST emit 0 claims).
+     - `EA-AMBIGUOUS-02`: strictly `expected_fail_closed = true` (open-ended exploratory question; zero factual claims emitted).
+  5. `contradictory evidence` (2 fixtures):
+     - `EA-CONTRADICTION-01`: strictly `expected_fail_closed = true` (irreconcilable conflict between two peers on deliverable status with no resolution; model MUST fail-closed with 0 claims).
+     - `EA-CONTRADICTION-02`: strictly `expected_fail_closed = false`, `expected_claims = [...]` (disputed sub-issue alongside an undisputed, independently verified core release announcement; model MUST extract only the undisputed release proposition and strictly exclude the disputed sub-issue).
+  6. `invalid/irrelevant evidence reference` (1 fixture):
+     - `EA-INVALID-01`: strictly `expected_fail_closed = true` (malformed snippet or off-topic channel text; 0 claims).
+  7. `evidence containing text that must not become a factual proposition` (2 fixtures):
+     - `EA-FORBIDDEN-01`: strictly `expected_fail_closed = true`, `forbidden_claims = [...]` (prompt injection / satirical rumor asserting fake deployment; model MUST emit 0 claims and zero forbidden claims).
+     - `EA-FORBIDDEN-02`: strictly `expected_fail_closed = false`, `expected_claims = [...]`, `forbidden_claims = [...]` (real release note with trailing sarcastic rumor; model MUST extract real release and strictly omit sarcastic rumor).
   * Category Distribution Total: $3 + 3 + 2 + 2 + 2 + 1 + 2 = 15$ fixtures.
 
-* **Gold Governance Invariant**:
+* **Gold Governance & Pre-Declaration Invariants**:
   The concrete fixture contents are authored during Task 10, BUT all gold expectations (`expected_claims`, `optional_claims`, `forbidden_claims`, `expected_fail_closed`) must be permanently committed and SHA256 frozen **BEFORE observing any qualification results**. Post-hoc modification of gold expectations after running model inference is strictly forbidden.
+  ```text
+  ALL_FIXTURE_EXPECTATIONS_PREDECLARED = true
+  POST_HOC_GOLD_LABEL_CHANGES = 0
+  AMBIGUOUS_EXPECTED_OUTCOMES = 0
+  ```
 
 * **Candidate Configurations Evaluated**:
   * Candidate A: `openai/gpt-5.6-luna`, `reasoning_effort=medium`, `temperature=0.0`
@@ -574,6 +634,9 @@ graph TD
   UNGROUNDED_PROPOSITION_COUNT = 0
   FORBIDDEN_CLAIM_EMISSION_COUNT = 0
   FAIL_CLOSED_ACCURACY = 100%
+  ALL_FIXTURE_EXPECTATIONS_PREDECLARED = true
+  POST_HOC_GOLD_LABEL_CHANGES = 0
+  AMBIGUOUS_EXPECTED_OUTCOMES = 0
   ```
 
 * **Execution Constraints**:
@@ -692,7 +755,10 @@ graph TD
 Before Phase 13.5D is formally declared closed, every gate must be mechanically verified:
 
 ```text
-[ ] Task 1: Baseline manifest passed (ALL_BASELINE_MANIFEST_COMMANDS_PASS = true; zero drift).
+[ ] Task 1: Baseline manifest passed & frozen baseline hash manifest sealed:
+      - ALL_BASELINE_MANIFEST_COMMANDS_PASS = true
+      - FROZEN_BASELINE_CAPTURED_BEFORE_IMPLEMENTATION = true
+      - zero drift
 [ ] Task 2: OpenRouterEvidenceAssessor unit tests pass with injectable config.
 [ ] Task 3: OpenRouterEvidenceAssessor offline contract tests pass (0 network calls).
 [ ] Task 4: ProductionRealTraceCoordinator maintains single InvestigationStateGraph instance.
@@ -702,7 +768,8 @@ Before Phase 13.5D is formally declared closed, every gate must be mechanically 
 [ ] Task 8: Full offline user-facing E2E verifies zero freeform LLM answering and 100% traceability.
 [ ] Task 9: Gate-bearing manifest passes cleanly:
       - ALL_GATE_BEARING_TEST_MANIFEST_COMMANDS_PASS = true
-      - FROZEN_ARTIFACT_HASH_DRIFT_COUNT = 0
+      - FROZEN_BASELINE_REWRITES_AFTER_IMPLEMENTATION_START = 0
+      - FROZEN_ARTIFACT_HASH_DRIFT_COUNT = 0 (actual SHA256 comparison against baseline manifest)
       - (Test count recorded purely as observational metric; no count-based pass/fail gate)
 [ ] Task 10: EvidenceAssessor real qualification passes:
       - SCHEMA_VALIDITY_RATE = 100%
@@ -711,6 +778,9 @@ Before Phase 13.5D is formally declared closed, every gate must be mechanically 
       - UNGROUNDED_PROPOSITION_COUNT = 0
       - FORBIDDEN_CLAIM_EMISSION_COUNT = 0
       - FAIL_CLOSED_ACCURACY = 100%
+      - ALL_FIXTURE_EXPECTATIONS_PREDECLARED = true
+      - POST_HOC_GOLD_LABEL_CHANGES = 0
+      - AMBIGUOUS_EXPECTED_OUTCOMES = 0
       - Gold expectations frozen before qualification run
 [ ] Task 11: Bounded real production trace qualification achieves FINAL_PASS on live Slack:
       - LIVE_CASES_PREDECLARED = true
@@ -724,5 +794,10 @@ Before Phase 13.5D is formally declared closed, every gate must be mechanically 
 [ ] Invariant: FREEFORM_ANSWER_LLM_CALLS = 0 maintained.
 [ ] Invariant: OLD_ANALYZER_IS_NOT_SEMANTIC_AUTHORITY = true verified.
 [ ] Invariant: ALL_GATE_BEARING_TEST_MANIFEST_COMMANDS_PASS = true.
+[ ] Invariant: FROZEN_BASELINE_CAPTURED_BEFORE_IMPLEMENTATION = true.
+[ ] Invariant: FROZEN_BASELINE_REWRITES_AFTER_IMPLEMENTATION_START = 0.
 [ ] Invariant: FROZEN_ARTIFACT_HASH_DRIFT_COUNT = 0.
+[ ] Invariant: ALL_FIXTURE_EXPECTATIONS_PREDECLARED = true.
+[ ] Invariant: POST_HOC_GOLD_LABEL_CHANGES = 0.
+[ ] Invariant: AMBIGUOUS_EXPECTED_OUTCOMES = 0.
 ```
