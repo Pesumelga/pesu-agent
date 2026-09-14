@@ -392,3 +392,41 @@ def test_sync_wrapper_assess_sync():
     res = assessor.assess_sync(payload)
     assert len(res.proposed_claims) == 1
     assert res.proposed_claims[0].proposal_id == "PROP_SYNC"
+
+
+@pytest.mark.anyio
+async def test_distinguishable_provider_failure_and_legitimate_empty_assessment():
+    """Downstream can unambiguously distinguish between legitimate empty assessment and provider failure."""
+    # Case A: Legitimate empty assessment (evidence has no facts)
+    mock_provider_ok = MagicMock(spec=ModelProvider)
+    mock_provider_ok.generate_structured = AsyncMock(
+        return_value=(InvestigationAssessment(proposed_claims=[]), None)
+    )
+    assessor_ok = OpenRouterEvidenceAssessor(provider=mock_provider_ok)
+    payload = _create_sample_payload()
+    res_ok = await assessor_ok.assess(payload)
+    assert len(res_ok.proposed_claims) == 0
+    assert assessor_ok.last_error is None  # Legitimate success
+
+    # Case B: Provider execution failure (HTTP 502 / network)
+    mock_provider_err = MagicMock(spec=ModelProvider)
+    mock_provider_err.generate_structured = AsyncMock(
+        side_effect=RuntimeError("OpenRouter 502 Bad Gateway")
+    )
+    # 1. By default, raises typed exception preserving cause
+    assessor_err = OpenRouterEvidenceAssessor(provider=mock_provider_err)
+    with pytest.raises(EvidenceAssessmentProviderError) as exc_info:
+        await assessor_err.assess(payload)
+    assert "OpenRouter 502 Bad Gateway" in str(exc_info.value)
+    assert assessor_err.last_error is not None
+
+    # 2. When fail_closed_on_provider_error is enabled, returns empty assessment but last_error is preserved
+    assessor_safe = OpenRouterEvidenceAssessor(
+        provider=mock_provider_err,
+        fail_closed_on_provider_error=True,
+    )
+    res_safe = await assessor_safe.assess(payload)
+    assert len(res_safe.proposed_claims) == 0
+    assert assessor_safe.last_error is not None  # Failure reason strictly preserved!
+    assert "OpenRouter 502 Bad Gateway" in str(assessor_safe.last_error)
+

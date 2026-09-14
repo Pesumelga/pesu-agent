@@ -888,6 +888,7 @@ class OpenRouterEvidenceAssessor(InvestigationEvidenceAssessor):
         self.total_tokens: int = 0
         self.estimated_cost_usd: float = 0.0
         self.last_usage: Optional[LLMUsageStats] = None
+        self.last_error: Optional[Exception] = None
 
     def _build_user_message(self, payload: AssessmentPayload) -> str:
         lines: list[str] = []
@@ -946,6 +947,7 @@ class OpenRouterEvidenceAssessor(InvestigationEvidenceAssessor):
 
     async def assess(self, payload: AssessmentPayload) -> InvestigationAssessment:
         self.logical_call_count += 1
+        self.last_error = None
         user_prompt = self._build_user_message(payload)
         messages = [
             LLMMessage(role="system", content=self.SYSTEM_PROMPT),
@@ -965,6 +967,7 @@ class OpenRouterEvidenceAssessor(InvestigationEvidenceAssessor):
                 **kwargs,
             )
         except Exception as e:
+            self.last_error = e
             if self.fail_closed_on_provider_error:
                 logger.warning(
                     "Provider failure in OpenRouterEvidenceAssessor; failing closed with empty assessment: %s",
@@ -987,5 +990,10 @@ class OpenRouterEvidenceAssessor(InvestigationEvidenceAssessor):
             cost = usage.actual_cost_usd or usage.estimated_cost_usd or 0.0
             self.estimated_cost_usd += cost
 
-        self._validate_assessment_schema(payload, assessment)
+        try:
+            self._validate_assessment_schema(payload, assessment)
+        except Exception as e:
+            self.last_error = e
+            raise
+
         return assessment
