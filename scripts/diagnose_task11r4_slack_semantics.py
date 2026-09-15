@@ -265,7 +265,7 @@ def run_diagnostic(dry_run: bool = False) -> dict[str, Any]:
         "NORMALIZED_RESULT_SNIPPETS": [
             {
                 "author": r.author,
-                "channel": r.channel,
+                "channel": getattr(r, "channel_name", None) or getattr(r, "channel_id", None),
                 "url": r.result_url,
                 "snippet": (r.text or "")[:120],
             }
@@ -365,7 +365,7 @@ def run_diagnostic(dry_run: bool = False) -> dict[str, Any]:
             eval_res = evaluate_target_in_text(text)
             snippet_record = {
                 "author": r.author,
-                "channel": r.channel,
+                "channel": getattr(r, "channel_name", None) or getattr(r, "channel_id", None),
                 "url": r.result_url,
                 "snippet": text[:120],
                 "matched_anchors": eval_res["matched_anchors"],
@@ -377,8 +377,8 @@ def run_diagnostic(dry_run: bool = False) -> dict[str, Any]:
                 target_found_in_query = True
                 target_item_details = {
                     "TARGET_PRESENT_IN_RAW": True,
-                    "TARGET_RESULT_IDENTIFIER": r.result_url or f"{r.channel}:{r.timestamp}",
-                    "TARGET_RESULT_CHANNEL": r.channel,
+                    "TARGET_RESULT_IDENTIFIER": r.result_url or f"{getattr(r, 'channel_id', None)}:{getattr(r, 'gold_message_ts', None) or getattr(r, 'timestamp_raw', None)}",
+                    "TARGET_RESULT_CHANNEL": getattr(r, "channel_name", None) or getattr(r, "channel_id", None),
                     "TARGET_RESULT_PERMALINK": r.result_url,
                     "TARGET_RESULT_SNIPPET": text[:200],
                     "MATCHED_ANCHORS": eval_res["matched_anchors"],
