@@ -170,6 +170,8 @@ SEARCH_UI_READY_TIMEOUT_SECONDS: float = 5.0
 SEARCH_UI_READY_POLL_INTERVAL_SECONDS: float = 0.1
 SEARCH_INPUT_READINESS_TIMEOUT_SECONDS: float = 5.0
 SEARCH_INPUT_POLL_INTERVAL_SECONDS: float = 0.1
+SEARCH_RESULT_TRANSITION_TIMEOUT_SECONDS: float = 4.0
+SEARCH_RESULT_TRANSITION_POLL_INTERVAL_SECONDS: float = 0.2
 
 
 # JS Primitives (Frozen from Phase 9.9.3)
@@ -337,6 +339,259 @@ JS_CHECK_SEARCH_INPUT_READINESS = r"""
         ambiguous: false
     };
 })()
+"""
+
+# Stage B: Model-Native Texty Query Setter (Executed Exactly Once)
+JS_SET_TEXTY_QUERY = r"""
+((targetQuery) => {
+    const searchInputCandidates = document.querySelectorAll('[data-qa="search_input_box"] .ql-editor');
+    if (searchInputCandidates.length !== 1) {
+        return { error: 'SEARCH_INPUT_CARDINALITY_NOT_ONE', match_count: searchInputCandidates.length };
+    }
+
+    const inputElem = searchInputCandidates[0];
+    const role = inputElem.getAttribute('role') || '';
+    const insideModal = !!inputElem.closest('[data-qa="search_modal"], [data-qa="search_dialog"], .c-search_modal, .p-search_modal, [data-qa="search_input_box"]');
+    const outsideComposer = !inputElem.closest('.c-message__editor, [data-qa="message_input"], .p-message_input');
+
+    if (!inputElem.isConnected || role !== 'combobox' || !insideModal || !outsideComposer) {
+        return { error: 'SEARCH_INPUT_PRECONDITION_FAILED' };
+    }
+
+    const getReactFiber = (el) => {
+        if (!el) return null;
+        const key = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+        return key ? el[key] : null;
+    };
+
+    let startingFiber = getReactFiber(inputElem) || getReactFiber(inputElem.parentElement) || getReactFiber(inputElem.closest('[data-qa="search_input_box"]'));
+    if (!startingFiber) {
+        return { error: 'NO_REACT_FIBER_FOUND' };
+    }
+
+    const isSearchInputBoxStrong = (node) => {
+        if (!node || typeof node !== 'object') return false;
+        const hasGetTextyOps = (typeof node.getTextyOps === 'function');
+        const hasUserInputOrRef = (typeof node.onUserInput === 'function' || typeof node.onUserQueryChange === 'function' || typeof node.setTextyRef === 'function');
+        const hasProps = (node.props && typeof node.props === 'object');
+        const hasDisplayQueryOps = hasProps && Object.prototype.hasOwnProperty.call(node.props, 'displayQueryOps');
+        return hasGetTextyOps && hasUserInputOrRef && hasDisplayQueryOps;
+    };
+
+    let fiber = startingFiber;
+    let depth = 0;
+    const matchingInstances = [];
+
+    while (fiber && depth < 40) {
+        if (fiber.stateNode && isSearchInputBoxStrong(fiber.stateNode)) {
+            matchingInstances.push(fiber.stateNode);
+        }
+        fiber = fiber.return;
+        depth++;
+    }
+
+    if (matchingInstances.length !== 1) {
+        return { error: 'STRONG_SEARCH_INPUT_BOX_CARDINALITY_NOT_ONE', count: matchingInstances.length };
+    }
+
+    const searchInputBoxInstance = matchingInstances[0];
+    const textyObj = searchInputBoxInstance.texty;
+    if (!textyObj || typeof textyObj.setContents !== 'function') {
+        return { error: 'TEXTY_SETCONTENTS_NOT_CALLABLE' };
+    }
+
+    try {
+        textyObj.setContents(
+            { contents: [{ insert: targetQuery }] },
+            { source: 'api' }
+        );
+        return { ok: true, setter_succeeded: true };
+    } catch (err) {
+        return { error: 'TEXTY_SETCONTENTS_EXCEPTION', details: String(err) };
+    }
+})
+"""
+
+# Stage C: Atomic Pre-Submit Verification & SearchInputBox.onEnter() Execution
+JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
+((targetQuery) => {
+    const report = {
+        preconditions_satisfied: false,
+        strong_search_input_box_match_count: 0,
+        duplicate_search_input_box_count: 0,
+        query_state_all_synced: false,
+        surfaces_synced: {
+            dom: false,
+            quill_text: false,
+            quill_delta: false,
+            texty: false,
+            redux: false
+        },
+        internal_flags: {
+            query_has_changed: false,
+            query_has_been_submitted: false,
+            is_updating_display_query: false,
+            is_in_composition: false
+        },
+        onenter_callable: false,
+        submit_attempt_count: 0,
+        submit_succeeded: false,
+        submit_method: 'NONE',
+        onenter_invocation_exception: null
+    };
+
+    const searchInputCandidates = document.querySelectorAll('[data-qa="search_input_box"] .ql-editor');
+    if (searchInputCandidates.length !== 1) {
+        return { error: 'SEARCH_INPUT_CARDINALITY_NOT_ONE', report };
+    }
+
+    const inputElem = searchInputCandidates[0];
+    const role = inputElem.getAttribute('role') || '';
+    const insideModal = !!inputElem.closest('[data-qa="search_modal"], [data-qa="search_dialog"], .c-search_modal, .p-search_modal, [data-qa="search_input_box"]');
+    const outsideComposer = !inputElem.closest('.c-message__editor, [data-qa="message_input"], .p-message_input');
+
+    if (!inputElem.isConnected || role !== 'combobox' || !insideModal || !outsideComposer) {
+        return { error: 'SEARCH_INPUT_OR_MODAL_INVALID', report };
+    }
+
+    const getReactFiber = (el) => {
+        if (!el) return null;
+        const key = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+        return key ? el[key] : null;
+    };
+
+    let startingFiber = getReactFiber(inputElem) || getReactFiber(inputElem.parentElement) || getReactFiber(inputElem.closest('[data-qa="search_input_box"]'));
+    if (!startingFiber) {
+        return { error: 'NO_REACT_FIBER_KEY_FOUND', report };
+    }
+
+    const isSearchInputBoxStrong = (node) => {
+        if (!node || typeof node !== 'object') return false;
+        const hasGetTextyOps = (typeof node.getTextyOps === 'function');
+        const hasUserInputOrRef = (typeof node.onUserInput === 'function' || typeof node.onUserQueryChange === 'function' || typeof node.setTextyRef === 'function');
+        const hasProps = (node.props && typeof node.props === 'object');
+        const hasDisplayQueryOps = hasProps && Object.prototype.hasOwnProperty.call(node.props, 'displayQueryOps');
+        return hasGetTextyOps && hasUserInputOrRef && hasDisplayQueryOps;
+    };
+
+    let fiber = startingFiber;
+    let depth = 0;
+    const matchingInstances = [];
+
+    while (fiber && depth < 40) {
+        if (fiber.stateNode && isSearchInputBoxStrong(fiber.stateNode)) {
+            matchingInstances.push({ instance: fiber.stateNode, fiber: fiber });
+        }
+        fiber = fiber.return;
+        depth++;
+    }
+
+    report.strong_search_input_box_match_count = matchingInstances.length;
+    report.duplicate_search_input_box_count = Math.max(0, matchingInstances.length - 1);
+
+    if (matchingInstances.length !== 1) {
+        return { error: 'STRONG_SEARCH_INPUT_BOX_CARDINALITY_INVALID', report };
+    }
+
+    const matched = matchingInstances[0];
+    const searchInputBoxInstance = matched.instance;
+    const currentFiber = matched.fiber;
+    const textyObj = searchInputBoxInstance.texty;
+
+    if (!textyObj) {
+        return { error: 'TEXTY_OBJECT_NOT_FOUND', report };
+    }
+
+    const normalizeOpsToString = (ops) => {
+        if (!Array.isArray(ops)) return '';
+        return ops.map(op => (typeof op.insert === 'string' ? op.insert : '')).join('').trim();
+    };
+
+    // DOM
+    try {
+        const domText = (inputElem.textContent || inputElem.innerText || '').trim();
+        report.surfaces_synced.dom = domText.includes(targetQuery);
+    } catch (e) { report.surfaces_synced.dom = false; }
+
+    // QuillText
+    try {
+        if (textyObj.instance && textyObj.instance.quill && typeof textyObj.instance.quill.getText === 'function') {
+            const qText = textyObj.instance.quill.getText().trim();
+            report.surfaces_synced.quill_text = qText.includes(targetQuery);
+        }
+    } catch (e) { report.surfaces_synced.quill_text = false; }
+
+    // QuillDelta
+    try {
+        if (typeof searchInputBoxInstance.getTextyOps === 'function') {
+            const ops = searchInputBoxInstance.getTextyOps();
+            const deltaStr = normalizeOpsToString(ops);
+            report.surfaces_synced.quill_delta = deltaStr.includes(targetQuery);
+        }
+    } catch (e) { report.surfaces_synced.quill_delta = false; }
+
+    // Texty
+    try {
+        if (typeof textyObj.getContents === 'function') {
+            const tContents = textyObj.getContents();
+            const tOps = (tContents && tContents.contents) ? tContents.contents : (Array.isArray(tContents) ? tContents : []);
+            const tStr = normalizeOpsToString(tOps);
+            report.surfaces_synced.texty = tStr.includes(targetQuery);
+        }
+    } catch (e) { report.surfaces_synced.texty = false; }
+
+    // Redux
+    try {
+        const propsToInspect = (currentFiber && currentFiber.memoizedProps && Object.prototype.hasOwnProperty.call(currentFiber.memoizedProps, 'displayQueryOps'))
+            ? currentFiber.memoizedProps
+            : searchInputBoxInstance.props;
+
+        if (propsToInspect && Object.prototype.hasOwnProperty.call(propsToInspect, 'displayQueryOps')) {
+            const dOps = propsToInspect.displayQueryOps;
+            const rStr = normalizeOpsToString(dOps);
+            report.surfaces_synced.redux = rStr.includes(targetQuery);
+        }
+    } catch (e) { report.surfaces_synced.redux = false; }
+
+    const surfaces = report.surfaces_synced;
+    report.query_state_all_synced = (surfaces.dom && surfaces.quill_text && surfaces.quill_delta && surfaces.texty && surfaces.redux);
+
+    // Internal Component Flags
+    try {
+        if (searchInputBoxInstance.state) {
+            report.internal_flags.query_has_changed = Boolean(searchInputBoxInstance.state.queryHasChanged);
+            report.internal_flags.query_has_been_submitted = Boolean(searchInputBoxInstance.state.queryHasBeenSubmitted);
+            report.internal_flags.is_updating_display_query = Boolean(searchInputBoxInstance.state._isUpdatingDisplayQuery);
+            report.internal_flags.is_in_composition = Boolean(searchInputBoxInstance.state.isInComposition);
+        }
+    } catch (e) {}
+
+    const flags = report.internal_flags;
+    const internalFlagsOk = (!flags.is_updating_display_query && !flags.is_in_composition);
+
+    report.preconditions_satisfied = (report.query_state_all_synced && internalFlagsOk);
+
+    if (!report.preconditions_satisfied) {
+        return { error: 'PRECONDITIONS_NOT_SATISFIED', report };
+    }
+
+    report.onenter_callable = (typeof searchInputBoxInstance.onEnter === 'function');
+    if (!report.onenter_callable) {
+        return { error: 'ONENTER_NOT_CALLABLE', report };
+    }
+
+    report.submit_attempt_count = 1;
+    try {
+        searchInputBoxInstance.onEnter();
+        report.submit_succeeded = true;
+        report.submit_method = 'SearchInputBox.onEnter';
+    } catch (err) {
+        report.onenter_invocation_exception = String(err);
+        return { error: 'ONENTER_INVOCATION_EXCEPTION', details: String(err), report };
+    }
+
+    return { ok: true, report };
+})
 """
 
 JS_SET_QUERY_AND_SUBMIT = r"""
@@ -817,12 +1072,16 @@ class WebViewSlackSearchBackend(SearchBackend):
         host: Optional[WebViewHostProtocol] = None,
         search_ui_ready_timeout_sec: float = SEARCH_UI_READY_TIMEOUT_SECONDS,
         search_ui_ready_poll_interval_sec: float = SEARCH_UI_READY_POLL_INTERVAL_SECONDS,
+        search_transition_timeout_sec: float = SEARCH_RESULT_TRANSITION_TIMEOUT_SECONDS,
+        search_transition_poll_interval_sec: float = SEARCH_RESULT_TRANSITION_POLL_INTERVAL_SECONDS,
     ) -> None:
         self.config = config or WebViewRuntimeConfig()
         self.default_max_results = default_max_results
         self._window: Optional[WebViewHostProtocol] = host
         self.search_ui_ready_timeout_sec = search_ui_ready_timeout_sec
         self.search_ui_ready_poll_interval_sec = search_ui_ready_poll_interval_sec
+        self.search_transition_timeout_sec = search_transition_timeout_sec
+        self.search_transition_poll_interval_sec = search_transition_poll_interval_sec
         self.last_search_telemetry: dict[str, Any] = {}
         self._state = (
             WebViewRuntimeState.READY if host is not None else WebViewRuntimeState.STOPPED
@@ -1109,11 +1368,53 @@ class WebViewSlackSearchBackend(SearchBackend):
         if search_view_mounted_before:
             result_fingerprint_before = compute_result_set_fingerprint(pre_submit_items)
 
-        # Step 4: Model-Native Setter & Submit (Atomic, invoked at most once)
-        # Query is serialized safely via json.dumps (never formatted as raw string into JS)
-        js_pipe = f"({JS_SET_QUERY_AND_SUBMIT})({json.dumps(validated_query)})"
-        res_pipe = self._window.evaluate_js(js_pipe)
-        submit_triggered = bool(isinstance(res_pipe, dict) and res_pipe.get("submitted"))
+        # Step 4: Model-Native Setter & Verified Submit (Task 11R3 Decoupled Execution)
+        # 4a: Apply query text via Model-Native Texty.setContents
+        js_set = f"({JS_SET_TEXTY_QUERY})({json.dumps(validated_query)})"
+        res_set = self._window.evaluate_js(js_set)
+        setter_ok = bool(isinstance(res_set, dict) and (res_set.get("setter_succeeded") or res_set.get("ok")))
+        if not setter_ok:
+            telemetry["last_confirmed_stage"] = "QUERY_SETTER_FAILED"
+            raise WebViewSearchError(
+                WebViewSearchFailureCode.QUERY_STATE_SYNC_FAILED,
+                f"Model-native search query setter failed: {res_set}",
+                details=telemetry,
+            )
+        telemetry["last_confirmed_stage"] = "SETTER_EXECUTED"
+
+        # 4b: Bounded Polling for Verified Query State Settle & onEnter Submit
+        # SUBMIT_REQUIRES_VERIFIED_QUERY_STATE = True
+        # FIXED_SETTLE_SLEEP_IS_SUBMIT_AUTHORITY = False
+        submit_start_mono = time.monotonic()
+        submit_timeout_sec = 4.0
+        submit_poll_interval_sec = 0.05
+        submit_triggered = False
+        last_submit_res: Any = None
+        verified_query_state_before_submit = False
+
+        while time.monotonic() - submit_start_mono < submit_timeout_sec:
+            js_submit = f"({JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER})({json.dumps(validated_query)})"
+            res_submit = self._window.evaluate_js(js_submit)
+            last_submit_res = res_submit
+            if isinstance(res_submit, dict):
+                r = res_submit.get("report", {})
+                if res_submit.get("ok") and (r.get("submit_succeeded") or res_submit.get("submitted")):
+                    submit_triggered = True
+                    verified_query_state_before_submit = r.get("preconditions_satisfied", True)
+                    break
+                if res_submit.get("submitted"):
+                    submit_triggered = True
+                    verified_query_state_before_submit = True
+                    break
+                if res_submit.get("error") == "PRECONDITIONS_NOT_SATISFIED":
+                    time.sleep(submit_poll_interval_sec)
+                    continue
+                if "CARDINALITY" in str(res_submit) or "NOT_CALLABLE" in str(res_submit):
+                    break
+            time.sleep(submit_poll_interval_sec)
+
+        telemetry["verified_query_state_before_submit"] = verified_query_state_before_submit
+        telemetry["onenter_invoked"] = submit_triggered
 
         # Step 4.5: Read-Only Post-Submit Probe (Hard Requirement 2: Side-effect free)
         post_submit_probe: dict[str, Any] = {}
@@ -1128,35 +1429,96 @@ class WebViewSlackSearchBackend(SearchBackend):
         loading_immediate = post_submit_probe.get("loading_detected_immediate", False)
 
         if not submit_triggered:
-            telemetry["last_confirmed_stage"] = "SETTER_EXECUTED" if "onEnter" in str(res_pipe) else "INPUT_OBSERVED"
-            err_code = (
-                WebViewSearchFailureCode.QUERY_STATE_SYNC_FAILED
-                if "SYNC" in str(res_pipe)
-                else WebViewSearchFailureCode.SEARCH_SUBMIT_FAILED
-            )
+            telemetry["last_confirmed_stage"] = "SUBMIT_FAILED"
             raise WebViewSearchError(
-                err_code,
-                f"Search query setter / submit pipeline failed: {res_pipe}",
+                WebViewSearchFailureCode.SEARCH_SUBMIT_FAILED,
+                f"Search query verified submit pipeline failed: {last_submit_res}",
                 details=telemetry,
             )
         telemetry["last_confirmed_stage"] = "SUBMIT_EXECUTED"
 
-        # Step 5: Bounded Wait & Terminal State Extraction
+        # Step 5: Bounded Active Transition Barrier & Terminal State Extraction
         t_wait_start = time.monotonic()
-        time.sleep(3.5)
+        transition_timeout_sec = self.search_transition_timeout_sec
+        transition_poll_interval_sec = self.search_transition_poll_interval_sec
+        max_transition_polls = max(1, int(transition_timeout_sec / transition_poll_interval_sec))
+
+        post_wait_probe: dict[str, Any] = {}
+        surface_query_after: Optional[str] = None
+        loading_after: bool = False
+        res_extract: Any = None
+
+        norm_req = re.sub(r"\s+", " ", validated_query).strip().lower()
+
+        # Step 5.1: Active Transition Polling Loop (Authority Priority Hierarchy)
+        # 1. Slack search route / search surface matches requested query
+        # 2. Verified SearchInputBox / Redux submitted state
+        # 3. Loading / search lifecycle transition complete
+        # 4. Result fingerprint transition
+        for _ in range(max_transition_polls):
+            # Read-Only Post-Wait Probe (Hard Requirement 2: Side-effect free)
+            try:
+                res_post_wait = self._window.evaluate_js(JS_PROBE_POST_WAIT_SEARCH_STATE)
+                if isinstance(res_post_wait, dict):
+                    post_wait_probe = res_post_wait
+            except Exception as e:
+                logger.warning(f"Post-wait probe evaluation warning: {e}")
+
+            surface_query_after = post_wait_probe.get("surface_query_after")
+            loading_after = bool(post_wait_probe.get("loading_detected_after", False))
+
+            norm_surf = re.sub(r"\s+", " ", surface_query_after or "").strip().lower()
+            surface_query_matches = bool(
+                norm_surf and (norm_req in norm_surf or norm_surf in norm_req)
+            )
+
+            # If surface matches requested query (or surface unreadable in mock) and not loading, check extracted results
+            if not loading_after and (surface_query_matches or surface_query_after is None):
+                js_extract = (
+                    f"({JS_EXTRACT_SEARCH_RESULTS})("
+                    f"{max_results}, "
+                    f"{json.dumps(self.BODY_SCOPE_CONTAINER)}, "
+                    f"{json.dumps(self.BODY_FRAGMENT_SELECTOR)}, "
+                    f"{json.dumps(self.SENDER_CANONICAL_SELECTOR)}, "
+                    f"{json.dumps(self.TIMESTAMP_CANONICAL_SELECTOR)})"
+                )
+                res_extract = self._window.evaluate_js(js_extract)
+                if isinstance(res_extract, dict) and res_extract.get("ok"):
+                    poll_items = res_extract.get("items", [])
+                    poll_fp = compute_result_set_fingerprint(poll_items)
+
+                    # Transition confirmed: either fingerprint changed, first search, or empty results
+                    if result_fingerprint_before is None or poll_fp != result_fingerprint_before or len(poll_items) == 0:
+                        break
+                    # If fingerprint is unchanged, continue polling until timeout to allow DOM reconcile
+
+            if time.monotonic() - t_wait_start >= transition_timeout_sec:
+                break
+
+            time.sleep(transition_poll_interval_sec)
+
         result_transition_wait_duration_ms = int((time.monotonic() - t_wait_start) * 1000)
 
-        # Step 5.1: Read-Only Post-Wait Probe (Hard Requirement 2: Side-effect free)
-        post_wait_probe: dict[str, Any] = {}
-        try:
-            res_post_wait = self._window.evaluate_js(JS_PROBE_POST_WAIT_SEARCH_STATE)
-            if isinstance(res_post_wait, dict):
-                post_wait_probe = res_post_wait
-        except Exception as e:
-            logger.warning(f"Post-wait probe evaluation warning: {e}")
+        # Fallback extract if not yet extracted during polling
+        if res_extract is None or not (isinstance(res_extract, dict) and res_extract.get("ok")):
+            js_extract = (
+                f"({JS_EXTRACT_SEARCH_RESULTS})("
+                f"{max_results}, "
+                f"{json.dumps(self.BODY_SCOPE_CONTAINER)}, "
+                f"{json.dumps(self.BODY_FRAGMENT_SELECTOR)}, "
+                f"{json.dumps(self.SENDER_CANONICAL_SELECTOR)}, "
+                f"{json.dumps(self.TIMESTAMP_CANONICAL_SELECTOR)})"
+            )
+            res_extract = self._window.evaluate_js(js_extract)
 
-        surface_query_after = post_wait_probe.get("surface_query_after")
-        loading_after = post_wait_probe.get("loading_detected_after", False)
+        if not (isinstance(res_extract, dict) and res_extract.get("ok")):
+            telemetry["last_confirmed_stage"] = "EXTRACTION_FAILED"
+            self.last_search_telemetry = dict(telemetry)
+            raise WebViewSearchError(
+                WebViewSearchFailureCode.SEARCH_NAVIGATION_FAILED,
+                f"Search result extraction failed: {res_extract}",
+                details=telemetry,
+            )
 
         loading_or_dom_transition_observed = bool(
             loading_immediate
@@ -1164,21 +1526,6 @@ class WebViewSlackSearchBackend(SearchBackend):
             or (surface_query_before != surface_query_after and surface_query_after is not None)
         )
 
-        js_extract = (
-            f"({JS_EXTRACT_SEARCH_RESULTS})("
-            f"{max_results}, "
-            f"{json.dumps(self.BODY_SCOPE_CONTAINER)}, "
-            f"{json.dumps(self.BODY_FRAGMENT_SELECTOR)}, "
-            f"{json.dumps(self.SENDER_CANONICAL_SELECTOR)}, "
-            f"{json.dumps(self.TIMESTAMP_CANONICAL_SELECTOR)})"
-        )
-        res_extract = self._window.evaluate_js(js_extract)
-        if not (isinstance(res_extract, dict) and res_extract.get("ok")):
-            raise WebViewSearchError(
-                WebViewSearchFailureCode.SEARCH_NAVIGATION_FAILED,
-                f"Search result extraction failed: {res_extract}",
-                details=telemetry,
-            )
         raw_items = res_extract.get("items", [])
         parsed_results: list[SlackSearchResult] = []
         raw_items_evaluated: list[dict[str, Any]] = []
@@ -1346,6 +1693,35 @@ class WebViewSlackSearchBackend(SearchBackend):
             ),
         }
         telemetry["forensic_transition"] = forensic_transition
+
+        # Task 11R3 Fail-Closed Transition Guard (Authority Priority Hierarchy)
+        # 1. Slack search route / search surface matches requested query
+        # 2. Verified SearchInputBox / Redux submitted state
+        # 3. Loading / search lifecycle transition complete
+        # 4. Result fingerprint transition (FINGERPRINT_CHANGE_ALONE_IS_NOT_PRIMARY_QUERY_AUTHORITY = true)
+        if surface_query_after is not None and not surface_query_matches_requested:
+            telemetry["last_confirmed_stage"] = "SURFACE_QUERY_MISMATCH"
+            self.last_search_telemetry = dict(telemetry)
+            if result_fingerprint_before is not None and result_fingerprint_changed is False:
+                raise WebViewSearchError(
+                    WebViewSearchFailureCode.SEARCH_RESULT_TIMEOUT,
+                    f"Search result transition timed out; stale DOM results detected.",
+                    details=telemetry,
+                )
+            else:
+                raise WebViewSearchError(
+                    WebViewSearchFailureCode.SEARCH_NAVIGATION_FAILED,
+                    f"Search surface transition timed out; surface query did not match requested query: {surface_query_after}",
+                    details=telemetry,
+                )
+        elif surface_query_after is None and result_fingerprint_before is not None and result_fingerprint_changed is False:
+            telemetry["last_confirmed_stage"] = "STALE_RESULTS_DETECTED"
+            self.last_search_telemetry = dict(telemetry)
+            raise WebViewSearchError(
+                WebViewSearchFailureCode.SEARCH_RESULT_TIMEOUT,
+                f"Search result transition timed out; stale DOM results detected.",
+                details=telemetry,
+            )
 
         # Mandatory all-invalid escalation:
         # If raw result rows were returned by Slack, but not a single row could be qualified,

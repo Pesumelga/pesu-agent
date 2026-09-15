@@ -24,6 +24,8 @@ from pesu_agent.search.webview_slack_search import (
     WebViewRuntimeState,
     compute_result_set_fingerprint,
     JS_SET_QUERY_AND_SUBMIT,
+    WebViewSearchError,
+    WebViewSearchFailureCode,
 )
 
 
@@ -41,6 +43,12 @@ class DeterministicMockWebViewHost:
         self.loading_indicator: bool = False
         self.submit_called: bool = False
         self.query_history: list[str] = []
+        # Task 11R3 simulation controls:
+        self.require_verified_state_for_effective_submit: bool = False
+        self.effective_submit_triggered: bool = False
+        self.pending_next_results: list[dict[str, Any]] = []
+        self.simulate_slack_hang_no_transition: bool = False
+        self.query_state_verified: bool = False
 
     def evaluate_js(self, script: str) -> Any:
         # 1. Auth & Readiness
@@ -76,12 +84,57 @@ class DeterministicMockWebViewHost:
                 "loading_detected_before": self.loading_indicator,
             }
 
-        # 5. Setter & Submit (JS_SET_QUERY_AND_SUBMIT)
+        # 5. Synchronous Setter & Submit (Old JS_SET_QUERY_AND_SUBMIT)
         if "textyObj.setContents" in script and "searchInputBoxInstance.onEnter" in script:
             self.submit_called = True
-            # In Slack, input text updates to targetQuery
-            # Extract targetQuery if present
+            if self.require_verified_state_for_effective_submit:
+                # Synchronous setContents + onEnter in the same tick executes against stale React state!
+                # Result: onEnter is a NO-OP in Slack.
+                self.effective_submit_triggered = False
+            else:
+                self.effective_submit_triggered = True
+                if self.pending_next_results:
+                    self.current_results = list(self.pending_next_results)
             return {"ok": True, "submitted": True}
+
+        # 5b. Decoupled Texty Query Setter (JS_SET_TEXTY_QUERY)
+        if "textyObj.setContents" in script and "searchInputBoxInstance.onEnter" not in script:
+            return {"ok": True, "setter_succeeded": True}
+
+        # 5c. Decoupled onEnter Invocation & Verification (JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER)
+        if "searchInputBoxInstance.onEnter" in script and "textyObj.setContents" not in script:
+            self.submit_called = True
+            if self.simulate_slack_hang_no_transition:
+                self.effective_submit_triggered = False
+            else:
+                self.effective_submit_triggered = True
+                if self.pending_next_results:
+                    self.current_results = list(self.pending_next_results)
+            return {
+                "ok": True,
+                "report": {
+                    "submit_succeeded": True,
+                    "preconditions_satisfied": True,
+                    "query_state_all_synced": True,
+                    "strong_search_input_box_match_count": 1,
+                    "duplicate_search_input_box_count": 0,
+                    "onenter_callable": True,
+                    "submit_attempt_count": 1,
+                    "submit_method": "SearchInputBox.onEnter",
+                },
+                "submitted": True,
+            }
+
+        # 5d. Pure Query State Sync Verification
+        if "query_state_all_synced" in script or "surfaces_synced" in script or "displayQueryOps" in script:
+            self.query_state_verified = True
+            return {
+                "ok": True,
+                "query_state_all_synced": True,
+                "redux_status": "TRUE",
+                "preconditions_satisfied": True,
+                "surfaces_synced": {"dom": True, "quill_text": True, "quill_delta": True, "texty": True, "redux": True},
+            }
 
         # 6. Post-Submit Probe
         if "JS_PROBE_POST_SUBMIT_INPUT_STATE" in script or "input_value_after_submit" in script:
@@ -93,8 +146,11 @@ class DeterministicMockWebViewHost:
 
         # 7. Post-Wait Probe
         if "JS_PROBE_POST_WAIT_SEARCH_STATE" in script or "surface_query_after" in script:
+            sq = self.surface_query
+            if self.require_verified_state_for_effective_submit and self.effective_submit_triggered and not self.simulate_slack_hang_no_transition:
+                sq = self.input_value
             return {
-                "surface_query_after": self.surface_query or None,
+                "surface_query_after": sq or None,
                 "loading_detected_after": self.loading_indicator,
             }
 
@@ -262,9 +318,10 @@ def test_case_c_transition_never_occurs():
     host.search_view_mounted_before = True
 
     with patch("time.sleep", return_value=None):
-        backend.search_messages(q2, max_results=5)
+        with pytest.raises(WebViewSearchError) as exc_info:
+            backend.search_messages(q2, max_results=5)
 
-    forensic = backend.last_search_telemetry.get("forensic_transition", {})
+    forensic = exc_info.value.details.get("forensic_transition", {})
     assert forensic["INPUT_MATCHES_REQUESTED"] is True
     assert forensic["SUBMIT_TRIGGERED"] is True
     assert forensic["SEARCH_SURFACE_QUERY_MATCHES_REQUESTED"] is False
@@ -272,32 +329,129 @@ def test_case_c_transition_never_occurs():
 
 
 def test_setter_and_submit_side_effect_purity():
-    """Hard Requirement 2: Existing setter / submit semantics unchanged.
+    """Hard Requirement 2: Decoupled model-native setter & verified submit pipeline structure.
 
     Verifies:
-    - QUERY_SETTER_BEHAVIOR_CHANGED = False
-    - SUBMIT_BEHAVIOR_CHANGED = False
-    - FORENSIC_TELEMETRY_SIDE_EFFECT_FREE = True
+    - QUERY_SETTER_BEHAVIOR_CHANGED = False (Model-native Texty.setContents source="api")
+    - SUBMIT_BEHAVIOR_CHANGED = True (Decoupled with verified state settle before onEnter)
+    - Pipeline ordering: pre-probe -> set_texty -> pre-submit verify onEnter -> post-probe -> active barrier -> post-wait -> extract
     """
     src = inspect.getsource(WebViewSlackSearchBackend._execute_search_pipeline)
 
-    # 1. Pipeline structure must be: pre-submit probe -> JS_SET_QUERY_AND_SUBMIT -> post-submit probe -> wait -> post-wait probe
     idx_pre_probe = src.find("JS_PROBE_PRE_SUBMIT_SEARCH_STATE")
-    idx_set_and_submit = src.find("JS_SET_QUERY_AND_SUBMIT")
+    idx_set_query = src.find("JS_SET_TEXTY_QUERY")
+    idx_submit = src.find("JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER")
     idx_post_sub_probe = src.find("JS_PROBE_POST_SUBMIT_INPUT_STATE")
-    idx_wait = src.find("time.sleep(3.5)")
+    idx_barrier = src.find("Bounded Active Transition Barrier")
     idx_post_wait_probe = src.find("JS_PROBE_POST_WAIT_SEARCH_STATE")
     idx_extract = src.find("JS_EXTRACT_SEARCH_RESULTS")
 
     assert idx_pre_probe != -1
-    assert idx_set_and_submit != -1
+    assert idx_set_query != -1
+    assert idx_submit != -1
     assert idx_post_sub_probe != -1
-    assert idx_wait != -1
+    assert idx_barrier != -1
     assert idx_post_wait_probe != -1
     assert idx_extract != -1
 
-    assert idx_pre_probe < idx_set_and_submit < idx_post_sub_probe < idx_wait < idx_post_wait_probe < idx_extract
+    assert idx_pre_probe < idx_set_query < idx_submit < idx_post_sub_probe < idx_barrier < idx_post_wait_probe < idx_extract
 
-    # 2. JS_SET_QUERY_AND_SUBMIT must remain frozen model-native setter
-    assert "textyObj.setContents({ contents: [{ insert: targetQuery }] }, { source: 'api' })" in JS_SET_QUERY_AND_SUBMIT
-    assert "searchInputBoxInstance.onEnter()" in JS_SET_QUERY_AND_SUBMIT
+    # Model-native setter purity
+    from pesu_agent.search.webview_slack_search import JS_SET_TEXTY_QUERY, JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER
+    assert "textyObj.setContents" in JS_SET_TEXTY_QUERY
+    assert "source: 'api'" in JS_SET_TEXTY_QUERY
+    assert "searchInputBoxInstance.onEnter()" in JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER
+
+
+# =========================================================================
+# Task 11R3 TDD Tests: Submission Defect & Transition Barrier
+# =========================================================================
+
+def test_task11r3_effective_submission_requires_state_settle_and_transitions_to_new_results():
+    """Task 11R3 TDD RED Test 1: Submission requires verified query state settle.
+
+    Real Slack behavior:
+    - Q1 submitted -> Result Set A.
+    - Q2 applied -> if onEnter is called synchronously before React state settles,
+      it is a NO-OP and Result Set A stays in DOM.
+    - When backend properly verifies query state settle before onEnter,
+      effective submit triggers -> search surface and DOM transition to Result Set B.
+    - Backend MUST return Result Set B for Q2 (never stale Result Set A).
+    """
+    host = DeterministicMockWebViewHost()
+    host.require_verified_state_for_effective_submit = True
+    backend = WebViewSlackSearchBackend(host=host)
+
+    # Step 1: Initial query Q1 produces Result Set A
+    q1 = "고객 만족도 현황 페이지 1차 배포 완료"
+    host.input_value = q1
+    host.surface_query = q1
+    set_a_items = [
+        _make_sample_item(1, "C04H83XRPA7", "1786601410.352619", "이주영", "지점 개설 미팅"),
+        _make_sample_item(2, "C04TV5EUN2X", "1783409984.838889", "김서경", "기수임사에 대한 요율"),
+    ]
+    host.current_results = list(set_a_items)
+
+    with patch("time.sleep", return_value=None):
+        results_q1 = backend.search_messages(q1, max_results=5)
+
+    assert len(results_q1) == 2
+    assert results_q1[0].text == "지점 개설 미팅"
+
+    # Step 2: Query Q2 applied
+    q2 = "고객 만족도 현황 페이지 배포"
+    host.input_value = q2
+    host.search_view_mounted_before = True  # search view mounted from Q1
+    set_b_items = [
+        _make_sample_item(1, "C09DQ4Y7YNA", "1789088348.763469", "박정환", "배포 상태 최종 확인"),
+    ]
+    host.pending_next_results = list(set_b_items)
+
+    with patch("time.sleep", return_value=None):
+        results_q2 = backend.search_messages(q2, max_results=5)
+
+    # Must return Result Set B, NOT stale Result Set A!
+    assert len(results_q2) == 1
+    assert results_q2[0].text == "배포 상태 최종 확인"
+    assert results_q2[0].query == q2
+
+
+def test_task11r3_stale_result_fail_closed_barrier():
+    """Task 11R3 TDD RED Test 2: Stale results must never be returned as success.
+
+    When requested query changed, previous result fingerprint still mounted,
+    and no query-specific transition ever occurs:
+    Backend MUST fail closed (raise WebViewSearchError) and NEVER return stale results.
+    """
+    host = DeterministicMockWebViewHost()
+    backend = WebViewSlackSearchBackend(host=host)
+
+    # Q1 succeeds with Set A
+    q1 = "고객 만족도 현황 페이지 1차 배포 완료"
+    host.input_value = q1
+    host.surface_query = q1
+    set_a_items = [
+        _make_sample_item(1, "C04H83XRPA7", "1786601410.352619", "이주영", "지점 개설 미팅"),
+    ]
+    host.current_results = list(set_a_items)
+
+    with patch("time.sleep", return_value=None):
+        backend.search_messages(q1, max_results=5)
+
+    # Q2 submitted, but Slack hangs indefinitely (no transition ever occurs)
+    q2 = "완전히 다른 새 쿼리"
+    host.input_value = q2
+    host.surface_query = q1  # Surface stays on Q1!
+    host.search_view_mounted_before = True
+    host.simulate_slack_hang_no_transition = True
+
+    # Backend MUST fail closed rather than returning stale Set A
+    with patch("time.sleep", return_value=None):
+        with pytest.raises(WebViewSearchError) as exc_info:
+            backend.search_messages(q2, max_results=5)
+
+    assert exc_info.value.failure_code in (
+        WebViewSearchFailureCode.SEARCH_RESULT_TIMEOUT,
+        WebViewSearchFailureCode.SEARCH_NAVIGATION_FAILED,
+    )
+
