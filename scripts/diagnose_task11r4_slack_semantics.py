@@ -231,7 +231,13 @@ def run_diagnostic(dry_run: bool = False) -> dict[str, Any]:
     logger.info("-------------------------------------------------------------")
 
     t0 = time.perf_counter()
-    c1_results = search_backend.search_messages(c1_spec["query"], max_results=5)
+    c1_error = None
+    try:
+        c1_results = search_backend.search_messages(c1_spec["query"], max_results=5)
+    except Exception as e:
+        c1_results = []
+        c1_error = str(e)
+        logger.error(f"  ❌ C1 Search raised exception: {e}")
     c1_latency = time.perf_counter() - t0
 
     c1_telemetry = getattr(search_backend, "last_search_telemetry", {}) or {}
@@ -241,6 +247,7 @@ def run_diagnostic(dry_run: bool = False) -> dict[str, Any]:
     c1_onenter_invoked = bool(c1_telemetry.get("onenter_invoked", False))
     c1_surface_matches = bool(c1_transition.get("SEARCH_SURFACE_QUERY_MATCHES_REQUESTED", False))
     c1_transition_confirmed = bool(c1_surface_matches and c1_verified_query_state and c1_onenter_invoked)
+    c1_readiness = c1_telemetry.get("SEARCH_RESULT_READINESS") or c1_transition.get("SEARCH_RESULT_READINESS")
     c1_top_identifiers = [r.result_url for r in c1_results if r.result_url]
     c1_result_count = len(c1_results)
 
@@ -251,6 +258,8 @@ def run_diagnostic(dry_run: bool = False) -> dict[str, Any]:
         "ONENTER_INVOKED": c1_onenter_invoked,
         "SEARCH_SURFACE_QUERY_MATCHES_REQUESTED": c1_surface_matches,
         "RESULT_TRANSITION_CONFIRMED": c1_transition_confirmed,
+        "SEARCH_RESULT_READINESS": c1_readiness,
+        "SEARCH_ERROR": c1_error,
         "RESULT_COUNT": c1_result_count,
         "TOP_RESULT_IDENTIFIERS": c1_top_identifiers,
         "NORMALIZED_RESULT_SNIPPETS": [
@@ -326,7 +335,13 @@ def run_diagnostic(dry_run: bool = False) -> dict[str, Any]:
         logger.info("-------------------------------------------------------------")
 
         t0 = time.perf_counter()
-        results = search_backend.search_messages(q_text, max_results=5)
+        q_error = None
+        try:
+            results = search_backend.search_messages(q_text, max_results=5)
+        except Exception as e:
+            results = []
+            q_error = str(e)
+            logger.error(f"  ❌ {q_id} Search raised exception: {e}")
         latency = time.perf_counter() - t0
 
         telemetry = getattr(search_backend, "last_search_telemetry", {}) or {}
@@ -336,6 +351,7 @@ def run_diagnostic(dry_run: bool = False) -> dict[str, Any]:
         onenter_invoked = bool(telemetry.get("onenter_invoked", False))
         surface_matches = bool(transition.get("SEARCH_SURFACE_QUERY_MATCHES_REQUESTED", False))
         transition_confirmed = bool(surface_matches and verified_query_state and onenter_invoked)
+        readiness = telemetry.get("SEARCH_RESULT_READINESS") or transition.get("SEARCH_RESULT_READINESS")
         top_identifiers = [r.result_url for r in results if r.result_url]
         result_count = len(results)
 
@@ -385,6 +401,8 @@ def run_diagnostic(dry_run: bool = False) -> dict[str, Any]:
             "ONENTER_INVOKED": onenter_invoked,
             "SEARCH_SURFACE_QUERY_MATCHES_REQUESTED": surface_matches,
             "RESULT_TRANSITION_CONFIRMED": transition_confirmed,
+            "SEARCH_RESULT_READINESS": readiness,
+            "SEARCH_ERROR": q_error,
             "RESULT_COUNT": result_count,
             "TOP_RESULT_IDENTIFIERS": top_identifiers,
             "NORMALIZED_RESULT_SNIPPETS": normalized_snippets,
