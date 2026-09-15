@@ -605,7 +605,8 @@ async def main() -> int:
         search_backend = create_slack_search_backend(
             config=SlackSearchConfig(backend_kind=SlackBackendKind.WEBVIEW_DIRECT),
         )
-        thread_reader = WebviewThreadReader()
+        host = getattr(search_backend, "_window", None)
+        thread_reader = WebviewThreadReader(host=host) if host else None
 
     # Build ProductionRetrievalAdapter
     retrieval_adapter = ProductionRetrievalAdapter(
