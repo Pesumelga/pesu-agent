@@ -21,5 +21,13 @@ htmlcov/
 # IDE & OS files
 .vscode/
 .idea/
-.DS_Store
-Thumbs.db
+# Runtime state
+.runtime/
+
+# Private Real Slack Benchmark Configurations
+config/real_slack_gold_cases.json
+config/real_slack_cases_*.json
+
+# Embedded WebView2 Runtime Storage
+**/slack-runtime/
+

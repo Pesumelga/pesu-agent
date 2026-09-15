@@ -49,6 +49,10 @@ if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from dotenv import load_dotenv
+load_dotenv()
+
 # Core imports
 from pesu_agent.investigation.retrieval_coordinator import (
     CandidateQueryHit,

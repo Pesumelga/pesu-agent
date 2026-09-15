@@ -178,6 +178,7 @@ async def run_yield_verification():
 
     mock_restored_metrics = SlackRestorationResult(
         url_restored=True,
+        channel_id_restored=True,
         conversation_restored=True,
         scroll_restored=True,
         viewport_restored=True,

@@ -69,9 +69,9 @@ class SlackViewState(BaseModel):
     url: str = Field(default="", description="현재 URL")
     channel_id: Optional[str] = Field(default=None, description="채널 ID")
     conversation_name: Optional[str] = Field(default=None, description="채널명")
-    scroll_top: int = Field(default=0, description="스크롤 scrollTop")
-    scroll_height: int = Field(default=0, description="스크롤 scrollHeight")
-    client_height: int = Field(default=0, description="스크롤 clientHeight")
+    scroll_top: int | float = Field(default=0, description="스크롤 scrollTop")
+    scroll_height: int | float = Field(default=0, description="스크롤 scrollHeight")
+    client_height: int | float = Field(default=0, description="스크롤 clientHeight")
     visible_message_fingerprints: list[str] = Field(
         default_factory=list, description="뷰포트에 보이는 메시지 지문 목록"
     )
@@ -86,17 +86,36 @@ class SlackViewState(BaseModel):
 class SlackRestorationResult(BaseModel):
     """복원 시도 결과의 세부 지표."""
 
-    url_restored: bool = Field(default=False, description="URL 일치 여부")
-    conversation_restored: bool = Field(default=False, description="채널/대화창 일치 여부")
-    scroll_restored: bool = Field(default=False, description="스크롤 위치 복원 여부")
-    viewport_restored: bool = Field(default=False, description="뷰포트 메시지 지문 복원 여부")
+    url_restored: bool = Field(default=False, description="URL 일치 여부 (Required)")
+    channel_id_restored: bool = Field(default=False, description="채널 ID 일치 여부 (Required)")
+    scroll_restored: bool = Field(default=False, description="스크롤 위치 복원 여부 (Required)")
+    viewport_restored: bool = Field(default=False, description="뷰포트 메시지 지문 복원 여부 (Required)")
+    conversation_name_restored: Optional[bool] = Field(
+        default=None, description="채널명 일치 여부 (Informational, 미캡처 시 None)"
+    )
+
+    # 하위 호환용 필드
+    conversation_restored: bool = Field(
+        default=False, description="채널 ID 복원 일치 여부 (하위 호환용)"
+    )
+
     restored_url: Optional[str] = Field(default=None, description="복원 후 URL")
     restored_channel_id: Optional[str] = Field(default=None, description="복원 후 채널 ID")
     restored_conversation_name: Optional[str] = Field(default=None, description="복원 후 채널명")
-    restored_scroll_top: Optional[int] = Field(default=None, description="복원 후 scrollTop")
+    restored_scroll_top: Optional[int | float] = Field(default=None, description="복원 후 scrollTop")
     restored_visible_message_fingerprints: list[str] = Field(
         default_factory=list, description="복원 후 뷰포트 메시지 지문"
     )
+
+    @property
+    def is_successful(self) -> bool:
+        """모든 필수 복원 조건(URL, Channel ID, Scroll, Viewport)이 충족되었는지 여부."""
+        return bool(
+            self.url_restored
+            and self.channel_id_restored
+            and self.scroll_restored
+            and self.viewport_restored
+        )
 
 
 class SlackContextMessage(BaseModel):
@@ -115,6 +134,11 @@ class SlackContextMessage(BaseModel):
     reply_count: int = Field(default=0, description="스레드 댓글 수")
     thread_identifier_candidate: Optional[str] = Field(
         default=None, description="스레드 식별자 후보"
+    )
+    has_attachments: bool = Field(default=False, description="파일 첨부 존재 여부")
+    attachment_count: int = Field(default=0, description="첨부된 파일 수")
+    attachment_names: list[str] = Field(
+        default_factory=list, description="첨부 파일명 목록"
     )
 
 
@@ -307,6 +331,7 @@ class SlackContextCollector:
                            document.querySelector('[data-qa="slack_kit_scrollbar"]');
                 if (sc) {{
                     sc.scrollTop = {before_state.scroll_top};
+                    sc.dispatchEvent(new Event('scroll', {{ bubbles: true }}));
                     return {{ ok: true, now_scroll: sc.scrollTop }};
                 }}
                 return {{ ok: false }};
@@ -318,24 +343,37 @@ class SlackContextCollector:
         # 3. 복원 후 상태 측정
         after_state = await self.capture_view_state()
 
+        # 1. URL 복원 판별 (Required)
         url_restored = bool(
             after_state.url
             and before_state.url
             and (after_state.url.split("?")[0] == before_state.url.split("?")[0])
         )
-        conv_restored = bool(
-            (before_state.channel_id and after_state.channel_id == before_state.channel_id)
-            or (
-                before_state.conversation_name
-                and after_state.conversation_name == before_state.conversation_name
+
+        # 2. Channel ID 복원 판별 (Required)
+        if before_state.channel_id or after_state.channel_id:
+            channel_id_restored = bool(
+                before_state.channel_id
+                and after_state.channel_id
+                and before_state.channel_id == after_state.channel_id
             )
-        )
+        else:
+            # 둘 다 channel_id가 없는 뷰(/later, /threads 등)인 경우 URL 일치 시 True
+            channel_id_restored = True
 
-        # 스크롤 복원 판별 (오차 ±80px 이내 허용)
+        # 3. Conversation Name 복원 판별 (Informational, 캡처된 경우에만 비교)
+        if before_state.conversation_name and after_state.conversation_name:
+            conversation_name_restored: Optional[bool] = (
+                before_state.conversation_name.strip() == after_state.conversation_name.strip()
+            )
+        else:
+            conversation_name_restored = None
+
+        # 4. 스크롤 복원 판별 (Required, 오차 ±120px 이내 또는 0px 기준 허용)
         scroll_diff = abs(after_state.scroll_top - before_state.scroll_top)
-        scroll_restored = (scroll_diff <= 80) if before_state.scroll_top > 0 else True
+        scroll_restored = (scroll_diff <= 120) if before_state.scroll_top > 0 else (after_state.scroll_top <= 120)
 
-        # 뷰포트 복원 판별 (지문 교집합 또는 첫/마지막 메시지 일치)
+        # 5. 뷰포트 복원 판별 (Required: 지문 교집합 또는 채널/스크롤 일치 시)
         viewport_restored = False
         if before_state.visible_message_fingerprints and after_state.visible_message_fingerprints:
             common = set(before_state.visible_message_fingerprints) & set(
@@ -343,17 +381,20 @@ class SlackContextCollector:
             )
             if len(common) > 0:
                 viewport_restored = True
-        elif conv_restored and scroll_restored:
+        if not viewport_restored and channel_id_restored and scroll_restored:
             viewport_restored = True
 
         logger.info(
-            f"State Restoration Result: URL={url_restored}, Conv={conv_restored}, "
-            f"Scroll={scroll_restored} (Diff: {scroll_diff}px), Viewport={viewport_restored}"
+            f"State Restoration Result: URL={url_restored}, ChannelID={channel_id_restored}, "
+            f"ConvName={conversation_name_restored}, Scroll={scroll_restored} (Diff: {scroll_diff}px), "
+            f"Viewport={viewport_restored}"
         )
 
         return SlackRestorationResult(
             url_restored=url_restored,
-            conversation_restored=conv_restored,
+            channel_id_restored=channel_id_restored,
+            conversation_restored=channel_id_restored,
+            conversation_name_restored=conversation_name_restored,
             scroll_restored=scroll_restored,
             viewport_restored=viewport_restored,
             restored_url=after_state.url,
@@ -568,14 +609,7 @@ class SlackContextCollector:
                     logger.info("Slack이 Background로 복귀하여 원래 상태 복원을 수행합니다.")
                     state_restore_attempted = True
                     restoration_metrics = await self.restore_view_state(before_state)
-                    state_restore_succeeded = (
-                        restoration_metrics.url_restored
-                        and restoration_metrics.conversation_restored
-                        and (
-                            restoration_metrics.scroll_restored
-                            or restoration_metrics.viewport_restored
-                        )
-                    )
+                    state_restore_succeeded = restoration_metrics.is_successful
                     restore_pending = not state_restore_succeeded
                 else:
                     logger.warning(
@@ -707,14 +741,7 @@ class SlackContextCollector:
                     scroll_top=restoration_metrics.restored_scroll_top or 0,
                     visible_message_fingerprints=restoration_metrics.restored_visible_message_fingerprints,
                 )
-                state_restore_succeeded = (
-                    restoration_metrics.url_restored
-                    and restoration_metrics.conversation_restored
-                    and (
-                        restoration_metrics.scroll_restored
-                        or restoration_metrics.viewport_restored
-                    )
-                )
+                state_restore_succeeded = restoration_metrics.is_successful
                 restore_pending = False
             else:
                 state_restore_attempted = False

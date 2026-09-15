@@ -204,15 +204,37 @@ class SlackLifecycleManager:
                 cdp_port=self.cdp_port,
             )
 
-        # Slack Agent Mode 기동
+        # Slack Agent Mode 기동 (PowerShell/cmd 래퍼 없이 직접 Detached subprocess로 실행)
         logger.info(f"Slack Agent Mode 기동: {slack_binary} --remote-debugging-port={self.cdp_port}")
         if sys.platform == "win32":
-            # WMI Win32_Process.Create를 사용하여 부모 프로세스나 Job Object와 완전히 분리된 독립 데스크톱 프로세스로 기동
-            cmd_line = f'"{slack_binary}" --remote-debugging-port={self.cdp_port}'
-            ps_cmd = f"Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{{CommandLine = '{cmd_line}'}}"
-            subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_cmd], check=False)
+            # Windows detached process: parent console 종료 시에도 프로세스가 지속되도록 설정
+            creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+            CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+            try:
+                subprocess.Popen(
+                    [slack_binary, f"--remote-debugging-port={self.cdp_port}"],
+                    creationflags=creationflags | CREATE_BREAKAWAY_FROM_JOB,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    close_fds=True,
+                )
+            except OSError:
+                subprocess.Popen(
+                    [slack_binary, f"--remote-debugging-port={self.cdp_port}"],
+                    creationflags=creationflags,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL,
+                    close_fds=True,
+                )
         else:
-            subprocess.Popen([slack_binary, f"--remote-debugging-port={self.cdp_port}"])
+            subprocess.Popen(
+                [slack_binary, f"--remote-debugging-port={self.cdp_port}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+            )
 
         # CDP 준비 대기
         start_t = time.time()

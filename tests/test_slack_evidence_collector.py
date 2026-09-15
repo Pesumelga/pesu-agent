@@ -89,16 +89,16 @@ async def test_collect_evidence_package_success_and_deduplication(mock_lifecycle
         "visible_message_fingerprints": ["fp_start"],
     }
 
+    mock_cdp.open_thread_read_only = AsyncMock(return_value=True)
     mock_cdp.evaluate_js = AsyncMock(side_effect=[
         snap_before,          # 1. capture before
         None,                 # 2. nav to result 1
         dom_result_1,         # 3. extract result 1
-        {"clicked": True},    # 4. open thread
-        thread_dom_result_1,  # 5. extract thread
-        None,                 # 6. nav to result 2
-        dom_result_2,         # 7. extract result 2
-        None,                 # 8. nav back to start url in restore_view_state
-        snap_after_restored,  # 9. capture after in restore_view_state
+        thread_dom_result_1,  # 4. extract thread
+        None,                 # 5. nav to result 2
+        dom_result_2,         # 6. extract result 2
+        None,                 # 7. nav back to start url in restore_view_state
+        snap_after_restored,  # 8. capture after in restore_view_state
     ])
 
     results = [
@@ -419,3 +419,110 @@ async def test_collect_evidence_package_user_interruption_restore_pending_when_u
     assert package.restore_pending is True
     assert package.state_restore_attempted is False
     assert package.state_restore_succeeded is False
+
+
+def test_normalize_slack_message_ts():
+    """타임스탬프 식별자 정규화 헬퍼 단위 테스트."""
+    from pesu_agent.evidence.slack_evidence_collector import normalize_slack_message_ts
+
+    assert normalize_slack_message_ts("https://workspace.slack.com/archives/C123/p1786524317769949") == "1786524317769949"
+    assert normalize_slack_message_ts("1786524317.769949") == "1786524317769949"
+    assert normalize_slack_message_ts("p1786524317769949") == "1786524317769949"
+    assert normalize_slack_message_ts("1786524317769949") == "1786524317769949"
+    assert normalize_slack_message_ts(None) == ""
+    assert normalize_slack_message_ts("") == ""
+
+
+@pytest.mark.anyio
+async def test_extract_thread_replies_attachment_preservation(mock_lifecycle_ready):
+    """8개 텍스트 Reply와 1개 파일 첨부 Reply의 메타데이터 보존 및 분리 검증."""
+    mock_cdp = MagicMock(spec=SlackCdpAdapter)
+    collector = SlackEvidenceCollector(lifecycle_manager=mock_lifecycle_ready, cdp_adapter=mock_cdp)
+
+    raw_thread_response = {
+        "found": True,
+        "total_items": 10,
+        "messages": [
+            # 0. Thread Root (excluded from replies)
+            {
+                "idx": 0, "author": "이주영", "timestamp_raw": "수요일 오전 8:56",
+                "text": "지점 귀속 법인 지방세 확인 요청 件", "href": "/archives/C04H83XRPA7/p1787097408846349",
+                "has_attachments": False, "attachment_count": 0, "attachment_names": []
+            },
+            # 1. Reply 1 (Text)
+            {
+                "idx": 1, "author": "이주영", "timestamp_raw": "수요일 오전 8:57",
+                "text": "@박현주 (CC. @김영선) 현주님,", "href": "/archives/C04H83XRPA7/p1787097408846350",
+                "has_attachments": False, "attachment_count": 0, "attachment_names": []
+            },
+            # 2. Reply 2 (Attachment / File Oriented)
+            {
+                "idx": 2, "author": "이주영", "timestamp_raw": "8:57",
+                "text": "2개 파일\n 모두 다운로드\n2025년 귀속 법인 지방세 납부서.pdf", "href": None,
+                "has_attachments": True, "attachment_count": 2, "attachment_names": ["2025년 귀속 법인 지방세 납부서.pdf"]
+            },
+            # 3. Reply 3 (Text)
+            {
+                "idx": 3, "author": "박현주", "timestamp_raw": "수요일 오전 8:58",
+                "text": "@이주영 안녕하세요 주영님 해당건", "href": None,
+                "has_attachments": False, "attachment_count": 0, "attachment_names": []
+            },
+            # 4. Reply 4 (Text)
+            {
+                "idx": 4, "author": "김영선", "timestamp_raw": "수요일 오후 3:11",
+                "text": "@박현주 현주님, 고양점에서도 같은 문", "href": None,
+                "has_attachments": False, "attachment_count": 0, "attachment_names": []
+            },
+            # 5. Reply 5 (Text)
+            {
+                "idx": 5, "author": "박현주", "timestamp_raw": "수요일 오후 3:13",
+                "text": "@김영선 영선님 안녕하세요.", "href": None,
+                "has_attachments": False, "attachment_count": 0, "attachment_names": []
+            },
+            # 6. Reply 6 (Text)
+            {
+                "idx": 6, "author": "김영선", "timestamp_raw": "수요일 오후 3:15",
+                "text": "@김춘구 님, 소액이다보니 모르고 납부", "href": None,
+                "has_attachments": False, "attachment_count": 0, "attachment_names": []
+            },
+            # 7. Reply 7 (Text)
+            {
+                "idx": 7, "author": "김춘구", "timestamp_raw": "수요일 오후 3:23",
+                "text": "@김영선님. 전 지점에 해당이 되면 사", "href": None,
+                "has_attachments": False, "attachment_count": 0, "attachment_names": []
+            },
+            # 8. Reply 8 (Text)
+            {
+                "idx": 8, "author": "김춘구", "timestamp_raw": "수요일 오후 3:29",
+                "text": "의견 주시면 공지 하도록 할게요.", "href": None,
+                "has_attachments": False, "attachment_count": 0, "attachment_names": []
+            },
+            # 9. Reply 9 (Text)
+            {
+                "idx": 9, "author": "김영선", "timestamp_raw": "수요일 오후 3:30",
+                "text": "@김춘구 님, 이견 없습니다~", "href": None,
+                "has_attachments": False, "attachment_count": 0, "attachment_names": []
+            },
+        ]
+    }
+
+    mock_cdp.evaluate_js = AsyncMock(return_value=raw_thread_response)
+    replies = await collector._extract_thread_replies(target_ts="1787097408846349", max_replies=20)
+
+    # 1. Total replies = 9 (8 text + 1 attachment)
+    assert len(replies) == 9
+
+    # 2. Root is NOT in replies
+    root_text = "지점 귀속 법인 지방세 확인 요청 件"
+    assert not any(r.text == root_text for r in replies)
+
+    # 3. Text replies count = 8
+    text_replies = [r for r in replies if not r.has_attachments]
+    assert len(text_replies) == 8
+
+    # 4. Attachment-only reply count = 1
+    att_replies = [r for r in replies if r.has_attachments]
+    assert len(att_replies) == 1
+    assert att_replies[0].attachment_count == 2
+    assert "2025년 귀속 법인 지방세 납부서.pdf" in att_replies[0].attachment_names
+    assert att_replies[0].author == "이주영"

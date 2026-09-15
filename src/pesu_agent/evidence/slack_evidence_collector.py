@@ -43,6 +43,7 @@ from pesu_agent.adapters.slack_cdp import (
     SlackCdpAdapter,
     SlackCdpError,
     SlackNotReadyError,
+    SlackTargetNotFoundError,
 )
 from pesu_agent.context.slack_context_collector import (
     SlackContextCollector,
@@ -62,6 +63,27 @@ from pesu_agent.search.slack_search import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_slack_message_ts(val: Optional[str]) -> str:
+    """
+    Slack 메시지 타임스탬프 식별자(data-ts, message_id, data-item-key, permalink URL timestamp 등)에서
+    순수 숫자 문자열만 추출하여 정규화합니다.
+    
+    주의: 일반 메시지 본문(body text)에는 적용하지 않으며, 식별자 필드 간 exact equality 비교에 사용됩니다.
+
+    예:
+    - "https://workspace.slack.com/archives/C123/p1786524317769949" -> "1786524317769949"
+    - "1786524317.769949" -> "1786524317769949"
+    - "p1786524317769949" -> "1786524317769949"
+    """
+    if not val:
+        return ""
+    s = str(val)
+    m = re.search(r"/archives/[^/]+/p(\d+)", s)
+    if m:
+        return m.group(1)
+    return re.sub(r"[^0-9]", "", s)
 
 
 class SlackEvidenceItem(BaseModel):
@@ -155,6 +177,15 @@ class SlackEvidencePackage(BaseModel):
         default=0, description="중복 제거 후 고유 메시지 총합"
     )
 
+    # Slack Write Audit Metrics (MVP 3.4.1 Hard Read-Only Safety Barrier)
+    write_action_requested: int = Field(default=0, description="요청된 쓰기 동작 수 (목표: 0)")
+    write_action_blocked: int = Field(default=0, description="차단된 쓰기 동작 수")
+    prohibited_low_level_action_attempted: int = Field(default=0, description="금지된 Low-level 액션 시도 수 (목표: 0)")
+    main_composer_interaction_detected: int = Field(default=0, description="메인 Composer 상호작용 감지 수 (목표: 0)")
+    thread_composer_interaction_detected: int = Field(default=0, description="스레드 Composer 상호작용 감지 수 (목표: 0)")
+    send_control_interaction_detected: int = Field(default=0, description="전송 컨트롤 상호작용 감지 수 (목표: 0)")
+    unexpected_slack_write_observed: bool = Field(default=False, description="Slack 쓰기 발생 여부 (목표: False)")
+
     # 통합 고유 메시지 풀 & 개별 증거 목록
     unique_messages: list[SlackContextMessage] = Field(
         default_factory=list, description="전체 조사 결과에서 추출된 고유 메시지 목록"
@@ -205,93 +236,188 @@ class SlackEvidenceCollector:
         self,
         lifecycle_manager: Optional[SlackLifecycleManager] = None,
         cdp_adapter: Optional[SlackCdpAdapter] = None,
+        agent_window_manager: Optional[Any] = None,
+        mode: Optional[str] = None,
     ):
         self.lifecycle_manager = lifecycle_manager or SlackLifecycleManager()
-        self.cdp = cdp_adapter or SlackCdpAdapter(lifecycle_manager=self.lifecycle_manager)
+        self.agent_window_manager = agent_window_manager
+
+        if mode is not None:
+            self.mode = mode
+        else:
+            # cdp_adapter가 mock 등으로 직접 주입되고 window_manager가 없으면 legacy 모드로 동작
+            if cdp_adapter is not None and agent_window_manager is None:
+                self.mode = "legacy"
+            else:
+                self.mode = "hidden"
+
+        if self.mode == "hidden" and cdp_adapter is None:
+            from pesu_agent.lifecycle.slack_agent_window import (
+                SlackAgentWindowState,
+                SlackAgentWindowManager,
+            )
+            self.agent_window_manager = self.agent_window_manager or SlackAgentWindowManager()
+            state, adopted, msg = self.agent_window_manager.get_state()
+            if state == SlackAgentWindowState.AGENT_WINDOW_ADOPTED_VISIBLE:
+                self.agent_window_manager.hide_agent_window()
+                state, adopted, msg = self.agent_window_manager.get_state()
+
+            if (
+                state
+                in (
+                    SlackAgentWindowState.AGENT_WINDOW_ADOPTED_HIDDEN,
+                    SlackAgentWindowState.AGENT_WINDOW_ADOPTED_VISIBLE,
+                )
+                and adopted
+            ):
+                self.cdp = SlackCdpAdapter(
+                    target_id=adopted.cdp_target_id,
+                    lifecycle_manager=self.lifecycle_manager,
+                )
+            else:
+                from pesu_agent.adapters.slack_cdp import SlackTargetNotFoundError
+
+                raise SlackTargetNotFoundError(
+                    f"Fail-Closed: Hidden Mode requires a valid adopted Agent Window target, but state is {state.name} ({msg}). Main Window fallback is strictly prohibited."
+                )
+        else:
+            self.cdp = cdp_adapter or SlackCdpAdapter(lifecycle_manager=self.lifecycle_manager)
+
         self.context_collector = SlackContextCollector(
             lifecycle_manager=self.lifecycle_manager, cdp_adapter=self.cdp
         )
         self.searcher = SlackSearch(
-            cdp_adapter=self.cdp, lifecycle_manager=self.lifecycle_manager
+            cdp_adapter=self.cdp,
+            lifecycle_manager=self.lifecycle_manager,
+            agent_window_manager=self.agent_window_manager,
         )
 
     async def _extract_thread_replies(
         self, target_ts: str, max_replies: int = 20
     ) -> list[SlackContextMessage]:
         """열려 있는 스레드 패널(.p-flexpane)에서 Root 메시지와 Replies를 분리하여 Replies 목록을 추출합니다."""
-        js_thread = f"""
-        (() => {{
+        js_thread = r"""
+        (() => {
             const threadPane = document.querySelector(
                 '.p-flexpane, [data-qa="threads_flexpane"], [data-qa="thread_view"], [aria-label*="스레드"], [aria-label*="Thread"], .c-split_view__secondary, [data-qa="flexpane"]'
             );
-            if (!threadPane) {{
-                return {{ found: false, messages: [] }};
-            }}
+            if (!threadPane) {
+                return { found: false, messages: [] };
+            }
 
             const items = Array.from(threadPane.querySelectorAll(
                 '.c-virtual_list__item, [data-qa="virtual-list-item"], .c-message_kit__message, [data-qa="message_container"], [role="listitem"]'
             ));
 
             const replies = [];
-            for (let i = 0; i < items.length; i++) {{
+            let lastSender = null;
+
+            for (let i = 0; i < items.length; i++) {
                 const item = items[i];
                 const textElem = item.querySelector(
                     '[data-qa="message_content"], .c-message_kit__blocks, .p-rich_text_section, .c-message__body'
                 );
                 const text = textElem ? textElem.innerText.trim() : (item.innerText ? item.innerText.trim() : "");
-                const sender = item.querySelector(
+                const senderElem = item.querySelector(
                     '[data-qa="message_sender_name"], .c-message__sender_button, button[data-message-sender]'
-                )?.innerText.trim() || null;
-                const time = item.querySelector(
+                );
+                let sender = senderElem ? senderElem.innerText.trim() : null;
+                if (sender) {
+                    lastSender = sender;
+                } else if (!sender && lastSender) {
+                    sender = lastSender;
+                }
+
+                const timeElem = item.querySelector(
                     '[data-qa="message_timestamp"], .c-timestamp'
-                )?.innerText.trim() || null;
+                );
+                const time = timeElem ? timeElem.innerText.trim() : null;
                 const linkElem = item.querySelector('a[href*="/archives/"][href*="/p"]') || item.querySelector('a.c-timestamp');
                 const href = linkElem ? linkElem.getAttribute('href') : null;
 
-                if (text && !text.startsWith("새 항목") && text !== "날짜로 이동") {{
-                    replies.push({{
+                // Attachment / File metadata detection
+                const fileContainer = item.querySelector('[data-qa="file_container"], [data-qa="file_card"], .c-file_container, .c-file_image, [data-qa="files_container"]') || text.includes('파일');
+                const fileElems = Array.from(item.querySelectorAll('[data-qa="file_title"], .c-file__title, .c-file_name, a[download], a[href*=".pdf"], a[href*=".png"], a[href*=".jpg"]'));
+                let fileNames = fileElems.map(e => (e.innerText || '').trim()).filter(Boolean);
+                
+                let hasFiles = !!fileContainer || fileNames.length > 0;
+                let fileCount = fileNames.length;
+                const fileCountMatch = text.match(/(\d+)개\s*파일/);
+                if (fileCountMatch) {
+                    hasFiles = true;
+                    fileCount = Math.max(fileCount, parseInt(fileCountMatch[1]));
+                }
+
+                if (text && !text.startsWith("새 항목") && text !== "날짜로 이동" && !text.endsWith("댓글 남기")) {
+                    replies.push({
                         idx: i,
                         author: sender,
                         timestamp_raw: time,
                         text: text,
-                        href: href
-                    }});
-                }}
-            }}
+                        href: href,
+                        has_attachments: hasFiles,
+                        attachment_count: fileCount,
+                        attachment_names: fileNames
+                    });
+                }
+            }
 
-            return {{
+            return {
                 found: true,
                 total_items: items.length,
                 messages: replies
-            }};
-        }})()
+            };
+        })()
         """
         raw_res = await self.cdp.evaluate_js(js_thread) or {}
         raw_msgs = raw_res.get("messages", [])
 
-        # thread root(첫 번째 메시지)는 제외하고 실제 reply(인덱스 1 이후)만 분리 추출
-        extracted_replies: list[SlackContextMessage] = []
-        reply_slice = raw_msgs[1 : 1 + max_replies] if len(raw_msgs) > 1 else []
+        # Deduplicate and filter pure message/attachment items
+        seen_fps: set[str] = set()
+        extracted_all: list[SlackContextMessage] = []
 
-        for m in reply_slice:
-            fp = hashlib.md5(
-                f"{m.get('author')}|{m.get('timestamp_raw')}|{m.get('text')}".encode("utf-8")
-            ).hexdigest()[:16]
-            extracted_replies.append(
+        for m in raw_msgs:
+            author = m.get("author")
+            time_raw = m.get("timestamp_raw")
+            text = m.get("text", "")
+            has_att = bool(m.get("has_attachments", False))
+            att_cnt = int(m.get("attachment_count", 0))
+            att_names = m.get("attachment_names", [])
+
+            if not text and not has_att:
+                continue
+            if "댓글" in text and not time_raw and not has_att:
+                continue
+            if "외부 사용자가" in text and "팀에 속해 있습니다" in text:
+                continue
+
+            fp = hashlib.md5(f"{author}|{time_raw}|{text}|{has_att}".encode("utf-8")).hexdigest()[:16]
+            if fp in seen_fps:
+                continue
+            seen_fps.add(fp)
+
+            extracted_all.append(
                 SlackContextMessage(
-                    idx=m.get("idx", 0),
-                    author=m.get("author"),
-                    timestamp_raw=m.get("timestamp_raw"),
-                    text=m.get("text", ""),
+                    idx=len(extracted_all) + 1,
+                    author=author,
+                    timestamp_raw=time_raw,
+                    text=text,
                     result_url=m.get("href"),
                     message_fingerprint=fp,
                     is_target=False,
                     has_thread=False,
                     reply_count=0,
                     thread_identifier_candidate=target_ts,
+                    has_attachments=has_att,
+                    attachment_count=att_cnt,
+                    attachment_names=att_names,
                 )
             )
 
+        # thread root(첫 번째 메시지)는 제외하고 실제 reply(인덱스 1 이후)만 반환
+        extracted_replies: list[SlackContextMessage] = (
+            extracted_all[1 : 1 + max_replies] if len(extracted_all) > 1 else []
+        )
         return extracted_replies
 
     async def collect_evidence_package(
@@ -307,14 +433,13 @@ class SlackEvidenceCollector:
         """
         검색어에 대해 상위 max_results건을 순차 조사하여 단일 Evidence Package로 반환합니다.
         
-        흐름:
-        1. 상태 사전 검증 및 시작 전 Foreground 확인
-        2. 사용자 초기 뷰 상태 스냅샷 (1회)
-        3. 검색 실행 및 상위 N개 메타데이터 메모리 스냅샷
-        4. 순차 조사 루프 (Main Renderer 직접 이동, DOM 파싱, 스레드 추출)
-           - 루프 도중 Foreground 감지 시 즉시 중단 및 Background 복귀 대기
-        5. 작업 종료 시 원래 상태 정밀 복원 (1회)
-        6. 참조 보존 글로벌 중복 제거 및 Evidence Package 생성
+        Hidden Mode:
+        - Adopt된 은닉 보조 창(Secondary Window)을 통해 독립 조사
+        - 사용자 Main Window 상태 스냅샷 및 복원 0회 (Zero Modification)
+        - Main Target Fallback 절대 금지 (Fail Closed)
+        
+        Legacy Mode:
+        - Main Renderer를 직접 전환하며 상태 저장/복원 수행
         """
         session_id = f"ev_{int(time.time())}_{uuid.uuid4().hex[:8]}"
         total_start = time.time()
@@ -326,19 +451,44 @@ class SlackEvidenceCollector:
                 f"Slack이 Agent Mode로 준비되지 않았습니다. (현재 상태: {status.status.value})"
             )
 
-        if check_user_interference and is_slack_foreground():
-            logger.warning("조사 시작 전 사용자가 Slack을 활성화(Foreground)했습니다.")
-            return SlackEvidencePackage(
-                evidence_session_id=session_id,
-                query=query,
-                user_state_snapshots=1,
-                user_state_restore_attempts=0,
-                user_interrupted=True,
-                interruption_reason="user_opened_slack",
-                restore_pending=False,
-                state_restore_attempted=False,
-                state_restore_succeeded=False,
+        # Hidden Mode 검증 및 준비
+        adopted_target_id = None
+        if self.mode == "hidden":
+            from pesu_agent.lifecycle.slack_agent_window import (
+                SlackAgentWindowState,
+                SlackAgentWindowManager,
             )
+            cdp_port = getattr(self.cdp, "port", 9222)
+            wm = self.agent_window_manager or SlackAgentWindowManager(cdp_port=cdp_port)
+            state, adopted, msg = wm.get_state()
+
+            if state == SlackAgentWindowState.AGENT_WINDOW_ADOPTED_VISIBLE:
+                wm.hide_agent_window()
+                state, adopted, msg = wm.get_state()
+
+            if state != SlackAgentWindowState.AGENT_WINDOW_ADOPTED_HIDDEN or not adopted:
+                raise SlackTargetNotFoundError(
+                    f"Hidden Mode 실행 불가: {msg} (State: {state.value}).\n"
+                    f"안내: 'python scripts/manage_agent_slack_window.py --adopt'로 보조 창을 먼저 등록해주세요."
+                )
+
+            adopted_target_id = adopted.cdp_target_id
+            self.cdp.target_id = adopted_target_id
+            check_user_interference = False
+        else:
+            if check_user_interference and is_slack_foreground():
+                logger.warning("조사 시작 전 사용자가 Slack을 활성화(Foreground)했습니다.")
+                return SlackEvidencePackage(
+                    evidence_session_id=session_id,
+                    query=query,
+                    user_state_snapshots=0,
+                    user_state_restore_attempts=0,
+                    user_interrupted=True,
+                    interruption_reason="user_opened_slack",
+                    restore_pending=False,
+                    state_restore_attempted=False,
+                    state_restore_succeeded=False,
+                )
 
         evidence_items: list[SlackEvidenceItem] = []
         user_interrupted = False
@@ -350,17 +500,20 @@ class SlackEvidenceCollector:
         before_state: Optional[SlackViewState] = None
         restoration_metrics: Optional[SlackRestorationResult] = None
         state_restore_attempted = False
-        state_restore_succeeded = False
+        state_restore_succeeded = (self.mode == "hidden")
+        user_state_snapshots = 0
         user_state_restore_attempts = 0
         thread_roots_found = 0
         thread_replies_collected = 0
 
         async with self.cdp:
-            # 2. 원래 Slack 상태 스냅샷 저장 (1회)
-            before_state = await self.context_collector.capture_view_state()
-            logger.info(
-                f"Initial Slack View State Saved: URL={before_state.url}, Conv={before_state.conversation_name}"
-            )
+            # 2. Legacy Mode에서만 원래 Slack 상태 스냅샷 저장 (1회)
+            if self.mode != "hidden":
+                before_state = await self.context_collector.capture_view_state()
+                user_state_snapshots = 1
+                logger.info(
+                    f"Initial Slack View State Saved: URL={before_state.url}, Conv={before_state.conversation_name}"
+                )
 
             # 3. 검색 실행
             search_start = time.time()
@@ -381,7 +534,7 @@ class SlackEvidenceCollector:
             # 4. 순차 조사 루프
             inv_start = time.time()
             team_id = "T32QA15GC"
-            if before_state.url:
+            if before_state and before_state.url:
                 t_match = re.search(r"/client/([A-Z0-9]+)", before_state.url)
                 if t_match:
                     team_id = t_match.group(1)
@@ -391,6 +544,17 @@ class SlackEvidenceCollector:
                 logger.info(
                     f"Investigating Result [{idx + 1}/{len(candidates)}]: Channel={cand.channel_name}, Permalink={cand.result_url}"
                 )
+
+                # Hidden Mode 타깃 생존 상태 실시간 검증 (Target Loss Fail Closed)
+                if self.mode == "hidden" and adopted_target_id:
+                    targets = self.cdp.get_cdp_targets()
+                    if not any(t.get("id") == adopted_target_id for t in targets):
+                        logger.critical(
+                            f"🚨 [CRITICAL] Agent Target({adopted_target_id}) 유실 감지됨. Main Target Fallback 절대 금지 정책에 따라 즉시 조사를 중단합니다."
+                        )
+                        user_interrupted = True
+                        interruption_reason = "agent_target_lost"
+                        break
 
                 # 순차 조사 중 사용자 활성화(Foreground) 확인
                 if check_user_interference and is_slack_foreground():
@@ -493,10 +657,25 @@ class SlackEvidenceCollector:
                                     item_key: itemKey
                                 }};
 
-                                const cleanTargetTs = (targetTs || '').replace(/[^0-9]/g, '');
-                                const cleanHref = (href || '').replace(/[^0-9]/g, '');
-                                const cleanKey = (itemKey || '').replace(/[^0-9]/g, '');
-                                const tsMatch = (cleanHref && cleanHref.includes(cleanTargetTs)) || (cleanKey && cleanKey.includes(cleanTargetTs));
+                                function normalizeSlackMessageTs(val) {{
+                                    if (!val) return '';
+                                    const s = String(val);
+                                    const m = s.match(/\\/archives\\/[^\\/]+\\/p(\\d+)/);
+                                    if (m) return m[1];
+                                    return s.replace(/[^0-9]/g, '');
+                                }}
+
+                                const cleanTargetTs = normalizeSlackMessageTs(targetTs);
+                                const cleanHref = normalizeSlackMessageTs(href);
+                                const cleanKey = normalizeSlackMessageTs(itemKey);
+
+                                // data-ts, id, permalink href 등 확인된 식별자 필드 간 exact equality 비교
+                                const tsMatch = Boolean(cleanTargetTs && (
+                                    cleanHref === cleanTargetTs || 
+                                    cleanKey === cleanTargetTs || 
+                                    cleanHref.endsWith(cleanTargetTs) || 
+                                    cleanKey.endsWith(cleanTargetTs)
+                                ));
 
                                 const normText = (text || '').replace(/\\s+/g, ' ');
                                 const normSnippet = (targetTextSnippet || '').replace(/\\s+/g, ' ');
@@ -610,27 +789,41 @@ class SlackEvidenceCollector:
                                 restore_pending = True
                                 break
 
-                            # CDP/DOM 방식으로 reply bar 클릭하여 스레드 flexpane 오픈
-                            js_open_thread = f"""
-                            (() => {{
-                                const cleanTargetTs = {json.dumps(raw_ts)}.replace(/[^0-9]/g, '');
-                                const items = Array.from(document.querySelectorAll('.c-virtual_list__item, [data-qa="virtual-list-item"], [data-qa="message_container"], [role="listitem"]'));
-                                for (const item of items) {{
-                                    const replyBar = item.querySelector('[data-qa="reply_count"], .c-message__reply_count, [data-qa="reply_bar"], button[aria-label*="댓글"], button[aria-label*="replies"], button[aria-label*="reply"], button[data-qa="reply_bar"]');
-                                    if (replyBar) {{
-                                        const href = (item.querySelector('a[href*="/archives/"]')?.getAttribute('href') || '').replace(/[^0-9]/g, '');
-                                        const itemKey = (item.getAttribute('data-item-key') || item.id || '').replace(/[^0-9]/g, '');
-                                        if ((cleanTargetTs && (href.includes(cleanTargetTs) || itemKey.includes(cleanTargetTs))) || !cleanTargetTs) {{
-                                            replyBar.click();
-                                            return {{ clicked: true }};
+                            # Read-Only 방식으로 스레드 오픈 및 Composer Neutralization
+                            if hasattr(self.cdp, "open_thread_read_only"):
+                                await self.cdp.open_thread_read_only(raw_ts=raw_ts)
+                            else:
+                                js_open_thread = f"""
+                                (() => {{
+                                    function normalizeSlackMessageTs(val) {{
+                                        if (!val) return '';
+                                        const s = String(val);
+                                        const m = s.match(/\\/archives\\/[^\\/]+\\/p(\\d+)/);
+                                        if (m) return m[1];
+                                        return s.replace(/[^0-9]/g, '');
+                                    }}
+
+                                    const cleanTargetTs = normalizeSlackMessageTs({json.dumps(raw_ts)});
+                                    const items = Array.from(document.querySelectorAll('.c-virtual_list__item, [data-qa="virtual-list-item"], [data-qa="message_container"], [role="listitem"]'));
+                                    for (const item of items) {{
+                                        const replyBar = item.querySelector('[data-qa="reply_count"], .c-message__reply_count, [data-qa="reply_bar"], button[aria-label*="댓글"], button[aria-label*="replies"], button[aria-label*="reply"], button[data-qa="reply_bar"]');
+                                        if (replyBar) {{
+                                            const href = item.querySelector('a[href*="/archives/"]')?.getAttribute('href') || '';
+                                            const itemKey = item.getAttribute('data-item-key') || item.id || '';
+                                            const cleanHref = normalizeSlackMessageTs(href);
+                                            const cleanKey = normalizeSlackMessageTs(itemKey);
+                                            const isMatch = !cleanTargetTs || cleanHref === cleanTargetTs || cleanKey === cleanTargetTs || cleanHref.endsWith(cleanTargetTs) || cleanKey.endsWith(cleanTargetTs);
+                                            if (isMatch) {{
+                                                replyBar.click();
+                                                return {{ clicked: true }};
+                                            }}
                                         }}
                                     }}
-                                }}
-                                return {{ clicked: false }};
-                            }})()
-                            """
-                            await self.cdp.evaluate_js(js_open_thread)
-                            await asyncio.sleep(2.0)
+                                    return {{ clicked: false }};
+                                }})()
+                                """
+                                await self.cdp.evaluate_js(js_open_thread)
+                            await asyncio.sleep(1.0)
 
                             # Foreground Guard 재확인
                             if check_user_interference and is_slack_foreground():
@@ -720,14 +913,7 @@ class SlackEvidenceCollector:
                             before_state
                         )
                         restore_elapsed = time.time() - restore_start
-                        state_restore_succeeded = (
-                            restoration_metrics.url_restored
-                            and restoration_metrics.conversation_restored
-                            and (
-                                restoration_metrics.scroll_restored
-                                or restoration_metrics.viewport_restored
-                            )
-                        )
+                        state_restore_succeeded = restoration_metrics.is_successful
                         restore_pending = not state_restore_succeeded
                     else:
                         logger.warning(
@@ -745,14 +931,7 @@ class SlackEvidenceCollector:
                         before_state
                     )
                     restore_elapsed = time.time() - restore_start
-                    state_restore_succeeded = (
-                        restoration_metrics.url_restored
-                        and restoration_metrics.conversation_restored
-                        and (
-                            restoration_metrics.scroll_restored
-                            or restoration_metrics.viewport_restored
-                        )
-                    )
+                    state_restore_succeeded = restoration_metrics.is_successful
                     restore_pending = False
 
         # 7. 참조 보존 글로벌 중복 제거 (Reference-Preserving Global Deduplication)
@@ -806,10 +985,13 @@ class SlackEvidenceCollector:
         failed_ev_count = len(evidence_items) - successful_ev_count
         total_elapsed = time.time() - total_start
 
+        audit_report = getattr(self.cdp, "audit_tracker", None)
+        write_rep = audit_report.get_report() if audit_report else None
+
         return SlackEvidencePackage(
             evidence_session_id=session_id,
             query=query,
-            user_state_snapshots=1,
+            user_state_snapshots=user_state_snapshots,
             user_state_restore_attempts=user_state_restore_attempts,
             result_metadata_snapshotted_count=result_metadata_snapshotted_count,
             results_investigated=len(evidence_items),
@@ -825,6 +1007,13 @@ class SlackEvidenceCollector:
             failed_evidence_count=failed_ev_count,
             duplicate_evidence_removed=duplicate_removed_count,
             unique_total_messages_count=len(unique_messages_list),
+            write_action_requested=write_rep.write_action_requested if write_rep else 0,
+            write_action_blocked=write_rep.write_action_blocked if write_rep else 0,
+            prohibited_low_level_action_attempted=write_rep.prohibited_low_level_action_attempted if write_rep else 0,
+            main_composer_interaction_detected=write_rep.main_composer_interaction_detected if write_rep else 0,
+            thread_composer_interaction_detected=write_rep.thread_composer_interaction_detected if write_rep else 0,
+            send_control_interaction_detected=write_rep.send_control_interaction_detected if write_rep else 0,
+            unexpected_slack_write_observed=write_rep.unexpected_slack_write_observed if write_rep else False,
             unique_messages=unique_messages_list,
             evidence_items=evidence_items,
             user_interrupted=user_interrupted,

@@ -42,26 +42,37 @@ async def test_search_blocked_when_not_agent_ready():
 @pytest.mark.anyio
 async def test_open_search_ui_success():
     """2. 방어적 다중 셀렉터로 검색 UI 열기 성공."""
+    mock_lifecycle = MagicMock(spec=SlackLifecycleManager)
+    mock_lifecycle.get_status.return_value = SlackStatusResult(
+        status=SlackAgentModeStatus.AGENT_READY,
+        message="Ready",
+        cdp_port=9222,
+    )
     mock_cdp = MagicMock(spec=SlackCdpAdapter)
-    mock_cdp.evaluate_js = AsyncMock(return_value={"ok": True, "via": "click_btn", "qa": "top_nav_search"})
+    mock_cdp.open_search_ui = AsyncMock(return_value=True)
 
-    searcher = SlackSearch(cdp_adapter=mock_cdp)
+    searcher = SlackSearch(cdp_adapter=mock_cdp, lifecycle_manager=mock_lifecycle)
     res = await searcher.open_search_ui()
     assert res is True
-    mock_cdp.evaluate_js.assert_called_once()
+    mock_cdp.open_search_ui.assert_awaited_once()
 
 
 @pytest.mark.anyio
 async def test_enter_query_and_search_execution():
-    """3. 검색어 입력 및 CDP Enter 키 디스패치 실행."""
+    """3. 검색어 입력 및 검증된 Global Search 실행."""
+    mock_lifecycle = MagicMock(spec=SlackLifecycleManager)
+    mock_lifecycle.get_status.return_value = SlackStatusResult(
+        status=SlackAgentModeStatus.AGENT_READY,
+        message="Ready",
+        cdp_port=9222,
+    )
     mock_cdp = MagicMock(spec=SlackCdpAdapter)
-    mock_cdp.evaluate_js = AsyncMock(return_value={"ok": True, "value": "영업지원", "qa": "top_nav_search__input"})
-    mock_cdp.dispatch_key_event = AsyncMock()
+    mock_cdp.execute_verified_global_search = AsyncMock(return_value={"ok": True, "value": "영업지원", "type": "VERIFIED_GLOBAL_SEARCH_INPUT", "pre_dispatch_verified": True, "url_fallback_used": False, "generic_editable_used": False})
 
-    searcher = SlackSearch(cdp_adapter=mock_cdp)
+    searcher = SlackSearch(cdp_adapter=mock_cdp, lifecycle_manager=mock_lifecycle)
     res = await searcher.enter_query_and_search("영업지원")
     assert res.get("ok") is True
-    assert mock_cdp.dispatch_key_event.call_count == 2  # rawKeyDown + keyUp
+    mock_cdp.execute_verified_global_search.assert_awaited_once_with(query="영업지원", timeout_sec=4.0)
 
 
 @pytest.mark.anyio
@@ -114,6 +125,8 @@ async def test_parse_current_visible_results_with_channel_id():
 @pytest.mark.anyio
 async def test_search_freshness_guard_and_session_id():
     """5. Freshness Guard, Session ID, 쿼리 검증 확인."""
+    from pesu_agent.search.slack_search_resolver import SlackSearchResultResolution
+
     mock_lifecycle = MagicMock(spec=SlackLifecycleManager)
     mock_lifecycle.get_status.return_value = SlackStatusResult(
         status=SlackAgentModeStatus.AGENT_READY,
@@ -125,20 +138,25 @@ async def test_search_freshness_guard_and_session_id():
     mock_cdp.__aenter__ = AsyncMock(return_value=mock_cdp)
     mock_cdp.__aexit__ = AsyncMock(return_value=None)
     mock_cdp.evaluate_js = AsyncMock(return_value={"ready": True})
-    mock_cdp.dispatch_key_event = AsyncMock()
 
     searcher = SlackSearch(cdp_adapter=mock_cdp, lifecycle_manager=mock_lifecycle)
+
+    sample_res = [
+        SlackSearchResult(
+            result_index=1, query="수임", author="A", timestamp_raw="1:00", text="수임 완료",
+            channel_name="noti", result_url="url1", message_fingerprint="fp1"
+        )
+    ]
+    mock_resolution = SlackSearchResultResolution(
+        surface_category="RESULTS",
+        total_result_count=1,
+    )
 
     with patch.object(searcher, "open_search_ui", new_callable=AsyncMock, return_value=True), \
          patch.object(searcher, "enter_query_and_search", new_callable=AsyncMock, return_value={"ok": True}), \
          patch.object(searcher, "get_observed_query_state", new_callable=AsyncMock, return_value=("수임", False)), \
          patch.object(searcher, "scroll_search_results", new_callable=AsyncMock, return_value=False), \
-         patch.object(searcher, "parse_current_visible_results", new_callable=AsyncMock, return_value=[
-             SlackSearchResult(
-                 result_index=1, query="수임", author="A", timestamp_raw="1:00", text="수임 완료",
-                 channel_name="noti", result_url="url1", message_fingerprint="fp1"
-             )
-         ]):
+         patch.object(searcher, "resolve_search_results_with_readiness", new_callable=AsyncMock, return_value=(mock_resolution, sample_res)):
 
         session: SlackSearchSession = await searcher.search(query="수임", max_scrolls=0)
         assert session.requested_query == "수임"
@@ -153,6 +171,8 @@ async def test_search_freshness_guard_and_session_id():
 @pytest.mark.anyio
 async def test_search_zero_results():
     """6. 검색 결과가 0개인 경우 정상 처리."""
+    from pesu_agent.search.slack_search_resolver import SlackSearchResultResolution
+
     mock_lifecycle = MagicMock(spec=SlackLifecycleManager)
     mock_lifecycle.get_status.return_value = SlackStatusResult(
         status=SlackAgentModeStatus.AGENT_READY,
@@ -164,14 +184,18 @@ async def test_search_zero_results():
     mock_cdp.__aenter__ = AsyncMock(return_value=mock_cdp)
     mock_cdp.__aexit__ = AsyncMock(return_value=None)
     mock_cdp.evaluate_js = AsyncMock(return_value={"ready": True})
-    mock_cdp.dispatch_key_event = AsyncMock()
 
     searcher = SlackSearch(cdp_adapter=mock_cdp, lifecycle_manager=mock_lifecycle)
+    mock_resolution = SlackSearchResultResolution(
+        surface_category="EMPTY_RESULTS",
+        total_result_count=0,
+    )
+
     with patch.object(searcher, "open_search_ui", new_callable=AsyncMock, return_value=True), \
          patch.object(searcher, "enter_query_and_search", new_callable=AsyncMock, return_value={"ok": True}), \
          patch.object(searcher, "get_observed_query_state", new_callable=AsyncMock, return_value=("없는검색어", True)), \
          patch.object(searcher, "scroll_search_results", new_callable=AsyncMock, return_value=False), \
-         patch.object(searcher, "parse_current_visible_results", new_callable=AsyncMock, return_value=[]):
+         patch.object(searcher, "resolve_search_results_with_readiness", new_callable=AsyncMock, return_value=(mock_resolution, [])):
 
         session = await searcher.search(query="없는검색어", max_scrolls=0)
         assert session.result_count == 0
