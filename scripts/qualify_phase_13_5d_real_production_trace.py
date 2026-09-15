@@ -430,6 +430,18 @@ async def run_single_case(
     # If dry-run, do not make real LLM provider calls
     if is_dry_run:
         logger.info(f"🧪 [DRY_RUN_MODE] Bypassing provider calls for {case_id}")
+        dummy_graph = InvestigationStateGraph(question=question)
+        dummy_ans = GroundedWorkItemAnswerBuilder().build_answer(
+            question=question,
+            graph=dummy_graph,
+            work_items=[],
+            traceability_chains={},
+        )
+        dummy_ui = present_grounded_investigation_result(
+            investigation_id=f"dry_{case_id.lower()}",
+            payload=dummy_ans,
+            stop_reason="DRY_RUN",
+        )
         return {
             "case_id": case_id,
             "question": question,
@@ -440,6 +452,8 @@ async def run_single_case(
             "evidence_package_items": len(evidence_package.evidence_items),
             "executed_queries": [q["compiled_query"] for q in exact_queries],
             "traceability_chains": {},
+            "grounded_answer": dummy_ans.model_dump(),
+            "ui_presentation": dummy_ui,
             "latency_seconds": retrieval_latency,
             "error_message": None,
         }
@@ -466,7 +480,11 @@ async def run_single_case(
     )
 
     # Step 4: Deterministic WinForms Presentation Formatting
-    ui_presentation = present_grounded_investigation_result(grounded_answer)
+    ui_presentation = present_grounded_investigation_result(
+        investigation_id=f"live_{case_id.lower()}",
+        payload=grounded_answer,
+        stop_reason=trace_result.stop_reason,
+    )
 
     total_latency = time.perf_counter() - t0
 
