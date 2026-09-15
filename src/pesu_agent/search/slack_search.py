@@ -30,9 +30,17 @@ from pesu_agent.adapters.slack_cdp import (
     SlackCdpError,
     SlackNotReadyError,
 )
+from pesu_agent.lifecycle.slack_agent_window import (
+    SlackAgentWindowManager,
+    SlackAgentWindowState,
+)
 from pesu_agent.lifecycle.slack_lifecycle import (
     SlackAgentModeStatus,
     SlackLifecycleManager,
+)
+from pesu_agent.security.read_only_barrier import (
+    SlackSearchInputIdentityChangedError,
+    SlackVerifiedSearchInputNotFoundError,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,12 +50,33 @@ class SlackSearchStaleError(SlackCdpError):
     """이전 검색 결과가 갱신되지 않고 남아있을 때 발생하는 예외."""
 
 
+class SlackResultReadinessTimeoutError(SlackCdpError):
+    """Result readiness gate timeout: surface remained in transient LOADING/UNKNOWN state past deadline.
+
+    This is semantically distinct from valid EMPTY_RESULTS.
+    Downstream must NOT treat this as 'search returned 0 results'.
+    """
+
+    def __init__(self, failure_code: str, surface_category: str, message: str = "") -> None:
+        self.failure_code = failure_code
+        self.surface_category = surface_category
+        super().__init__(
+            message or f"Result readiness timeout ({failure_code}): surface={surface_category}"
+        )
+
+
 class SlackSearchResult(BaseModel):
     """단일 Slack 검색 결과 항목."""
 
     result_index: int = Field(description="검색 결과 내 인덱스 (1-based)")
     query: str = Field(description="검색어")
     author: Optional[str] = Field(default=None, description="메시지 작성자")
+    author_id: Optional[str] = Field(
+        default=None,
+        description="Canonical Slack author member ID (e.g. U...)",
+        exclude=True,
+        repr=False,
+    )
     timestamp_raw: Optional[str] = Field(default=None, description="원시 타임스탬프 텍스트")
     text: str = Field(description="메시지 본문 요약 또는 전문")
     channel_name: Optional[str] = Field(default=None, description="메시지가 속한 실제 채널/DM명 (추측 불가 시 null)")
@@ -57,6 +86,10 @@ class SlackSearchResult(BaseModel):
     links: list[str] = Field(default_factory=list, description="포함된 URL 링크 목록")
     uia_message_id: Optional[str] = Field(default=None, description="UIA/DOM 메시지 고유 식별자 후보")
     result_url: Optional[str] = Field(default=None, description="검색 결과 퍼머링크 (archives URL)")
+    gold_message_ts: Optional[str] = Field(default=None, description="Canonical Slack API message_ts (e.g. 1724738400.123456)")
+    gold_thread_ts: Optional[str] = Field(default=None, description="Canonical Slack API thread_ts if thread reply")
+    has_thread: bool = Field(default=False, description="스레드 댓글 존재 여부")
+    reply_count: int = Field(default=0, description="스레드 댓글 수")
     message_fingerprint: str = Field(description="중복 제거용 로컬 세션 해시")
 
 
@@ -102,16 +135,18 @@ class SlackSearchSession(BaseModel):
 
 
 class SlackSearch:
-    """CDP 기반 백그라운드 Slack 검색 실행기 (Freshness Guard 포함)."""
+    """CDP 기반 백그라운드 Slack 검색 실행기 (Freshness Guard 및 Hidden Mount Bridge 포함)."""
 
     def __init__(
         self,
         cdp_adapter: Optional[SlackCdpAdapter] = None,
         lifecycle_manager: Optional[SlackLifecycleManager] = None,
+        agent_window_manager: Optional[SlackAgentWindowManager] = None,
         cdp_port: int = 9222,
     ):
         self.lifecycle = lifecycle_manager or SlackLifecycleManager(cdp_port=cdp_port)
         self.cdp = cdp_adapter or SlackCdpAdapter(port=cdp_port, lifecycle_manager=self.lifecycle)
+        self.agent_window_manager = agent_window_manager
         self._last_result_signature: Optional[str] = None
 
     @staticmethod
@@ -144,264 +179,170 @@ class SlackSearch:
         links = list(set(re.findall(r"https?://[^\s<>\"']+", text)))
         return mentions, links
 
-    async def open_search_ui(self, timeout_sec: float = 8.0) -> bool:
-        """방어적 다중 셀렉터, CDP 가상 마우스 클릭 및 폴링으로 Slack 전역 검색창을 활성화합니다."""
-        js_find_rect = """
-        (() => {
-            // 1. 이미 입력창이 존재하는지 확인
-            const input = document.querySelector('input[data-qa="top_nav_search__input"]') ||
-                          document.querySelector('input[data-qa="search_input"]') ||
-                          document.querySelector('.p-top_nav__search input') ||
-                          document.querySelector('[data-qa="search_input_box"]') ||
-                          document.querySelector('[data-qa="focusable_search_input"]') ||
-                          document.querySelector('.c-search__input_box .ql-editor');
-            if (input) {
-                return { ready: true, via: 'existing_input' };
-            }
+    def _ensure_agent_ready(self) -> None:
+        """Slack이 Agent Mode로 준비되었는지 검증하고, 미준비/Main Window Only 시 Fail-Closed 예외를 발생시킵니다."""
+        status = self.lifecycle.get_status()
+        if status.status != SlackAgentModeStatus.AGENT_READY:
+            raise SlackNotReadyError(
+                f"Slack이 Agent Mode로 준비되지 않았습니다. (현재 상태: {status.status.value})\n"
+                f"안내: {status.message}"
+            )
 
-            // 2. 검색 버튼이 로드되었으면 Bounding Rect 반환 및 클릭 시도
-            const btn = document.querySelector('[data-qa="top_nav_search"]') ||
-                        document.querySelector('button[aria-label*="검색"]') ||
-                        document.querySelector('button[aria-label*="Search"]') ||
-                        document.querySelector('.p-top_nav__search');
-            if (btn) {
-                const r = btn.getBoundingClientRect();
-                return {
-                    ready: false,
-                    rect: { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) },
-                    qa: btn.getAttribute('data-qa')
-                };
-            }
+    async def open_search_ui(self, timeout_sec: float = 6.0) -> bool:
+        """안전한 전역 검색창 활성화 (Agent Mode Readiness 검증 후 실행)."""
+        self._ensure_agent_ready()
+        if hasattr(self.cdp, "open_search_ui"):
+            return await self.cdp.open_search_ui(timeout_sec=timeout_sec)
+        return True
 
-            return { ready: false };
-        })()
+    async def execute_hidden_verified_search(self, query: str, timeout_sec: float = 8.0) -> dict[str, Any]:
+        """Hidden Agent Window 대상 Non-Activating Mount Bridge를 통해 전역 검색을 수행합니다.
+        
+        보안 및 생명주기 흐름:
+        1. Agent Window 상태 검증 (Adopted & Hidden)
+        2. Fast path: 이미 Search UI가 마운트되어 있다면 브리지 생략
+        3. Hidden mousedown 1회 디스패치 (_dispatch_verified_global_search_activation_mousedown)
+        4. try:
+               show_agent_window_no_activate() (SW_SHOWNOACTIVATE)
+               _wait_for_verified_global_search_ui() (25ms bounded polling)
+           finally:
+               hide_agent_window() (SW_HIDE, 어떠한 실패 시에도 즉시 재은닉 보장)
+        5. 타깃 연속성 검증 (same HWND/PID/Target)
+        6. _set_and_submit_verified_global_search_on_open_ui(query) (모델 세터 + 네이티브 서브밋)
         """
-        start_t = asyncio.get_event_loop().time()
-        while asyncio.get_event_loop().time() - start_t < timeout_sec:
-            res = await self.cdp.evaluate_js(js_find_rect)
-            if res:
-                if res.get("ready") or res.get("ok"):
-                    logger.info(f"검색 UI 활성화 완료: {res}")
-                    return True
-                if res.get("rect"):
-                    # CDP 가상 마우스 클릭 디스패치 (OS 마우스 비침범)
-                    rx, ry = res["rect"]["x"], res["rect"]["y"]
-                    await self.cdp.dispatch_mouse_event(type_="mousePressed", x=rx, y=ry, button="left", click_count=1)
-                    await self.cdp.dispatch_mouse_event(type_="mouseReleased", x=rx, y=ry, button="left", click_count=1)
-                    logger.info(f"검색 버튼 CDP 가상 마우스 클릭 완료 ({rx}, {ry})")
-                    await asyncio.sleep(0.5)
-                    return True
-            await asyncio.sleep(0.5)
+        self._ensure_agent_ready()
 
-        logger.warning("검색 UI 트리거 요소를 찾지 못했습니다.")
-        return False
+        if self.agent_window_manager:
+            state, adopted, msg = self.agent_window_manager.get_state()
+            if state == SlackAgentWindowState.AGENT_WINDOW_ADOPTED_HIDDEN and adopted:
+                hwnd = adopted.hwnd
+                pid = adopted.pid
+
+                # Fast path: Search UI already mounted
+                is_mounted = await self.cdp._wait_for_verified_global_search_ui(
+                    timeout_sec=0.05, poll_interval_sec=0.01
+                )
+                if is_mounted:
+                    logger.debug("Search UI already mounted in hidden window. Proceeding to set & submit.")
+                    return await self.cdp._set_and_submit_verified_global_search_on_open_ui(
+                        query=query, timeout_sec=timeout_sec
+                    )
+
+                fg_before = self.agent_window_manager.get_foreground_window()
+
+                # Step 1: Dispatch exact mousedown while hidden (1x)
+                dis_res = await self.cdp._dispatch_verified_global_search_activation_mousedown()
+                if not dis_res or not dis_res.get("ok"):
+                    raise SlackSearchInputIdentityChangedError(
+                        f"Hidden Search activation mousedown 실패: {dis_res}"
+                    )
+
+                # Step 2: Brief Non-Activating Mount Bridge in try ... finally
+                try:
+                    show_ok, show_msg = self.agent_window_manager.show_agent_window_no_activate()
+                    if not show_ok:
+                        raise RuntimeError(f"SW_SHOWNOACTIVATE 실행 실패: {show_msg}")
+
+                    mounted = await self.cdp._wait_for_verified_global_search_ui(
+                        timeout_sec=min(timeout_sec, 4.0),
+                        poll_interval_sec=0.025,
+                    )
+                    if not mounted:
+                        raise SlackSearchInputIdentityChangedError(
+                            "SW_SHOWNOACTIVATE 브리지 중 Search UI 마운트 확인 실패 (timeout)."
+                        )
+                finally:
+                    # Step 3: 즉시 SW_HIDE로 재은닉 (Finally 보장)
+                    hide_ok, hide_msg = self.agent_window_manager.hide_agent_window()
+                    if not hide_ok:
+                        logger.warning(f"Search 브리지 후 SW_HIDE 재은닉 경고: {hide_msg}")
+
+                # Step 4: Post-bridge Foreground & Window Identity Verification (BEFORE query set & submit)
+                fg_after = self.agent_window_manager.get_foreground_window()
+                if fg_before and fg_after and fg_before != fg_after and fg_after == hwnd:
+                    raise SlackSearchInputIdentityChangedError(
+                        f"Foreground continuity failure: SW_SHOWNOACTIVATE stole foreground focus (HWND {fg_after} == Agent HWND {hwnd})"
+                    )
+
+                state_after, adopted_after, _ = self.agent_window_manager.get_state()
+                if not adopted_after or adopted_after.hwnd != hwnd or adopted_after.pid != pid:
+                    raise SlackSearchInputIdentityChangedError(
+                        f"Search 브리지 후 윈도우 식별자 불일치: HWND {hwnd} -> {getattr(adopted_after, 'hwnd', None)}"
+                    )
+
+                # Step 5: Query Setter + Native Submit on open UI
+                return await self.cdp._set_and_submit_verified_global_search_on_open_ui(
+                    query=query, timeout_sec=timeout_sec
+                )
+
+        # Fallback to standard visible execute_verified_global_search
+        return await self.cdp.execute_verified_global_search(query=query, timeout_sec=timeout_sec)
 
     async def enter_query_and_search(self, query: str, timeout_sec: float = 4.0) -> dict[str, Any]:
-        """전역 검색창(Quill Rich Editor 또는 Input)을 대기/탐색하여 쿼리를 입력하고 Enter를 전송합니다."""
-        js_enter = f"""
-        (() => {{
-            // 1. Quill Rich Editor (Slack 신규 UI) 탐색
-            const editor = document.querySelector('[data-qa="search_input_box"] [contenteditable="true"]') ||
-                           document.querySelector('[data-qa="focusable_search_input"] [contenteditable="true"]') ||
-                           document.querySelector('.c-search__input_box .ql-editor') ||
-                           document.querySelector('[data-qa="texty_input"]');
-            if (editor) {{
-                editor.focus();
-                while (editor.firstChild) {{
-                    editor.removeChild(editor.firstChild);
-                }}
-                const p = document.createElement('p');
-                p.textContent = {json.dumps(query)};
-                editor.appendChild(p);
-                editor.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                editor.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                return {{
-                    ok: true,
-                    type: 'quill_editor',
-                    tag: editor.tagName,
-                    value: editor.innerText || editor.textContent
-                }};
-            }}
-
-            // 2. 표준 Input (Slack 클래식 UI) 탐색
-            let input = document.querySelector('input[data-qa="top_nav_search__input"]') ||
-                        document.querySelector('input[data-qa="search_input"]') ||
-                        document.querySelector('.p-top_nav__search input') ||
-                        document.querySelector('[data-qa="top_nav_search"] input') ||
-                        document.querySelector('input.c-search_autocomplete__input') ||
-                        document.querySelector('input[data-qa="query_input"]');
-
-            if (!input) {{
-                const candidates = Array.from(document.querySelectorAll('input[type="text"], input:not([type]), input[type="search"]'));
-                input = candidates.find(el => {{
-                    const qa = el.getAttribute('data-qa') || '';
-                    const isHidden = el.getAttribute('type') === 'hidden' || el.style.display === 'none';
-                    return !qa.includes('sidebar') && !qa.includes('filter') && !qa.includes('file') && !isHidden;
-                }});
-            }}
-
-            if (input) {{
-                input.focus();
-                input.value = '';
-                const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
-                if (nativeSetter) {{
-                    nativeSetter.call(input, {json.dumps(query)});
-                }} else {{
-                    input.value = {json.dumps(query)};
-                }}
-                input.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                input.dispatchEvent(new Event('change', {{ bubbles: true }}));
-                return {{
-                    ok: true,
-                    type: 'standard_input',
-                    qa: input.getAttribute('data-qa'),
-                    value: input.value,
-                    is_active: document.activeElement === input
-                }};
-            }}
-
-            return {{ ok: false, error: 'no_suitable_global_search_input' }};
-        }})()
-        """
-        start_t = asyncio.get_event_loop().time()
-        last_res = {"ok": False, "error": "no_suitable_global_search_input"}
-
-        while asyncio.get_event_loop().time() - start_t < timeout_sec:
-            res = await self.cdp.evaluate_js(js_enter)
-            if res and res.get("ok"):
-                last_res = res
-                break
-            await asyncio.sleep(0.4)
-
-        if not last_res.get("ok"):
-            logger.warning(f"DOM 검색어 입력 실패: {last_res}")
-            return last_res
-
-        # 3. CDP Input 가상 키 이벤트로 네이티브 수준의 Enter 전송
-        await self.cdp.dispatch_key_event(
-            type_="rawKeyDown", key="Enter", code="Enter", windows_virtual_key_code=13
-        )
-        await self.cdp.dispatch_key_event(
-            type_="keyUp", key="Enter", code="Enter", windows_virtual_key_code=13
-        )
-        logger.info(f"전역 검색창에 쿼리 {query!r} 입력 및 Enter 이벤트 디스패치 완료.")
-        return last_res
+        """검증된 전역 검색창(Quill Rich Editor)에 안전하게 쿼리를 설정하고 네이티브 커밋을 수행합니다."""
+        self._ensure_agent_ready()
+        return await self.execute_hidden_verified_search(query=query, timeout_sec=timeout_sec)
 
     async def parse_current_visible_results(self, query: str) -> list[SlackSearchResult]:
-        """현재 DOM에 노출된 검색 결과 항목들을 정밀 파싱합니다 (실제 channel_name/ID 추출)."""
-        js_parse = """
-        (() => {
-            const items = Array.from(document.querySelectorAll(
-                '[data-qa="search_result_item"], [data-qa="search_result_message"], .c-search_result_item, .c-search_result_message, .c-message_kit__message'
-            ));
+        """현재 DOM에 노출된 검색 결과 항목들을 검증된 Gold Identity 기반으로 정밀 파싱합니다."""
+        from pesu_agent.search.slack_search_resolver import SlackSearchResultResolver
 
-            const parsed = [];
-            items.forEach((item, idx) => {
-                // 1. Channel Name & ID Extraction
-                const chanLink = item.querySelector('a[href*="/archives/"]') ||
-                                 item.querySelector('[data-qa="search_result_channel_name"]') ||
-                                 item.querySelector('.c-search_result_message__channel') ||
-                                 item.querySelector('.c-search_result_item__header_channel');
-                
-                let chanName = null;
-                let chanId = null;
+        raw_payload = await self.cdp.evaluate_js(SlackSearchResultResolver.JS_RESOLVE_RESULTS)
+        resolution = SlackSearchResultResolver.resolve_from_dom_payload(raw_payload)
+        return SlackSearchResultResolver.convert_to_slack_search_results(query, resolution)
 
-                if (chanLink) {
-                    const linkText = chanLink.innerText.trim();
-                    const href = chanLink.getAttribute('href') || '';
-                    const match = href.match(/\\/archives\\/([A-Z0-9]+)/);
-                    if (match) {
-                        chanId = match[1];
-                    }
-                    // 링크 텍스트가 타임스탬프가 아닌 경우에만 채널명으로 채택
-                    if (linkText && !linkText.includes('오전') && !linkText.includes('오후') && !linkText.includes(':')) {
-                        chanName = linkText.replace(/^[#@]/, '').trim();
-                    }
-                }
+    async def resolve_search_results_with_readiness(
+        self, query: str, timeout_sec: float = 5.0, poll_interval_sec: float = 0.15
+    ) -> tuple[Any, list[SlackSearchResult]]:
+        """Bounded passive read-only polling readiness gate for search view surface resolution.
 
-                // 부모 그룹 헤더 탐색
-                if (!chanName) {
-                    const groupHeader = item.closest('.c-search_result_group')?.querySelector('.c-search_result_group__header');
-                    if (groupHeader) {
-                        chanName = groupHeader.innerText.trim().replace(/^[#@]/, '').trim();
-                    }
-                }
-
-                // 2. Author
-                const senderElem = item.querySelector('[data-qa="message_sender_name"], .c-message__sender_button, button[data-message-sender], .c-search_result_message__sender, .c-message_kit__sender');
-                let sender = senderElem ? senderElem.innerText.trim() : null;
-                if (sender) {
-                    sender = sender.replace(/\\n앱$/, '').trim();
-                }
-
-                // 3. Timestamp
-                const timeElem = item.querySelector('[data-qa="message_timestamp"], .c-timestamp, a.c-timestamp, .c-search_result_message__timestamp');
-                const timeStr = timeElem ? timeElem.innerText.trim() : null;
-
-                // 4. Body Text
-                const textElem = item.querySelector('[data-qa="message_content"], .c-message_kit__blocks, .p-rich_text_section, .c-search_result_message__body');
-                const text = textElem ? textElem.innerText.trim() : (item.innerText ? item.innerText.trim() : "");
-
-                // 5. Permalink (정확한 메시지 URL)
-                const permalinkElem = item.querySelector('a[href*="/archives/"][href*="/p"]') ||
-                                      item.querySelector('a.c-timestamp[href*="/archives/"]') ||
-                                      item.querySelector('a[href*="/archives/"]');
-                const permalink = permalinkElem ? permalinkElem.getAttribute('href') : null;
-
-                // 6. DOM Message Key
-                const itemId = item.getAttribute('data-item-key') || item.id || null;
-
-                if (text && !text.startsWith("새 항목") && text !== "날짜로 이동") {
-                    parsed.push({
-                        idx: idx,
-                        channel_name: chanName,
-                        channel_id: chanId,
-                        sender: sender,
-                        time: timeStr,
-                        text: text.replace(/\\n/g, ' ').substring(0, 300),
-                        permalink: permalink,
-                        item_id: itemId
-                    });
-                }
-            });
-            return parsed;
-        })()
+        Lifecycle semantics:
+        - RESULTS: resolved immediately.
+        - EMPTY_RESULTS: resolved immediately as valid empty collection.
+        - LOADING / SEARCH_VIEW_UNKNOWN / FAIL_CLOSED (initial mount lag): passive read polling until timeout.
+        - AMBIGUOUS: immediate fail-closed exception.
+        - Exactly zero resubmits, zero query modifications, zero input domain dispatches.
         """
-        raw_items = await self.cdp.evaluate_js(js_parse)
-        results: list[SlackSearchResult] = []
-        if not raw_items:
-            return results
+        from pesu_agent.search.slack_search_resolver import SlackSearchResultResolver
 
-        for item in raw_items:
-            text = item.get("text", "")
-            chan = item.get("channel_name")
-            chan_id = item.get("channel_id")
-            sender = item.get("sender")
-            time_str = item.get("time")
-            permalink = item.get("permalink")
-            item_id = item.get("item_id")
+        start_t = asyncio.get_event_loop().time()
+        last_resolution = None
 
-            mentions, links = self.extract_mentions_and_links(text)
-            fingerprint = self.compute_fingerprint(chan, time_str, text, permalink)
+        while asyncio.get_event_loop().time() - start_t < timeout_sec:
+            raw_payload = await self.cdp.evaluate_js(SlackSearchResultResolver.JS_RESOLVE_RESULTS)
+            resolution = SlackSearchResultResolver.resolve_from_dom_payload(raw_payload)
+            last_resolution = resolution
 
-            results.append(
-                SlackSearchResult(
-                    result_index=len(results) + 1,
-                    query=query,
-                    author=sender,
-                    timestamp_raw=time_str,
-                    text=text,
-                    channel_name=chan,
-                    channel_id=chan_id,
-                    context="search_result",
-                    mentions=mentions,
-                    links=links,
-                    uia_message_id=item_id,
-                    result_url=permalink,
-                    message_fingerprint=fingerprint,
-                )
+            cat = resolution.surface_category
+            if cat == "RESULTS":
+                results = SlackSearchResultResolver.convert_to_slack_search_results(query, resolution)
+                return resolution, results
+            elif cat == "EMPTY_RESULTS":
+                return resolution, []
+            elif cat in ("AMBIGUOUS_EMPTY_AND_RESULTS", "AMBIGUOUS_LOADING_AND_RESULTS"):
+                raise SlackCdpError(f"Ambiguous search surface state detected: {cat}")
+
+            # Transient loading/mounting state: continue passive read polling
+            await asyncio.sleep(poll_interval_sec)
+
+        # Deadline reached while surface in transient state → explicit fail-closed exception.
+        # This MUST NOT return [] to avoid masquerading as valid EMPTY_RESULTS.
+        if last_resolution is None:
+            raise SlackResultReadinessTimeoutError(
+                failure_code="RESULT_READINESS_TIMEOUT_UNKNOWN",
+                surface_category="FAIL_CLOSED",
+                message="Result readiness timeout: no DOM response received during polling",
             )
-        return results
+        last_cat = last_resolution.surface_category
+        if last_cat == "LOADING":
+            raise SlackResultReadinessTimeoutError(
+                failure_code="RESULT_READINESS_TIMEOUT_LOADING",
+                surface_category=last_cat,
+            )
+        raise SlackResultReadinessTimeoutError(
+            failure_code="RESULT_READINESS_TIMEOUT_UNKNOWN",
+            surface_category=last_cat,
+        )
 
     async def get_observed_query_state(self) -> tuple[str, bool]:
         """Slack 검색 UI에 현재 표시된 query 텍스트와 결과 0건 여부를 조회합니다."""
@@ -409,8 +350,7 @@ class SlackSearch:
         (() => {
             const editorElem = document.querySelector('[data-qa="search_input_box"] [contenteditable="true"]') ||
                                document.querySelector('[data-qa="focusable_search_input"] [contenteditable="true"]') ||
-                               document.querySelector('.c-search__input_box .ql-editor') ||
-                               document.querySelector('[data-qa="texty_input"]');
+                               document.querySelector('.c-search__input_box .ql-editor');
             const editorVal = editorElem ? (editorElem.innerText || editorElem.textContent || '').trim() : '';
 
             const headerElem = document.querySelector('[data-qa="search_query_text"]') ||
@@ -429,8 +369,15 @@ class SlackSearch:
                 '[data-qa="search_result_item"], [data-qa="search_result_message"], .c-search_result_item, .c-search_result_message, .c-message_kit__message'
             ).length;
 
+            const urlParams = new URLSearchParams(window.location.search);
+            const urlQ = urlParams.get('q') || '';
+            let decodedUrlQ = '';
+            try { decodedUrlQ = decodeURIComponent(urlQ); } catch(e) { decodedUrlQ = urlQ; }
+
+            const observedVal = editorVal || headerText || inputVal || decodedUrlQ;
+
             return {
-                observed: editorVal || headerText || inputVal,
+                observed: observedVal,
                 is_empty: !!emptyNotice || itemsCount === 0,
                 items_count: itemsCount
             };
@@ -497,49 +444,52 @@ class SlackSearch:
             # 3. 검색 전 기존 signature 기억
             prev_signature = self._last_result_signature
 
-            # 4. 전역 검색 UI 열기
-            await self.open_search_ui()
-            await asyncio.sleep(1.5)
+            # 4. 전역 검색 UI 열기 (Visible 환경 호환성 유지)
+            if not self.agent_window_manager or self.agent_window_manager.get_state()[0] != SlackAgentWindowState.AGENT_WINDOW_ADOPTED_HIDDEN:
+                await self.open_search_ui()
+                await asyncio.sleep(1.0)
 
-            # 5. 검색어 입력 및 실행
-            enter_res = await self.enter_query_and_search(query, timeout_sec=5.0)
+            # 5. 검색어 입력 및 실행 (Hidden Bridge 또는 Native Submit 수행)
+            enter_res = await self.enter_query_and_search(query, timeout_sec=8.0)
             if not enter_res.get("ok"):
                 raise SlackCdpError(f"검색어 입력 실패: {json.dumps(enter_res, ensure_ascii=False)}")
 
-            # 5. Freshness Guard Polling: 쿼리 반영 및 결과 갱신 대기
+            # 5. Query Verification Polling (read-only text check, separate from readiness)
             start_t = asyncio.get_event_loop().time()
             observed_query = ""
             query_verified = False
-            freshness_verified = False
-            current_signature = ""
-            initial_results: list[SlackSearchResult] = []
 
             while asyncio.get_event_loop().time() - start_t < timeout_sec:
-                await asyncio.sleep(0.5)
-
-                obs_q, is_empty = await self.get_observed_query_state()
+                await asyncio.sleep(0.3)
+                obs_q, _is_empty = await self.get_observed_query_state()
                 observed_query = obs_q
                 query_verified = bool(query.strip().lower() in observed_query.strip().lower())
-
-                initial_results = await self.parse_current_visible_results(query)
-                current_signature = self.compute_result_signature(query, initial_results)
-
-                # Freshness 조건 판단:
-                # 1) query가 UI에 반영되었고,
-                # 2) 결과가 0건(is_empty)이거나,
-                # 3) 이전 검색 서명과 다른 새 서명이 확인된 경우
                 if query_verified:
-                    if is_empty or len(initial_results) == 0:
-                        freshness_verified = True
-                        break
-                    if prev_signature is None or current_signature != prev_signature:
-                        freshness_verified = True
-                        break
+                    break
 
             if not query_verified:
                 logger.warning(
                     f"Query verification failed: requested={query!r}, observed={observed_query!r}"
                 )
+
+            # 6. Bounded Result Readiness Gate (single source of truth)
+            #    Raises SlackResultReadinessTimeoutError on LOADING/UNKNOWN timeout.
+            #    Raises SlackCdpError on AMBIGUOUS surface.
+            #    Returns valid (resolution, results) for RESULTS or EMPTY_RESULTS.
+            elapsed_query_check = asyncio.get_event_loop().time() - start_t
+            remaining_readiness = max(timeout_sec - elapsed_query_check, 2.0)
+
+            _resolution, initial_results = await self.resolve_search_results_with_readiness(
+                query=query, timeout_sec=remaining_readiness, poll_interval_sec=0.15
+            )
+
+            # 7. Freshness Verification
+            current_signature = self.compute_result_signature(query, initial_results)
+            freshness_verified = True
+
+            if prev_signature is not None and len(initial_results) > 0:
+                if current_signature == prev_signature:
+                    freshness_verified = False
 
             if not freshness_verified and prev_signature is not None:
                 raise SlackSearchStaleError(

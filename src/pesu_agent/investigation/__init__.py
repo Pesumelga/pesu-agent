@@ -209,6 +209,10 @@ from pesu_agent.investigation.production_trace_coordinator import (
     ProductionRealTraceCoordinator,
     ProductionTraceResult,
 )
+from pesu_agent.investigation.retrieval_coordinator import (
+    ProductionInvestigationRetrievalCoordinator,
+    RetrievalCoordinatorResult,
+)
 from pesu_agent.investigation.v2_orchestrator import (
     DeterministicStepClock,
     IllegalStateTransitionError,
@@ -301,6 +305,8 @@ __all__ = [
     "OpenRouterClaimVerifier",
     "OrchestratorConfig",
     "PlanningError",
+    "ProductionInvestigationRetrievalCoordinator",
+    "RetrievalCoordinatorResult",
     "ProductionRealTraceCoordinator",
     "ProductionTraceResult",
     "ProposedClaim",
