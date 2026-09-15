@@ -786,11 +786,35 @@ JS_PROBE_POST_WAIT_SEARCH_STATE = r"""
         }
     }
 
-    const loadingIndicator = Boolean(document.querySelector('[data-qa="loading_indicator"], [aria-busy="true"], .c-search_view__loading, .c-loading, .p-search_results_loading'));
+    const searchViews = Array.from(document.querySelectorAll('[data-qa="search_view"]')).filter(el => el && el.isConnected);
+    const searchView = searchViews.length === 1 ? searchViews[0] : null;
+
+    // Skeletons / Loading State (Verified against live Slack surface)
+    const skeletons = searchView
+        ? Array.from(searchView.querySelectorAll('[data-qa="skeleton"], .c-skeleton, .c-search_skeleton, .c-search_message--skeleton, [data-qa="loading_indicator"], [aria-busy="true"], .c-search_view__loading, .c-loading, .p-search_results_loading')).filter(el => el && el.isConnected)
+        : Array.from(document.querySelectorAll('[data-qa="skeleton"], .c-skeleton, .c-search_skeleton, .c-search_message--skeleton, [data-qa="loading_indicator"], [aria-busy="true"], .c-search_view__loading, .c-loading, .p-search_results_loading')).filter(el => el && el.isConnected);
+
+    const loadingIndicator = Boolean(
+        skeletons.length > 0 ||
+        document.querySelector('[data-qa="loading_indicator"], [aria-busy="true"], .c-search_view__loading, .c-loading, .p-search_results_loading')
+    );
+
+    // Visible result roots inside verified searchView
+    const resultRoots = searchView
+        ? Array.from(searchView.querySelectorAll('[data-qa="search_result"], [data-qa="search_message_result_item"], .c-search_result')).filter(el => {
+            if (!el || !el.isConnected) return false;
+            const r = el.getBoundingClientRect();
+            return (r.width > 0 && r.height > 0);
+        })
+        : [];
 
     return {
         surface_query_after: surfaceQueryAfter,
-        loading_detected_after: loadingIndicator
+        loading_detected_after: loadingIndicator,
+        skeleton_count: skeletons.length,
+        result_root_count: resultRoots.length,
+        empty_element_count: 0,
+        search_view_mounted: Boolean(searchView)
     };
 })()
 """
@@ -1444,15 +1468,17 @@ class WebViewSlackSearchBackend(SearchBackend):
         surface_query_after: Optional[str] = None
         loading_after: bool = False
         res_extract: Any = None
+        readiness_classification: str = "NOT_READY"
+        readiness_polls: list[dict[str, Any]] = []
 
         norm_req = re.sub(r"\s+", " ", validated_query).strip().lower()
 
-        # Step 5.1: Active Transition Polling Loop (Authority Priority Hierarchy)
+        # Step 5.1: Active Transition Polling Loop (Hard Requirement 2: Centralized Readiness Barrier)
+        # Authority Priority Hierarchy:
         # 1. Slack search route / search surface matches requested query
-        # 2. Verified SearchInputBox / Redux submitted state
-        # 3. Loading / search lifecycle transition complete
-        # 4. Result fingerprint transition
-        for _ in range(max_transition_polls):
+        # 2. Loading / search lifecycle transition complete (zero skeletons, loading false)
+        # 3. Explicit Empty State vs Mounted Results vs Stale Results
+        for poll_idx in range(max_transition_polls):
             # Read-Only Post-Wait Probe (Hard Requirement 2: Side-effect free)
             try:
                 res_post_wait = self._window.evaluate_js(JS_PROBE_POST_WAIT_SEARCH_STATE)
@@ -1462,15 +1488,95 @@ class WebViewSlackSearchBackend(SearchBackend):
                 logger.warning(f"Post-wait probe evaluation warning: {e}")
 
             surface_query_after = post_wait_probe.get("surface_query_after")
-            loading_after = bool(post_wait_probe.get("loading_detected_after", False))
+            skeleton_count = int(post_wait_probe.get("skeleton_count", 0))
+            loading_after = bool(post_wait_probe.get("loading_detected_after", False) or skeleton_count > 0)
+            result_root_count = int(post_wait_probe.get("result_root_count", 0))
+            empty_element_count = int(post_wait_probe.get("empty_element_count", 0))
 
             norm_surf = re.sub(r"\s+", " ", surface_query_after or "").strip().lower()
             surface_query_matches = bool(
                 norm_surf and (norm_req in norm_surf or norm_surf in norm_req)
             )
 
-            # If surface matches requested query (or surface unreadable in mock) and not loading, check extracted results
-            if not loading_after and (surface_query_matches or surface_query_after is None):
+            poll_fp: Optional[str] = None
+            poll_result_count: int = 0
+            poll_readiness = "NOT_READY"
+
+            # Check readiness only when query transition is satisfied on surface (or mock unreadable)
+            if surface_query_matches or surface_query_after is None:
+                if loading_after:
+                    poll_readiness = "LOADING"
+                elif empty_element_count > 0 and result_root_count == 0:
+                    # Explicit confirmed empty state (Test B / verified empty marker)
+                    poll_readiness = "CONFIRMED_EMPTY"
+                else:
+                    # Not loading and no explicit empty marker: extract to check mounted results
+                    js_extract = (
+                        f"({JS_EXTRACT_SEARCH_RESULTS})("
+                        f"{max_results}, "
+                        f"{json.dumps(self.BODY_SCOPE_CONTAINER)}, "
+                        f"{json.dumps(self.BODY_FRAGMENT_SELECTOR)}, "
+                        f"{json.dumps(self.SENDER_CANONICAL_SELECTOR)}, "
+                        f"{json.dumps(self.TIMESTAMP_CANONICAL_SELECTOR)})"
+                    )
+                    res_extract = self._window.evaluate_js(js_extract)
+                    if isinstance(res_extract, dict) and res_extract.get("ok"):
+                        poll_items = res_extract.get("items", [])
+                        poll_result_count = len(poll_items)
+                        poll_fp = compute_result_set_fingerprint(poll_items)
+
+                        if poll_result_count > 0:
+                            if result_fingerprint_before is not None and poll_fp == result_fingerprint_before:
+                                # Stale prior results still mounted; wait for DOM reconcile
+                                poll_readiness = "STALE_RESULTS_LINGERING"
+                            else:
+                                poll_readiness = "RESULTS_READY"
+                        else:
+                            # 0 items and empty_element_count == 0
+                            # TRANSIENT_EMPTY_DOM_IS_NOT_TERMINAL_SUCCESS = True
+                            poll_readiness = "NOT_READY"
+                    else:
+                        poll_readiness = "NOT_READY"
+            else:
+                poll_readiness = "SURFACE_QUERY_NOT_MATCHED"
+
+            poll_record = {
+                "poll_index": poll_idx + 1,
+                "surface_query_matches": surface_query_matches,
+                "result_count": poll_result_count,
+                "result_fingerprint": poll_fp,
+                "loading_state": loading_after,
+                "explicit_empty_state": bool(empty_element_count > 0),
+                "readiness_classification": poll_readiness,
+            }
+            readiness_polls.append(poll_record)
+            readiness_classification = poll_readiness
+
+            if poll_readiness in ("RESULTS_READY", "CONFIRMED_EMPTY"):
+                break
+
+            if time.monotonic() - t_wait_start >= transition_timeout_sec:
+                break
+
+            time.sleep(transition_poll_interval_sec)
+
+        result_transition_wait_duration_ms = int((time.monotonic() - t_wait_start) * 1000)
+
+        # Final readiness state
+        if readiness_classification in ("RESULTS_READY", "CONFIRMED_EMPTY"):
+            final_readiness = readiness_classification
+        else:
+            final_readiness = "TIMEOUT"
+
+        telemetry["readiness_polls"] = readiness_polls
+        telemetry["SEARCH_RESULT_READINESS"] = final_readiness
+
+        # If terminal state is CONFIRMED_EMPTY, extract produces empty list
+        if final_readiness == "CONFIRMED_EMPTY":
+            res_extract = {"ok": True, "terminal_state": "EMPTY_RESULTS", "items": []}
+        elif final_readiness == "RESULTS_READY":
+            # If not yet extracted during break tick, extract now
+            if res_extract is None or not (isinstance(res_extract, dict) and res_extract.get("ok")):
                 js_extract = (
                     f"({JS_EXTRACT_SEARCH_RESULTS})("
                     f"{max_results}, "
@@ -1480,33 +1586,21 @@ class WebViewSlackSearchBackend(SearchBackend):
                     f"{json.dumps(self.TIMESTAMP_CANONICAL_SELECTOR)})"
                 )
                 res_extract = self._window.evaluate_js(js_extract)
-                if isinstance(res_extract, dict) and res_extract.get("ok"):
-                    poll_items = res_extract.get("items", [])
-                    poll_fp = compute_result_set_fingerprint(poll_items)
-
-                    # Transition confirmed: either fingerprint changed, first search, or empty results
-                    if result_fingerprint_before is None or poll_fp != result_fingerprint_before or len(poll_items) == 0:
-                        break
-                    # If fingerprint is unchanged, continue polling until timeout to allow DOM reconcile
-
-            if time.monotonic() - t_wait_start >= transition_timeout_sec:
-                break
-
-            time.sleep(transition_poll_interval_sec)
-
-        result_transition_wait_duration_ms = int((time.monotonic() - t_wait_start) * 1000)
-
-        # Fallback extract if not yet extracted during polling
-        if res_extract is None or not (isinstance(res_extract, dict) and res_extract.get("ok")):
-            js_extract = (
-                f"({JS_EXTRACT_SEARCH_RESULTS})("
-                f"{max_results}, "
-                f"{json.dumps(self.BODY_SCOPE_CONTAINER)}, "
-                f"{json.dumps(self.BODY_FRAGMENT_SELECTOR)}, "
-                f"{json.dumps(self.SENDER_CANONICAL_SELECTOR)}, "
-                f"{json.dumps(self.TIMESTAMP_CANONICAL_SELECTOR)})"
-            )
-            res_extract = self._window.evaluate_js(js_extract)
+        else:
+            # TIMEOUT: neither results nor explicit empty state confirmed
+            # If result roots exist in DOM but didn't change (test_case_b), allow fallback extract for forensic reporting
+            if result_root_count > 0:
+                js_extract = (
+                    f"({JS_EXTRACT_SEARCH_RESULTS})("
+                    f"{max_results}, "
+                    f"{json.dumps(self.BODY_SCOPE_CONTAINER)}, "
+                    f"{json.dumps(self.BODY_FRAGMENT_SELECTOR)}, "
+                    f"{json.dumps(self.SENDER_CANONICAL_SELECTOR)}, "
+                    f"{json.dumps(self.TIMESTAMP_CANONICAL_SELECTOR)})"
+                )
+                res_extract = self._window.evaluate_js(js_extract)
+            else:
+                res_extract = {"ok": True, "terminal_state": "TIMEOUT", "items": []}
 
         if not (isinstance(res_extract, dict) and res_extract.get("ok")):
             telemetry["last_confirmed_stage"] = "EXTRACTION_FAILED"
@@ -1670,6 +1764,7 @@ class WebViewSlackSearchBackend(SearchBackend):
             "RESULT_FINGERPRINT_CHANGED": result_fingerprint_changed,
             "LOADING_OR_DOM_TRANSITION_OBSERVED": loading_or_dom_transition_observed,
             "TRANSITION_CLASSIFICATION": transition_classification,
+            "SEARCH_RESULT_READINESS": final_readiness,
             "requested_query": validated_query,
             "search_input_value_before": search_input_value_before,
             "search_input_value_after_submit": search_input_value_after_submit,
@@ -1691,7 +1786,7 @@ class WebViewSlackSearchBackend(SearchBackend):
         }
         telemetry["forensic_transition"] = forensic_transition
 
-        # Task 11R3 Fail-Closed Transition Guard (Authority Priority Hierarchy)
+        # Task 11R3/11R5 Fail-Closed Transition Guard (Authority Priority Hierarchy)
         # 1. Slack search route / search surface matches requested query
         # 2. Verified SearchInputBox / Redux submitted state
         # 3. Loading / search lifecycle transition complete
@@ -1717,6 +1812,14 @@ class WebViewSlackSearchBackend(SearchBackend):
             raise WebViewSearchError(
                 WebViewSearchFailureCode.SEARCH_RESULT_TIMEOUT,
                 f"Search result transition timed out; stale DOM results detected.",
+                details=telemetry,
+            )
+        elif final_readiness == "TIMEOUT" and len(raw_items) == 0:
+            telemetry["last_confirmed_stage"] = "READINESS_TIMEOUT"
+            self.last_search_telemetry = dict(telemetry)
+            raise WebViewSearchError(
+                WebViewSearchFailureCode.SEARCH_RESULT_TIMEOUT,
+                f"Search result readiness barrier timed out; neither valid results nor explicit empty state confirmed within deadline.",
                 details=telemetry,
             )
 

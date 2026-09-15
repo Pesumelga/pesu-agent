@@ -49,6 +49,9 @@ class DeterministicMockWebViewHost:
         self.pending_next_results: list[dict[str, Any]] = []
         self.simulate_slack_hang_no_transition: bool = False
         self.query_state_verified: bool = False
+        # Task 11R5 readiness simulation controls:
+        self.readiness_poll_sequence: list[dict[str, Any]] = []
+        self.poll_count: int = 0
 
     def evaluate_js(self, script: str) -> Any:
         # 1. Auth & Readiness
@@ -149,13 +152,46 @@ class DeterministicMockWebViewHost:
             sq = self.surface_query
             if self.require_verified_state_for_effective_submit and self.effective_submit_triggered and not self.simulate_slack_hang_no_transition:
                 sq = self.input_value
+
+            if self.readiness_poll_sequence:
+                idx = min(self.poll_count, len(self.readiness_poll_sequence) - 1)
+                step = self.readiness_poll_sequence[idx]
+                self.poll_count += 1
+                items = step.get("items", [])
+                loading = step.get("loading", False)
+                empty_markers = step.get("empty_markers", 0)
+                skeletons = step.get("skeleton_count", 1 if loading else 0)
+                return {
+                    "surface_query_after": sq or None,
+                    "loading_detected_after": loading,
+                    "skeleton_count": skeletons,
+                    "empty_element_count": empty_markers,
+                    "result_root_count": len(items),
+                    "search_view_mounted": True,
+                }
+
             return {
                 "surface_query_after": sq or None,
                 "loading_detected_after": self.loading_indicator,
+                "skeleton_count": 1 if self.loading_indicator else 0,
+                "empty_element_count": 1 if not self.current_results else 0,
+                "result_root_count": len(self.current_results),
+                "search_view_mounted": True,
             }
 
         # 8. Result Extraction
         if "JS_EXTRACT_SEARCH_RESULTS" in script or "searchViews" in script:
+            if self.readiness_poll_sequence:
+                idx = max(0, min(self.poll_count - 1, len(self.readiness_poll_sequence) - 1))
+                items = self.readiness_poll_sequence[idx].get("items", [])
+                if not items:
+                    return {"ok": True, "terminal_state": "EMPTY_RESULTS", "items": []}
+                return {
+                    "ok": True,
+                    "terminal_state": "RESULTS",
+                    "items": items,
+                }
+
             if not self.current_results:
                 return {"ok": True, "terminal_state": "EMPTY_RESULTS", "items": []}
             return {
@@ -507,6 +543,179 @@ def test_task11r4_t7_phrase_conjunction_quote_preservation_offline():
     telemetry = backend.last_search_telemetry
     forensic = telemetry.get("forensic_transition", {})
     assert forensic.get("requested_query") == q_t7
+
+
+# =========================================================================
+# Task 11R5 TDD Tests: Result Readiness Barrier & Lifecycle Completion
+# =========================================================================
+
+def test_task11r5_test_a_fresh_search_transient_empty_polls_until_results_arrive():
+    """Test A — Fresh Search Transient Empty:
+    submit Q1 (fresh search, result_fingerprint_before=None)
+    -> query transition confirmed
+    -> poll 1: 0 rows, transient empty (not ready)
+    -> poll 2: 0 rows, transient empty (not ready)
+    -> poll 3: Result Set A arrives
+    Current backend FAILS on poll 1 by treating result_fingerprint_before=None or len=0 as empty success.
+    Expected fixed behavior: waits past transient empty polls and returns Result Set A.
+    """
+    host = DeterministicMockWebViewHost()
+    backend = WebViewSlackSearchBackend(
+        host=host,
+        search_transition_timeout_sec=0.2,
+        search_transition_poll_interval_sec=0.01,
+    )
+
+    q1 = "세무사 지점 합류"
+    host.input_value = q1
+    host.surface_query = q1
+    host.search_view_mounted_before = False  # fresh search: result_fingerprint_before is None
+
+    set_a_items = [
+        _make_sample_item(1, "C04H83XRPA7", "1786601410.352619", "이주영", "지점 개설 미팅"),
+        _make_sample_item(2, "C04TV5EUN2X", "1783409984.838889", "김서경", "기수임사에 대한 요율"),
+    ]
+
+    # Poll 1: 0 items, no empty marker (transient empty)
+    # Poll 2: 0 items, no empty marker (transient empty)
+    # Poll 3: Result Set A mounted
+    host.readiness_poll_sequence = [
+        {"loading": False, "items": [], "empty_markers": 0},
+        {"loading": False, "items": [], "empty_markers": 0},
+        {"loading": False, "items": set_a_items, "empty_markers": 0},
+    ]
+
+    with patch("time.sleep", return_value=None):
+        results = backend.search_messages(q1, max_results=5)
+
+    assert len(results) == 2
+    assert results[0].text == "지점 개설 미팅"
+    telemetry = backend.last_search_telemetry
+    assert telemetry.get("SEARCH_RESULT_READINESS") == "RESULTS_READY"
+
+
+def test_task11r5_test_b_legitimate_empty_search_returns_empty_list_on_explicit_empty_state():
+    """Test B — Legitimate Empty Search:
+    submit Q2
+    -> query transition confirmed
+    -> poll 1: transient empty (0 rows, 0 empty markers)
+    -> poll 2: explicit Slack no-results state appears (empty_markers=1)
+    Expected: returns [] normally with CONFIRMED_EMPTY readiness (not an error).
+    """
+    host = DeterministicMockWebViewHost()
+    backend = WebViewSlackSearchBackend(
+        host=host,
+        search_transition_timeout_sec=0.2,
+        search_transition_poll_interval_sec=0.01,
+    )
+
+    q2 = "존재하지않는검색어12345"
+    host.input_value = q2
+    host.surface_query = q2
+
+    # Poll 1: transient empty (not ready yet)
+    # Poll 2: explicit empty marker confirmed
+    host.readiness_poll_sequence = [
+        {"loading": False, "items": [], "empty_markers": 0},
+        {"loading": False, "items": [], "empty_markers": 1},
+    ]
+
+    with patch("time.sleep", return_value=None):
+        results = backend.search_messages(q2, max_results=5)
+
+    assert results == []
+    telemetry = backend.last_search_telemetry
+    assert telemetry.get("SEARCH_RESULT_READINESS") == "CONFIRMED_EMPTY"
+
+
+def test_task11r5_test_c_never_becomes_ready_times_out():
+    """Test C — Never Becomes Ready (Timeout & Fail-Closed):
+    submit Q3
+    -> query transition confirmed
+    -> transient empty throughout all polls (0 rows, 0 empty markers)
+    -> deadline exhausted
+    Current backend FAILS by exiting at poll 1 with empty success instead of timing out.
+    Expected fixed behavior: fail closed with SEARCH_RESULT_TIMEOUT.
+    Zero wall-clock sleep (READINESS_TESTS_USE_REAL_WALL_CLOCK_WAIT = false).
+    """
+    host = DeterministicMockWebViewHost()
+    backend = WebViewSlackSearchBackend(
+        host=host,
+        search_transition_timeout_sec=0.05,
+        search_transition_poll_interval_sec=0.01,
+    )
+
+    q3 = "영원히 로딩 안 되는 쿼리"
+    host.input_value = q3
+    host.surface_query = q3
+
+    # All polls remain transient empty (neither results nor explicit empty marker)
+    host.readiness_poll_sequence = [
+        {"loading": False, "items": [], "empty_markers": 0},
+    ]
+
+    with patch("time.sleep", return_value=None):
+        with pytest.raises(WebViewSearchError) as exc_info:
+            backend.search_messages(q3, max_results=5)
+
+    assert exc_info.value.failure_code == WebViewSearchFailureCode.SEARCH_RESULT_TIMEOUT
+    telemetry = exc_info.value.details
+    assert telemetry.get("SEARCH_RESULT_READINESS") == "TIMEOUT"
+
+
+def test_task11r5_test_d_previous_result_exists_waits_for_new_result_set():
+    """Test D — Previous Result Exists (Preserve Task 11R3 Guarantee):
+    Q1 Result A mounted
+    -> Q2 submitted
+    -> poll 1: old Result A still lingering in DOM (same fingerprint as before)
+    -> poll 2: Result B arrives
+    Backend MUST NOT return Result A as Q2's success. It must wait until Result B arrives.
+    """
+    host = DeterministicMockWebViewHost()
+    backend = WebViewSlackSearchBackend(
+        host=host,
+        search_transition_timeout_sec=0.2,
+        search_transition_poll_interval_sec=0.01,
+    )
+
+    # Initial Q1 gives Set A
+    q1 = "고객 만족도 현황 페이지 1차 배포 완료"
+    set_a_items = [
+        _make_sample_item(1, "C04H83XRPA7", "1786601410.352619", "이주영", "지점 개설 미팅"),
+    ]
+    host.input_value = q1
+    host.surface_query = q1
+    host.current_results = list(set_a_items)
+
+    with patch("time.sleep", return_value=None):
+        results_q1 = backend.search_messages(q1, max_results=5)
+    assert len(results_q1) == 1
+
+    # Q2 submitted
+    q2 = "배포 상태 확인"
+    set_b_items = [
+        _make_sample_item(1, "C09DQ4Y7YNA", "1789088348.763469", "박정환", "배포 상태 최종 확인"),
+    ]
+    host.input_value = q2
+    host.surface_query = q2
+    host.search_view_mounted_before = True  # search view mounted from Q1!
+    host.poll_count = 0
+
+    # Poll 1: old Result A still lingering (stale)
+    # Poll 2: Result B arrives
+    host.readiness_poll_sequence = [
+        {"loading": False, "items": set_a_items, "empty_markers": 0},
+        {"loading": False, "items": set_b_items, "empty_markers": 0},
+    ]
+
+    with patch("time.sleep", return_value=None):
+        results_q2 = backend.search_messages(q2, max_results=5)
+
+    assert len(results_q2) == 1
+    assert results_q2[0].text == "배포 상태 최종 확인"
+    telemetry = backend.last_search_telemetry
+    assert telemetry.get("SEARCH_RESULT_READINESS") == "RESULTS_READY"
+
 
 
 
