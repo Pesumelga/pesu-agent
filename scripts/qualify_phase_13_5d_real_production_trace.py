@@ -488,9 +488,30 @@ async def run_single_case(
 
     total_latency = time.perf_counter() - t0
 
-    # Determine decisive final state from work items or answer
-    actual_final_state = grounded_answer.final_state
-    if not actual_final_state:
+    # Determine decisive final state from work item cards or trace result nodes
+    actual_final_state = "UNKNOWN"
+    if grounded_answer.work_item_cards:
+        card_statuses = [card.status for card in grounded_answer.work_item_cards]
+        if "BLOCKED" in card_statuses:
+            actual_final_state = "BLOCKED"
+        elif "COMPLETED" in card_statuses:
+            actual_final_state = "COMPLETED"
+        elif "UNKNOWN" in card_statuses or not grounded_answer.is_conclusive:
+            actual_final_state = "UNKNOWN"
+        else:
+            actual_final_state = card_statuses[0]
+    elif trace_result.work_items:
+        wi_statuses = [
+            wi.status.value if hasattr(wi.status, "value") else str(wi.status)
+            for wi in trace_result.work_items.values()
+        ]
+        if "BLOCKED" in wi_statuses:
+            actual_final_state = "BLOCKED"
+        elif "COMPLETED" in wi_statuses:
+            actual_final_state = "COMPLETED"
+        else:
+            actual_final_state = wi_statuses[0]
+    else:
         actual_final_state = "UNKNOWN"
 
     # Evaluate Section 14 PASS Criteria
