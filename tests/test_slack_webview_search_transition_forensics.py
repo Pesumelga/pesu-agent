@@ -455,3 +455,59 @@ def test_task11r3_stale_result_fail_closed_barrier():
         WebViewSearchFailureCode.SEARCH_NAVIGATION_FAILED,
     )
 
+
+def test_task11r4_t7_phrase_conjunction_quote_preservation_offline():
+    """Task 11R4 Offline Verification: T7 quoted phrase syntax is preserved end-to-end.
+
+    Verifies:
+    - T7_REQUESTED_QUERY: '"고객 만족도" "1차 배포"'
+    - T7_EFFECTIVE_INPUT_QUERY: '"고객 만족도" "1차 배포"'
+    - T7_QUOTES_PRESERVED: True
+    - T7_SYNTAX_SUPPORTED: True
+    """
+    import json
+    from pesu_agent.search.slack_query_compiler import SlackQueryCompiler
+
+    q_t7 = '"고객 만족도" "1차 배포"'
+    compiled = SlackQueryCompiler.compile(q_t7)
+
+    assert compiled.compiled_query == q_t7
+    assert compiled.outer_quotes_removed is False
+    assert compiled.complexity.quoted_phrase_count == 2
+
+    host = DeterministicMockWebViewHost()
+    backend = WebViewSlackSearchBackend(host=host)
+
+    captured_js_payloads = []
+    orig_eval = host.evaluate_js
+
+    def spy_eval(script):
+        captured_js_payloads.append(script)
+        return orig_eval(script)
+
+    host.evaluate_js = spy_eval
+
+    with patch("time.sleep", return_value=None):
+        backend.search_messages(q_t7, max_results=5)
+
+    # 1. Verify JS_SET_TEXTY_QUERY was invoked with exact quoted string
+    set_query_calls = [s for s in captured_js_payloads if "JS_SET_TEXTY_QUERY" in s or "targetQuery" in s]
+    assert len(set_query_calls) >= 1
+    # json.dumps(q_t7) produces '"\"고객 만족도\" \"1차 배포\""'
+    expected_arg = json.dumps(q_t7)
+    assert f"({expected_arg})" in set_query_calls[0]
+
+    # 2. Verify JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER was invoked with exact quoted string
+    submit_calls = [s for s in captured_js_payloads if "searchInputBoxInstance.onEnter()" in s]
+    assert len(submit_calls) >= 1
+    assert f"({expected_arg})" in submit_calls[0]
+
+
+    # 3. Telemetry records requested query
+    telemetry = backend.last_search_telemetry
+    forensic = telemetry.get("forensic_transition", {})
+    assert forensic.get("requested_query") == q_t7
+
+
+
+
