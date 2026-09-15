@@ -590,6 +590,7 @@ async def main() -> int:
 
     # 4. Preflight Read-Only Safety Assertion
     # Verify no write operations exist in search backend
+    host = None
     if is_dry_run:
         search_backend = SyntheticSearchBackend()
         thread_reader = None
@@ -606,6 +607,9 @@ async def main() -> int:
             config=SlackSearchConfig(backend_kind=SlackBackendKind.WEBVIEW_DIRECT),
         )
         host = getattr(search_backend, "_window", None)
+        if host and hasattr(host, "start") and not is_dry_run:
+            logger.info("🌐 [SLACK_HOST_START] Starting session-scoped offscreen PesuWebViewHost...")
+            host.start(timeout=30.0)
         thread_reader = WebviewThreadReader(host=host) if host else None
 
     # Build ProductionRetrievalAdapter
@@ -627,20 +631,28 @@ async def main() -> int:
     case_results = []
     overall_pass = True
 
-    for case_spec in cases:
-        res = await run_single_case(
-            case_spec=case_spec,
-            retrieval_adapter=retrieval_adapter,
-            trace_coordinator=trace_coordinator,
-            is_dry_run=is_dry_run,
-        )
-        case_results.append(res)
-        if res["verdict"] != "PASS" and not is_dry_run:
-            overall_pass = False
+    try:
+        for case_spec in cases:
+            res = await run_single_case(
+                case_spec=case_spec,
+                retrieval_adapter=retrieval_adapter,
+                trace_coordinator=trace_coordinator,
+                is_dry_run=is_dry_run,
+            )
+            case_results.append(res)
+            if res["verdict"] != "PASS" and not is_dry_run:
+                overall_pass = False
 
-        # Save per-case artifact
-        c_file = run_dir / f"{res['case_id'].lower()}.json"
-        c_file.write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
+            # Save per-case artifact
+            c_file = run_dir / f"{res['case_id'].lower()}.json"
+            c_file.write_text(json.dumps(res, ensure_ascii=False, indent=2), encoding="utf-8")
+    finally:
+        if host and hasattr(host, "stop"):
+            logger.info("🛑 [SLACK_HOST_STOP] Stopping session-scoped PesuWebViewHost...")
+            try:
+                host.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping host: {e}")
 
     # 6. Build and Save Run Manifest and Summary
     summary_data = {
