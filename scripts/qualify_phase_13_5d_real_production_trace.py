@@ -99,7 +99,7 @@ from pesu_agent.search.temporal import (
     TemporalResolutionStatus,
     resolve_temporal_scope,
 )
-from pesu_agent.search.webview_thread_reader import WebviewThreadReader
+from pesu_agent.search.webview_thread_reader import WebviewThreadReader, is_eligible_thread_candidate
 from pesu_agent.ui.grounded_answer_builder import GroundedWorkItemAnswerBuilder
 from pesu_agent.ui.result_presenter import present_grounded_investigation_result
 
@@ -335,25 +335,23 @@ class ProductionRetrievalAdapter:
                 temporal_scope=temporal_scope,
                 actor_scope=actor_scope,
             )
-            # Inspect first item eligible for thread reading
-            for itm in prelim_pkg.evidence_items:
-                if itm.thread_ts and itm.reply_count and itm.reply_count > 0:
-                    try:
-                        logger.info(f"🧵 [THREAD_EXPANSION] Expanding thread for item {itm.id} (channel={itm.channel_id}, ts={itm.thread_ts})")
-                        exp_res = await self.thread_reader.read_thread(
-                            channel_id=itm.channel_id,
-                            thread_ts=itm.thread_ts,
-                            max_replies=5,
-                        )
-                        if exp_res and getattr(exp_res, "replies", None):
-                            itm.thread_context_status = ThreadContextStatus.EXPANDED.value
-                            itm.expanded_thread_replies = exp_res.replies
-                            logger.info(f"   ↳ Thread expanded with {len(exp_res.replies)} replies.")
-                            break
-                    except Exception as e:
-                        logger.warning(f"Thread expansion non-fatal failure: {e}")
-                        itm.thread_context_status = ThreadContextStatus.FAILED.value
+            eligible_candidates = [
+                it for it in prelim_pkg.evidence_items
+                if is_eligible_thread_candidate(it)
+            ]
+            for itm in eligible_candidates:
+                try:
+                    logger.info(f"🧵 [THREAD_EXPANSION] Expanding thread for eligible item {itm.id}")
+                    exp_res = self.thread_reader.read_thread_result(itm)
+                    if exp_res and getattr(exp_res, "replies", None):
+                        itm.thread_context_status = ThreadContextStatus.EXPANDED.value
+                        itm.expanded_thread_replies = list(exp_res.replies)
+                        logger.info(f"   ↳ Thread expanded with {len(exp_res.replies)} replies.")
                         break
+                except Exception as e:
+                    logger.warning(f"Thread expansion non-fatal failure: {e}")
+                    itm.thread_context_status = ThreadContextStatus.FAILED.value
+                    break
 
         # Select and Package via production EvidenceSelector
         final_pkg, selected_items = self.selector.select_and_package(
