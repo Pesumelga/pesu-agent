@@ -138,9 +138,35 @@ def run_forensic(dry_run: bool = False) -> dict[str, Any]:
             telemetry = getattr(search_backend, "last_search_telemetry", {}) or {}
             transition = telemetry.get("forensic_transition", {})
 
+            verified_query_state = bool(telemetry.get("verified_query_state_before_submit", False))
+            onenter_invoked = bool(telemetry.get("onenter_invoked", False))
+            surface_matches = bool(transition.get("SEARCH_SURFACE_QUERY_MATCHES_REQUESTED", False))
+            fingerprint_after = transition.get("RESULT_FINGERPRINT_AFTER")
+            top_identifiers = [r.result_url for r in results if r.result_url]
+
+            # Hard Requirement 2 & 3: Query transition confirmed by authority priority
+            # Priority 1: Slack search route / search surface matches requested query
+            # Priority 2: Verified SearchInputBox / Redux submitted state
+            # (Result fingerprint change is corroborating, but identical fingerprint does not fail if surface transitioned)
+            transition_confirmed = bool(surface_matches and verified_query_state and onenter_invoked)
+
+            # Diagnostic metric: Check for CASE A target presence in raw result text
+            target_present = any(
+                ("고객 만족도 현황" in (r.text or "") or "1차 배포" in (r.text or ""))
+                for r in results
+            )
+
             q_record = {
                 "order": order,
-                "requested_query": q_text,
+                "REQUESTED_QUERY": q_text,
+                "INPUT_MATCHES_REQUESTED": transition.get("INPUT_MATCHES_REQUESTED"),
+                "VERIFIED_QUERY_STATE_BEFORE_SUBMIT": verified_query_state,
+                "ONENTER_INVOKED": onenter_invoked,
+                "SEARCH_SURFACE_QUERY_MATCHES_REQUESTED": surface_matches,
+                "RESULT_TRANSITION_CONFIRMED": transition_confirmed,
+                "RESULT_FINGERPRINT": fingerprint_after,
+                "TOP_RESULT_IDENTIFIERS": top_identifiers,
+                "CASE_A_TARGET_PRESENT_IN_RAW": target_present,
                 "purpose": purpose,
                 "latency_seconds": latency,
                 "result_count": len(results),
@@ -161,14 +187,15 @@ def run_forensic(dry_run: bool = False) -> dict[str, Any]:
             query_records.append(q_record)
 
             logger.info(f"  • Result Count: {len(results)} (Latency: {latency:.2f}s)")
+            logger.info(f"  • REQUESTED_QUERY: {q_text}")
             logger.info(f"  • INPUT_MATCHES_REQUESTED: {transition.get('INPUT_MATCHES_REQUESTED')}")
-            logger.info(f"  • SUBMIT_TRIGGERED: {transition.get('SUBMIT_TRIGGERED')}")
-            logger.info(f"  • SEARCH_SURFACE_QUERY_BEFORE: {transition.get('SEARCH_SURFACE_QUERY_BEFORE')}")
-            logger.info(f"  • SEARCH_SURFACE_QUERY_AFTER: {transition.get('SEARCH_SURFACE_QUERY_AFTER')}")
-            logger.info(f"  • SEARCH_SURFACE_QUERY_MATCHES_REQUESTED: {transition.get('SEARCH_SURFACE_QUERY_MATCHES_REQUESTED')}")
-            logger.info(f"  • RESULT_FINGERPRINT_BEFORE: {transition.get('RESULT_FINGERPRINT_BEFORE')}")
-            logger.info(f"  • RESULT_FINGERPRINT_AFTER: {transition.get('RESULT_FINGERPRINT_AFTER')}")
-            logger.info(f"  • RESULT_FINGERPRINT_CHANGED: {transition.get('RESULT_FINGERPRINT_CHANGED')}")
+            logger.info(f"  • VERIFIED_QUERY_STATE_BEFORE_SUBMIT: {verified_query_state}")
+            logger.info(f"  • ONENTER_INVOKED: {onenter_invoked}")
+            logger.info(f"  • SEARCH_SURFACE_QUERY_MATCHES_REQUESTED: {surface_matches}")
+            logger.info(f"  • RESULT_TRANSITION_CONFIRMED: {transition_confirmed}")
+            logger.info(f"  • RESULT_FINGERPRINT: {fingerprint_after}")
+            logger.info(f"  • TOP_RESULT_IDENTIFIERS: {top_identifiers[:3]}")
+            logger.info(f"  • CASE_A_TARGET_PRESENT_IN_RAW: {target_present}")
             logger.info(f"  • TRANSITION_CLASSIFICATION: {transition.get('TRANSITION_CLASSIFICATION')}")
             for idx, r in enumerate(results[:3], 1):
                 logger.info(f"    [{idx}] {r.author or 'Unknown'}: {(r.text or '')[:80]}...")
@@ -184,22 +211,37 @@ def run_forensic(dry_run: bool = False) -> dict[str, Any]:
     # Compare query transitions across queries
     cross_query_analysis = {
         "all_input_matches_requested": all(
-            r["forensic_transition"].get("INPUT_MATCHES_REQUESTED") for r in query_records
+            r["INPUT_MATCHES_REQUESTED"] for r in query_records
         ),
-        "all_submit_triggered": all(
-            r["forensic_transition"].get("SUBMIT_TRIGGERED") for r in query_records
+        "all_verified_query_state": all(
+            r["VERIFIED_QUERY_STATE_BEFORE_SUBMIT"] for r in query_records
+        ),
+        "all_onenter_invoked": all(
+            r["ONENTER_INVOKED"] for r in query_records
+        ),
+        "all_surface_matches_requested": all(
+            r["SEARCH_SURFACE_QUERY_MATCHES_REQUESTED"] for r in query_records
+        ),
+        "all_transitions_confirmed": all(
+            r["RESULT_TRANSITION_CONFIRMED"] for r in query_records
+        ),
+        "QUERY_1_SPECIFIC_TRANSITION_CONFIRMED": query_records[0]["RESULT_TRANSITION_CONFIRMED"] if len(query_records) > 0 else False,
+        "QUERY_2_SPECIFIC_TRANSITION_CONFIRMED": query_records[1]["RESULT_TRANSITION_CONFIRMED"] if len(query_records) > 1 else False,
+        "QUERY_3_SPECIFIC_TRANSITION_CONFIRMED": query_records[2]["RESULT_TRANSITION_CONFIRMED"] if len(query_records) > 2 else False,
+        "CASE_A_TARGET_PRESENT_IN_RAW": any(
+            r["CASE_A_TARGET_PRESENT_IN_RAW"] for r in query_records
         ),
         "surface_queries_observed": [
             r["forensic_transition"].get("SEARCH_SURFACE_QUERY_AFTER") for r in query_records
         ],
         "fingerprints_observed": [
-            r["forensic_transition"].get("RESULT_FINGERPRINT_AFTER") for r in query_records
+            r["RESULT_FINGERPRINT"] for r in query_records
         ],
         "all_fingerprints_identical": (
-            len(set(r["forensic_transition"].get("RESULT_FINGERPRINT_AFTER") for r in query_records)) == 1
+            len(set(r["RESULT_FINGERPRINT"] for r in query_records)) == 1
         ),
         "top_identifier_sets": [
-            [it["url"] for it in r["top_results"]] for r in query_records
+            r["TOP_RESULT_IDENTIFIERS"] for r in query_records
         ],
     }
 
