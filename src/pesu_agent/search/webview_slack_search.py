@@ -687,7 +687,7 @@ JS_PROBE_PRE_SUBMIT_SEARCH_STATE = r"""
     } catch (e) {}
 
     if (!surfaceQueryBefore) {
-        const header = document.querySelector('[data-qa="search_header_query"], [data-qa="search_query"], .c-search_header__title');
+        const header = document.querySelector('[data-qa="search_header_query"], [data-qa="search_query"], .c-search_header__title, [class*="titleContent"]');
         if (header && (header.textContent || '').trim()) {
             surfaceQueryBefore = header.textContent.trim();
         }
@@ -773,7 +773,7 @@ JS_PROBE_POST_WAIT_SEARCH_STATE = r"""
     } catch (e) {}
 
     if (!surfaceQueryAfter) {
-        const header = document.querySelector('[data-qa="search_header_query"], [data-qa="search_query"], .c-search_header__title');
+        const header = document.querySelector('[data-qa="search_header_query"], [data-qa="search_query"], .c-search_header__title, [class*="titleContent"]');
         if (header && (header.textContent || '').trim()) {
             surfaceQueryAfter = header.textContent.trim();
         }
