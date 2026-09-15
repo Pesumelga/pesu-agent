@@ -405,3 +405,113 @@ async def test_contract_temperature_and_generation_parameters():
 
     _, kwargs = mock_provider.generate_structured.call_args
     assert kwargs.get("temperature") == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Phase 13.5D Cycle 2: Prompt Contract Invariant Tests (TDD)
+# ---------------------------------------------------------------------------
+
+def test_contract_conditional_speculation_not_promoted_to_plan_or_action():
+    """Cycle 2 Rule A: SYSTEM_PROMPT strictly defines Hypothesis != Plan.
+    
+    Phrases such as might, may, could, possibly, if X happens, we could consider,
+    maybe later must not be promoted to confirmed plan/action claims when the
+    question asks about current completion or state.
+    """
+    prompt = OpenRouterEvidenceAssessor.SYSTEM_PROMPT
+    assert "Rule A" in prompt or "Hypothesis != Plan" in prompt or "Speculation vs Plan" in prompt
+    assert any(term in prompt.lower() for term in ["might", "could consider", "possibly", "hypothesis"])
+    assert "not be promoted" in prompt.lower() or "do not extract as confirmed" in prompt.lower()
+
+
+def test_contract_meta_speech_wrapper_does_not_make_speculation_materially_factual():
+    """Cycle 2 Rule B: SYSTEM_PROMPT forbids Meta-Speech Bypass.
+    
+    Wrapping speculation in chat speech acts (e.g. 'X said Y might happen')
+    does not make raw conversational utterances into factual operational claims.
+    """
+    prompt = OpenRouterEvidenceAssessor.SYSTEM_PROMPT
+    assert "Rule B" in prompt or "Meta-Speech" in prompt or "Speech Act" in prompt
+    assert "speech" in prompt.lower() or "said" in prompt.lower() or "utterance" in prompt.lower()
+    assert "bypass" in prompt.lower() or "not make" in prompt.lower() or "never convert" in prompt.lower() or "do not convert" in prompt.lower()
+
+
+def test_contract_explicit_committed_plan_remains_extractable():
+    """Cycle 2 Rule C: SYSTEM_PROMPT preserves explicit committed plans.
+    
+    Committed plans and decisions relevant to the user question remain extractable.
+    """
+    prompt = OpenRouterEvidenceAssessor.SYSTEM_PROMPT
+    assert "Rule C" in prompt or "Committed Plan" in prompt or "Actual Plan" in prompt
+    assert "committed" in prompt.lower() or "approved plan" in prompt.lower() or "we will deploy" in prompt.lower() or "decided" in prompt.lower()
+
+
+def test_contract_explicit_decision_remains_extractable():
+    """Cycle 2 Rule C: Explicit decisions remain extractable candidate propositions."""
+    prompt = OpenRouterEvidenceAssessor.SYSTEM_PROMPT
+    assert "decision" in prompt.lower()
+    assert "extractable" in prompt.lower() or "candidate" in prompt.lower() or "extract" in prompt.lower()
+
+
+def test_contract_directly_contradictory_assertions_emitted_with_reciprocal_links():
+    """Cycle 2 Rule D: Directly contradictory assertions are emitted with reciprocal evidence links.
+    
+    EvidenceAssessor must NOT silence contradictory evidence or fail closed to empty.
+    """
+    prompt = OpenRouterEvidenceAssessor.SYSTEM_PROMPT
+    assert "Rule D" in prompt or "Contradiction Preservation" in prompt
+    assert "contradicting_evidence_ids" in prompt
+    assert "reciprocal" in prompt.lower() or "contradict" in prompt.lower()
+    # Confirm erroneous instruction from Cycle 1 prompt is removed
+    assert "conflicting claims without factual consensus, you MUST output an empty" not in prompt
+
+
+@pytest.mark.anyio
+async def test_contract_contradiction_bearing_candidates_remain_unresolved_until_verifier():
+    """Cycle 2 Architecture: Contradiction-bearing candidates remain unresolved intermediate propositions."""
+    mock_provider = MagicMock(spec=ModelProvider)
+    conflicting_assessment = InvestigationAssessment(
+        proposed_claims=[
+            ProposedClaim(
+                proposal_id="PROP_CAND_01",
+                statement="Deployment succeeded",
+                kind=ClaimKind.FACT,
+                semantic_type=ClaimSemanticType.OUTCOME,
+                supporting_evidence_ids=["EV_01"],
+                contradicting_evidence_ids=["EV_02"],
+            ),
+            ProposedClaim(
+                proposal_id="PROP_CAND_02",
+                statement="Deployment failed",
+                kind=ClaimKind.FACT,
+                semantic_type=ClaimSemanticType.OUTCOME,
+                supporting_evidence_ids=["EV_02"],
+                contradicting_evidence_ids=["EV_01"],
+            ),
+        ],
+        answerability=AssessmentAnswerability.UNRESOLVABLE,
+    )
+    mock_provider.generate_structured = AsyncMock(return_value=(conflicting_assessment, None))
+
+    assessor = OpenRouterEvidenceAssessor(provider=mock_provider)
+    payload = AssessmentPayload(
+        question="배포 성공 여부",
+        evidence_items=[
+            AssessmentEvidenceItem(evidence_id="EV_01", text="Deployment succeeded", retrieval_role="PRIMARY_SCOPE"),
+            AssessmentEvidenceItem(evidence_id="EV_02", text="Deployment failed", retrieval_role="PRIMARY_SCOPE"),
+        ],
+    )
+
+    assessment = await assessor.assess(payload)
+    assert len(assessment.proposed_claims) == 2
+    c1, c2 = assessment.proposed_claims
+    assert c1.supporting_evidence_ids == ["EV_01"] and c1.contradicting_evidence_ids == ["EV_02"]
+    assert c2.supporting_evidence_ids == ["EV_02"] and c2.contradicting_evidence_ids == ["EV_01"]
+
+
+def test_contract_irrelevant_speculative_chatter_produces_no_candidate_claims():
+    """Cycle 2: Casual chatter or irrelevant speculation produces no candidate claims when question asks current state."""
+    prompt = OpenRouterEvidenceAssessor.SYSTEM_PROMPT
+    assert "casual conversation" in prompt.lower() or "chatter" in prompt.lower()
+    assert "empty proposed_claims" in prompt or "empty" in prompt.lower()
+
