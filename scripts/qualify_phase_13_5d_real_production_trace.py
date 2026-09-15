@@ -341,16 +341,20 @@ class ProductionRetrievalAdapter:
             ]
             for itm in eligible_candidates:
                 try:
-                    logger.info(f"🧵 [THREAD_EXPANSION] Expanding thread for eligible item {itm.id}")
+                    logger.info(f"🧵 [THREAD_EXPANSION] Expanding thread for eligible item {itm.evidence_id}")
                     exp_res = self.thread_reader.read_thread_result(itm)
                     if exp_res and getattr(exp_res, "replies", None):
-                        itm.thread_context_status = ThreadContextStatus.EXPANDED.value
-                        itm.expanded_thread_replies = list(exp_res.replies)
+                        itm.thread_context_status = (
+                            exp_res.status.value
+                            if hasattr(exp_res.status, "value")
+                            else str(exp_res.status)
+                        )
+                        itm.thread_replies = list(exp_res.replies)
                         logger.info(f"   ↳ Thread expanded with {len(exp_res.replies)} replies.")
                         break
                 except Exception as e:
                     logger.warning(f"Thread expansion non-fatal failure: {e}")
-                    itm.thread_context_status = ThreadContextStatus.FAILED.value
+                    itm.thread_context_status = ThreadContextStatus.UNAVAILABLE.value
                     break
 
         # Select and Package via production EvidenceSelector
