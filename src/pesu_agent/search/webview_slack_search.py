@@ -344,7 +344,7 @@ JS_CHECK_SEARCH_INPUT_READINESS = r"""
 # Stage B: Model-Native Texty Query Setter (Executed Exactly Once)
 JS_SET_TEXTY_QUERY = r"""
 ((targetQuery) => {
-    const searchInputCandidates = document.querySelectorAll('[data-qa="search_input_box"] .ql-editor');
+    const searchInputCandidates = Array.from(document.querySelectorAll('[data-qa="search_input_box"] .ql-editor')).filter(el => el && el.isConnected);
     if (searchInputCandidates.length !== 1) {
         return { error: 'SEARCH_INPUT_CARDINALITY_NOT_ONE', match_count: searchInputCandidates.length };
     }
@@ -440,7 +440,7 @@ JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
         onenter_invocation_exception: null
     };
 
-    const searchInputCandidates = document.querySelectorAll('[data-qa="search_input_box"] .ql-editor');
+    const searchInputCandidates = Array.from(document.querySelectorAll('[data-qa="search_input_box"] .ql-editor')).filter(el => el && el.isConnected);
     if (searchInputCandidates.length !== 1) {
         return { error: 'SEARCH_INPUT_CARDINALITY_NOT_ONE', report };
     }
@@ -1406,11 +1406,8 @@ class WebViewSlackSearchBackend(SearchBackend):
                     submit_triggered = True
                     verified_query_state_before_submit = True
                     break
-                if res_submit.get("error") == "PRECONDITIONS_NOT_SATISFIED":
-                    time.sleep(submit_poll_interval_sec)
-                    continue
-                if "CARDINALITY" in str(res_submit) or "NOT_CALLABLE" in str(res_submit):
-                    break
+                # Transient re-rendering or precondition not yet settled: continue polling
+                pass
             time.sleep(submit_poll_interval_sec)
 
         telemetry["verified_query_state_before_submit"] = verified_query_state_before_submit
