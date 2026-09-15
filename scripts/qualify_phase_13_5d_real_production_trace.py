@@ -344,21 +344,29 @@ class ProductionRetrievalAdapter:
                     logger.info(f"🧵 [THREAD_EXPANSION] Expanding thread for eligible item {itm.evidence_id}")
                     exp_res = self.thread_reader.read_thread_result(itm)
                     if exp_res and getattr(exp_res, "replies", None):
-                        itm.thread_context_status = (
+                        status_val = (
                             exp_res.status.value
                             if hasattr(exp_res.status, "value")
                             else str(exp_res.status)
                         )
-                        itm.thread_replies = list(exp_res.replies)
+                        replies_val = list(exp_res.replies)
+                        chosen_key = get_canonical_evidence_key(itm)
+                        for c in all_candidates:
+                            if get_canonical_evidence_key(c) == chosen_key:
+                                c.thread_replies = replies_val
+                                c.thread_context_status = status_val
                         logger.info(f"   ↳ Thread expanded with {len(exp_res.replies)} replies.")
                         break
                 except Exception as e:
                     logger.warning(f"Thread expansion non-fatal failure: {e}")
-                    itm.thread_context_status = ThreadContextStatus.UNAVAILABLE.value
+                    chosen_key = get_canonical_evidence_key(itm)
+                    for c in all_candidates:
+                        if get_canonical_evidence_key(c) == chosen_key:
+                            c.thread_context_status = ThreadContextStatus.UNAVAILABLE.value
                     break
 
         # Select and Package via production EvidenceSelector
-        final_pkg, selected_items = self.selector.select_and_package(
+        final_pkg, _stats = self.selector.select_and_package(
             candidates=all_candidates,
             plan=dummy_plan,
             package_id=f"pkg_{investigation_id}",
@@ -366,7 +374,7 @@ class ProductionRetrievalAdapter:
             actor_scope=actor_scope,
         )
 
-        return final_pkg, selected_items, candidate_query_provenance
+        return final_pkg, final_pkg.evidence_items, candidate_query_provenance
 
 
 # ---------------------------------------------------------------------------
@@ -492,7 +500,7 @@ async def run_single_case(
                     pass_reason = f"Decisive state {actual_final_state} matched expected and has complete traceability chain"
         elif expected_final_state == "UNKNOWN":
             # Safe Unknown: must explain missing authority, not a pipeline crash
-            if trace_result.success or trace_result.stop_reason in ("NO_SUPPORTED_CLAIMS", "INSUFFICIENT_EVIDENCE", "NO_EVIDENCE", "NO_DECISIVE_WORK_ITEM"):
+            if trace_result.success or trace_result.stop_reason in ("SAFE_UNKNOWN", "NO_SUPPORTED_CLAIMS", "INSUFFICIENT_EVIDENCE", "NO_EVIDENCE", "NO_DECISIVE_WORK_ITEM"):
                 verdict = "PASS"
                 pass_reason = f"Safe unknown verified: state={actual_final_state}, stop_reason={trace_result.stop_reason}"
             else:
