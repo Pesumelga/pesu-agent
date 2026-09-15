@@ -1,0 +1,156 @@
+{
+  "task": "PHASE_13_5D_TASK_11",
+  "exact_live_query_plan_predeclared": true,
+  "case_count": 3,
+  "cases": [
+    {
+      "case_id": "CASE_A",
+      "question": "고객 만족도 현황 페이지는 1차 배포가 완료된 상태인가?",
+      "expected_final_state": "COMPLETED",
+      "selection_reason": "실제 Slack에서 명확한 완료/배포 근거를 검색하고, 완료 사실이 Evidence → Claim → WorkItem → Answer까지 trace되는지 검증",
+      "search_scope": "production_global_read_only",
+      "search_concepts": [
+        "고객 만족도 현황",
+        "1차 배포",
+        "배포"
+      ],
+      "actor_scope": {
+        "kind": "UNSPECIFIED",
+        "status": "RESOLVED",
+        "is_implicit": false
+      },
+      "temporal_scope": {
+        "strictness": "NONE",
+        "status": "NONE",
+        "interval": null
+      },
+      "channel_scope": "global_read_only",
+      "query_limit": 3,
+      "max_results_per_query": 5,
+      "exact_slack_queries": [
+        {
+          "order": 1,
+          "raw_planner_query": "고객 만족도 현황 페이지 1차 배포 완료",
+          "compiled_query": "고객 만족도 현황 페이지 1차 배포 완료",
+          "purpose": "해당 페이지의 1차 배포 완료 여부를 직접 확인한다.",
+          "target_channel_hint": "프로젝트·개발·릴리즈 관련 채널"
+        },
+        {
+          "order": 2,
+          "raw_planner_query": "고객 만족도 현황 페이지는 1차 배포가 완료된 상태인가",
+          "compiled_query": "고객 만족도 현황 페이지는 1차 배포가 완료된 상태인가",
+          "purpose": "조사 질문의 실제 자연어 표현과 일치하는 논의나 답변을 찾는다.",
+          "target_channel_hint": "프로젝트 논의 및 업무 문의 채널"
+        },
+        {
+          "order": 3,
+          "raw_planner_query": "고객 만족도 현황 페이지 배포",
+          "compiled_query": "고객 만족도 현황 페이지 배포",
+          "purpose": "배포 상태, 진행 상황, 배포 이슈 등 관련 논의를 넓게 탐색한다.",
+          "target_channel_hint": "개발·제품·배포 관련 채널"
+        }
+      ],
+      "planner_objective": "고객 만족도 현황 페이지의 1차 배포 완료 여부를 확인하고, 배포 완료 사실·시점·관련 담당자 또는 후속 조치에 대한 Slack 근거를 확보한다."
+    },
+    {
+      "case_id": "CASE_B",
+      "question": "신규 Office 영업지원 조회 기능은 지금 어디까지 진행됐고, 누가 무엇을 결정했으며, 현재 무엇이 막혀 있는가?",
+      "expected_final_state": "BLOCKED",
+      "selection_reason": "진척/완료 signal과 blocker signal이 공존할 때 frozen resolver priority가 실제 Slack evidence에서도 유지되는지 검증",
+      "search_scope": "production_global_read_only",
+      "search_concepts": [
+        "영업지원",
+        "조회",
+        "Office",
+        "신규 Office"
+      ],
+      "actor_scope": {
+        "kind": "UNSPECIFIED",
+        "status": "RESOLVED",
+        "is_implicit": false
+      },
+      "temporal_scope": {
+        "strictness": "NONE",
+        "status": "NONE",
+        "interval": null
+      },
+      "channel_scope": "global_read_only",
+      "query_limit": 3,
+      "max_results_per_query": 5,
+      "exact_slack_queries": [
+        {
+          "order": 1,
+          "raw_planner_query": "Office 영업지원 조회 기능 진행 결정 막힘",
+          "compiled_query": "Office 영업지원 조회 기능 진행 결정 막힘",
+          "purpose": "기능의 진행 현황, 의사결정, 장애 요인을 한 번에 확인하기 위한 핵심 탐색",
+          "target_channel_hint": "영업지원·프로덕트·개발 프로젝트 채널"
+        },
+        {
+          "order": 2,
+          "raw_planner_query": "신규 Office 영업지원 조회 기능 어디까지 진행됐고 누가 무엇을 결정했으며 무엇이 막혀",
+          "compiled_query": "신규 Office 영업지원 조회 기능 어디까지 진행됐고 누가 무엇을 결정했으며 무엇이 막혀",
+          "purpose": "질문에 사용된 자연어 표현과 유사한 실제 논의·상태 공유 메시지를 직접 탐색",
+          "target_channel_hint": "프로젝트 논의 및 업무 공유 채널"
+        },
+        {
+          "order": 3,
+          "raw_planner_query": "Office 영업지원 조회",
+          "compiled_query": "Office 영업지원 조회",
+          "purpose": "시기와 세부 상태 표현을 완화하여 기능명, 관련 요구사항, 작업 내역, 이슈 논의를 폭넓게 수집",
+          "target_channel_hint": "Office 관련 전사·영업·개발 채널"
+        }
+      ],
+      "planner_objective": "신규 Office 영업지원 조회 기능의 현재 진행 단계와 완료·잔여 작업을 확인하고, 주요 의사결정의 주체·내용·근거를 추적하며, 출시 또는 다음 단계 진행을 가로막는 현행 이슈와 의존성을 규명한다."
+    },
+    {
+      "case_id": "CASE_C",
+      "question": "직원 휴직 요청에 대한 Office 자동 처리 정책은 최종 확정되어 실제 동작까지 정립된 상태인가?",
+      "expected_final_state": "UNKNOWN",
+      "selection_reason": "정책 또는 실제 결과물이 충분히 확정되지 않은 상황에서 PESU가 임의로 완료/진행/차단 상태를 만들어내지 않고 UNKNOWN / fail-closed하는지 검증",
+      "search_scope": "production_global_read_only",
+      "search_concepts": [
+        "휴직",
+        "Office",
+        "휴직 요청",
+        "직원 휴직"
+      ],
+      "actor_scope": {
+        "kind": "UNSPECIFIED",
+        "status": "RESOLVED",
+        "is_implicit": false
+      },
+      "temporal_scope": {
+        "strictness": "NONE",
+        "status": "NONE",
+        "interval": null
+      },
+      "channel_scope": "global_read_only",
+      "query_limit": 3,
+      "max_results_per_query": 5,
+      "exact_slack_queries": [
+        {
+          "order": 1,
+          "raw_planner_query": "휴직 요청 Office 자동 처리 정책 확정 운영",
+          "compiled_query": "휴직 요청 Office 자동 처리 정책 확정 운영",
+          "purpose": "휴직 요청 자동 처리 정책의 확정 여부와 운영·적용 상태를 확인한다.",
+          "target_channel_hint": "인사·총무·Office 운영 관련 채널"
+        },
+        {
+          "order": 2,
+          "raw_planner_query": "직원 휴직 요청에 대한 Office 자동 처리 정책은 최종 확정되어 실제 동작",
+          "compiled_query": "직원 휴직 요청에 대한 Office 자동 처리 정책은 최종 확정되어 실제 동작",
+          "purpose": "사용자가 제시한 표현과 가까운 문구를 찾아 정책 확정 및 실제 동작 여부에 대한 논의와 결론을 확인한다.",
+          "target_channel_hint": "인사 정책 및 업무자동화 논의 채널"
+        },
+        {
+          "order": 3,
+          "raw_planner_query": "휴직 자동 처리 Office 정책",
+          "compiled_query": "휴직 자동 처리 Office 정책",
+          "purpose": "세부 표현이 다르거나 약칭으로 공유된 관련 논의, 구현 현황, 미결 사항을 폭넓게 탐색한다.",
+          "target_channel_hint": "IT·업무자동화·HR 시스템 채널"
+        }
+      ],
+      "planner_objective": "직원의 휴직 요청에 대한 Office 자동 처리 정책이 최종 확정되었는지, 실제 시스템 동작과 운영 절차까지 정립·적용되었는지 확인한다."
+    }
+  ]
+}
