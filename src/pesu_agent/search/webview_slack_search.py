@@ -393,6 +393,153 @@ JS_SET_QUERY_AND_SUBMIT = r"""
 })
 """
 
+
+def compute_result_set_fingerprint(items: list[dict[str, Any]]) -> str:
+    """Computes deterministic SHA-256 fingerprint for a list of result items."""
+    if not items:
+        return "EMPTY_RESULTS"
+    signatures: list[str] = []
+    for idx, itm in enumerate(items):
+        plink = (
+            itm.get("canonical_permalink")
+            or (itm.get("qualifying_permalinks") or [None])[0]
+            or "NO_PERMALINK"
+        )
+        author = itm.get("sender_author_id") or itm.get("sender_text") or "NO_AUTHOR"
+        ts = itm.get("timestamp_raw") or "NO_TS"
+        body = itm.get("normalized_body") or itm.get("body_sample") or ""
+        body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+        signatures.append(f"{idx}:{plink}:{author}:{ts}:{body_hash}")
+    return hashlib.sha256("|".join(signatures).encode("utf-8")).hexdigest()[:16]
+
+
+# Forensic Transition JS Probes (Phase 13.5D Task 11R2 Pure Read-Only Observability)
+JS_PROBE_PRE_SUBMIT_SEARCH_STATE = r"""
+(() => {
+    const inputElem = document.querySelector('[data-qa="search_input_box"] .ql-editor');
+    const inputValueBefore = inputElem ? (inputElem.textContent || inputElem.innerText || '').trim() : '';
+
+    let surfaceQueryBefore = null;
+    try {
+        const url = new URL(window.location.href);
+        const qUrl = url.searchParams.get('query') || url.searchParams.get('q');
+        if (qUrl) {
+            surfaceQueryBefore = qUrl;
+        } else {
+            const m = url.pathname.match(/\/search\/(.+)$/);
+            if (m) surfaceQueryBefore = decodeURIComponent(m[1]);
+        }
+    } catch (e) {}
+
+    if (!surfaceQueryBefore) {
+        const header = document.querySelector('[data-qa="search_header_query"], [data-qa="search_query"], .c-search_header__title');
+        if (header && (header.textContent || '').trim()) {
+            surfaceQueryBefore = header.textContent.trim();
+        }
+    }
+
+    const searchViews = document.querySelectorAll('[data-qa="search_view"]');
+    const searchViewMounted = searchViews.length === 1;
+    let preSubmitItems = [];
+
+    if (searchViewMounted) {
+        const roots = Array.from(searchViews[0].querySelectorAll('[data-qa="search_result"], [data-qa="search_message_result_item"], .c-search_result')).filter(el => {
+            if (!el || !el.isConnected) return false;
+            const r = el.getBoundingClientRect();
+            return (r.width > 0 && r.height > 0);
+        });
+        preSubmitItems = roots.slice(0, 10).map((r, idx) => {
+            const a = r.querySelector('a[href*="/archives/"]');
+            const href = a ? a.getAttribute('href') : '';
+            const body = (r.querySelector('.c-search_message__content') || r).textContent || '';
+            const sender = r.querySelector('[data-qa="message_sender_name"]');
+            const ts = r.querySelector('.c-timestamp');
+            return {
+                canonical_permalink: href,
+                sender_text: sender ? (sender.textContent || '').trim() : null,
+                timestamp_raw: ts ? (ts.textContent || '').trim() : null,
+                normalized_body: body.replace(/\s+/g, ' ').trim()
+            };
+        });
+    }
+
+    const loadingIndicator = Boolean(document.querySelector('[data-qa="loading_indicator"], [aria-busy="true"], .c-search_view__loading, .c-loading, .p-search_results_loading'));
+
+    return {
+        input_value_before: inputValueBefore,
+        surface_query_before: surfaceQueryBefore,
+        search_view_mounted: searchViewMounted,
+        pre_submit_item_count: preSubmitItems.length,
+        pre_submit_items: preSubmitItems,
+        loading_detected_before: loadingIndicator
+    };
+})()
+"""
+
+JS_PROBE_POST_SUBMIT_INPUT_STATE = r"""
+(() => {
+    const inputElem = document.querySelector('[data-qa="search_input_box"] .ql-editor');
+    const inputValueAfterSubmit = inputElem ? (inputElem.textContent || inputElem.innerText || '').trim() : '';
+
+    let surfaceQueryImmediate = null;
+    try {
+        const url = new URL(window.location.href);
+        const qUrl = url.searchParams.get('query') || url.searchParams.get('q');
+        if (qUrl) {
+            surfaceQueryImmediate = qUrl;
+        } else {
+            const m = url.pathname.match(/\/search\/(.+)$/);
+            if (m) surfaceQueryImmediate = decodeURIComponent(m[1]);
+        }
+    } catch (e) {}
+
+    const loadingIndicator = Boolean(document.querySelector('[data-qa="loading_indicator"], [aria-busy="true"], .c-search_view__loading, .c-loading, .p-search_results_loading'));
+
+    return {
+        input_value_after_submit: inputValueAfterSubmit,
+        surface_query_immediate: surfaceQueryImmediate,
+        loading_detected_immediate: loadingIndicator
+    };
+})()
+"""
+
+JS_PROBE_POST_WAIT_SEARCH_STATE = r"""
+(() => {
+    let surfaceQueryAfter = null;
+    try {
+        const url = new URL(window.location.href);
+        const qUrl = url.searchParams.get('query') || url.searchParams.get('q');
+        if (qUrl) {
+            surfaceQueryAfter = qUrl;
+        } else {
+            const m = url.pathname.match(/\/search\/(.+)$/);
+            if (m) surfaceQueryAfter = decodeURIComponent(m[1]);
+        }
+    } catch (e) {}
+
+    if (!surfaceQueryAfter) {
+        const header = document.querySelector('[data-qa="search_header_query"], [data-qa="search_query"], .c-search_header__title');
+        if (header && (header.textContent || '').trim()) {
+            surfaceQueryAfter = header.textContent.trim();
+        }
+    }
+
+    if (!surfaceQueryAfter) {
+        const inputElem = document.querySelector('[data-qa="search_input_box"] .ql-editor');
+        if (inputElem && (inputElem.textContent || '').trim()) {
+            surfaceQueryAfter = inputElem.textContent.trim();
+        }
+    }
+
+    const loadingIndicator = Boolean(document.querySelector('[data-qa="loading_indicator"], [aria-busy="true"], .c-search_view__loading, .c-loading, .p-search_results_loading'));
+
+    return {
+        surface_query_after: surfaceQueryAfter,
+        loading_detected_after: loadingIndicator
+    };
+})()
+"""
+
 SEARCH_VIEW_SELECTOR = '[data-qa="search_view"]'
 SEARCH_RESULT_ROW_SELECTORS = '[data-qa="search_result"], [data-qa="search_message_result_item"], .c-search_result'
 
@@ -943,11 +1090,44 @@ class WebViewSlackSearchBackend(SearchBackend):
                 details=telemetry,
             )
 
+        # Step 3.5: Read-Only Pre-Submit Probe (Hard Requirement 2: Side-effect free)
+        pre_probe: dict[str, Any] = {}
+        try:
+            res_pre = self._window.evaluate_js(JS_PROBE_PRE_SUBMIT_SEARCH_STATE)
+            if isinstance(res_pre, dict):
+                pre_probe = res_pre
+        except Exception as e:
+            logger.warning(f"Pre-submit probe evaluation warning: {e}")
+
+        search_input_value_before = pre_probe.get("input_value_before", "")
+        surface_query_before = pre_probe.get("surface_query_before")
+        pre_submit_items = pre_probe.get("pre_submit_items", [])
+        search_view_mounted_before = pre_probe.get("search_view_mounted", False)
+        loading_before = pre_probe.get("loading_detected_before", False)
+
+        result_fingerprint_before: Optional[str] = None
+        if search_view_mounted_before:
+            result_fingerprint_before = compute_result_set_fingerprint(pre_submit_items)
+
         # Step 4: Model-Native Setter & Submit (Atomic, invoked at most once)
         # Query is serialized safely via json.dumps (never formatted as raw string into JS)
         js_pipe = f"({JS_SET_QUERY_AND_SUBMIT})({json.dumps(validated_query)})"
         res_pipe = self._window.evaluate_js(js_pipe)
-        if not (isinstance(res_pipe, dict) and res_pipe.get("submitted")):
+        submit_triggered = bool(isinstance(res_pipe, dict) and res_pipe.get("submitted"))
+
+        # Step 4.5: Read-Only Post-Submit Probe (Hard Requirement 2: Side-effect free)
+        post_submit_probe: dict[str, Any] = {}
+        try:
+            res_post_sub = self._window.evaluate_js(JS_PROBE_POST_SUBMIT_INPUT_STATE)
+            if isinstance(res_post_sub, dict):
+                post_submit_probe = res_post_sub
+        except Exception as e:
+            logger.warning(f"Post-submit probe evaluation warning: {e}")
+
+        search_input_value_after_submit = post_submit_probe.get("input_value_after_submit", "")
+        loading_immediate = post_submit_probe.get("loading_detected_immediate", False)
+
+        if not submit_triggered:
             telemetry["last_confirmed_stage"] = "SETTER_EXECUTED" if "onEnter" in str(res_pipe) else "INPUT_OBSERVED"
             err_code = (
                 WebViewSearchFailureCode.QUERY_STATE_SYNC_FAILED
@@ -962,7 +1142,27 @@ class WebViewSlackSearchBackend(SearchBackend):
         telemetry["last_confirmed_stage"] = "SUBMIT_EXECUTED"
 
         # Step 5: Bounded Wait & Terminal State Extraction
+        t_wait_start = time.monotonic()
         time.sleep(3.5)
+        result_transition_wait_duration_ms = int((time.monotonic() - t_wait_start) * 1000)
+
+        # Step 5.1: Read-Only Post-Wait Probe (Hard Requirement 2: Side-effect free)
+        post_wait_probe: dict[str, Any] = {}
+        try:
+            res_post_wait = self._window.evaluate_js(JS_PROBE_POST_WAIT_SEARCH_STATE)
+            if isinstance(res_post_wait, dict):
+                post_wait_probe = res_post_wait
+        except Exception as e:
+            logger.warning(f"Post-wait probe evaluation warning: {e}")
+
+        surface_query_after = post_wait_probe.get("surface_query_after")
+        loading_after = post_wait_probe.get("loading_detected_after", False)
+
+        loading_or_dom_transition_observed = bool(
+            loading_immediate
+            or loading_after
+            or (surface_query_before != surface_query_after and surface_query_after is not None)
+        )
 
         js_extract = (
             f"({JS_EXTRACT_SEARCH_RESULTS})("
@@ -1072,6 +1272,80 @@ class WebViewSlackSearchBackend(SearchBackend):
         telemetry["raw_items_count"] = len(raw_items)
         telemetry["valid_items_count"] = len(parsed_results)
         telemetry["raw_items_evaluated"] = raw_items_evaluated
+
+        result_fingerprint_after = compute_result_set_fingerprint(raw_items_evaluated)
+
+        # Forensic transition evaluations (Hard Requirement 1: Separate Query & Result Axes)
+        norm_req = re.sub(r"\s+", " ", validated_query).strip().lower()
+        norm_inp = re.sub(r"\s+", " ", search_input_value_after_submit).strip().lower()
+        input_matches_requested = bool(
+            norm_req and (norm_req == norm_inp or norm_req in norm_inp or norm_inp in norm_req)
+        )
+
+        norm_surf = re.sub(r"\s+", " ", surface_query_after or "").strip().lower()
+        surface_query_matches_requested = bool(
+            norm_surf and (norm_req in norm_surf or norm_surf in norm_req)
+        )
+
+        norm_before = re.sub(r"\s+", " ", surface_query_before or "").strip().lower()
+        surface_query_changed = (
+            (norm_before != norm_surf) if (norm_before and norm_surf) else bool(norm_surf)
+        )
+
+        result_fingerprint_changed: Optional[bool] = None
+        if result_fingerprint_before is not None:
+            result_fingerprint_changed = (result_fingerprint_before != result_fingerprint_after)
+
+        # Classification ladder strictly conforming to Hard Requirement 1
+        if not input_matches_requested:
+            transition_classification = "QUERY_NOT_APPLIED"
+        elif not submit_triggered:
+            transition_classification = "QUERY_APPLIED_BUT_NOT_SUBMITTED"
+        elif not surface_query_matches_requested:
+            transition_classification = "QUERY_SUBMITTED_BUT_SURFACE_NOT_TRANSITIONED"
+        elif result_fingerprint_changed is False:
+            transition_classification = "RESULT_SET_UNCHANGED_AFTER_QUERY_CHANGE"
+        elif result_fingerprint_changed is True:
+            transition_classification = "RESULT_TRANSITIONED_AND_DIFFERENT_RESULTS"
+        else:
+            transition_classification = (
+                "RESULT_TRANSITIONED_AND_DIFFERENT_RESULTS"
+                if len(raw_items) > 0
+                else "EMPTY_RESULTS"
+            )
+
+        forensic_transition = {
+            "INPUT_MATCHES_REQUESTED": input_matches_requested,
+            "SUBMIT_TRIGGERED": submit_triggered,
+            "SEARCH_SURFACE_QUERY_BEFORE": surface_query_before,
+            "SEARCH_SURFACE_QUERY_AFTER": surface_query_after,
+            "SEARCH_SURFACE_QUERY_MATCHES_REQUESTED": surface_query_matches_requested,
+            "SEARCH_SURFACE_QUERY_CHANGED": surface_query_changed,
+            "RESULT_FINGERPRINT_BEFORE": result_fingerprint_before,
+            "RESULT_FINGERPRINT_AFTER": result_fingerprint_after,
+            "RESULT_FINGERPRINT_CHANGED": result_fingerprint_changed,
+            "LOADING_OR_DOM_TRANSITION_OBSERVED": loading_or_dom_transition_observed,
+            "TRANSITION_CLASSIFICATION": transition_classification,
+            "requested_query": validated_query,
+            "search_input_value_before": search_input_value_before,
+            "search_input_value_after_submit": search_input_value_after_submit,
+            "query_submit_triggered": submit_triggered,
+            "result_fingerprint_before_submit": result_fingerprint_before,
+            "result_fingerprint_after_wait": result_fingerprint_after,
+            "result_change_detected": result_fingerprint_changed,
+            "result_transition_wait_duration_ms": result_transition_wait_duration_ms,
+            "current_search_surface_query": surface_query_after,
+            "raw_result_count": len(raw_items),
+            "raw_result_identifiers": [item.get("canonical_permalink") for item in raw_items_evaluated],
+            "raw_result_text_hashes": [
+                hashlib.sha256((item.get("normalized_body") or "").encode("utf-8")).hexdigest()[:12]
+                for item in raw_items_evaluated
+            ],
+            "input_query_changed_but_result_fingerprint_unchanged": bool(
+                result_fingerprint_changed is False
+            ),
+        }
+        telemetry["forensic_transition"] = forensic_transition
 
         # Mandatory all-invalid escalation:
         # If raw result rows were returned by Slack, but not a single row could be qualified,

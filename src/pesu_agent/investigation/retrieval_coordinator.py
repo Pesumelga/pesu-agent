@@ -550,6 +550,7 @@ class ProductionInvestigationRetrievalCoordinator:
                 "raw_returned_item_count": backend_telemetry.get("raw_items_count", len(items)),
                 "valid_returned_item_count": len(bounded_items),
                 "raw_items": raw_evals,
+                "forensic_transition": backend_telemetry.get("forensic_transition", {}),
             })
 
             # SELF Author Integrity check
