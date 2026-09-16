@@ -62,6 +62,10 @@ class ResolvedActorScope(BaseModel):
         default=False,
         description="암시적 개인 회고/활동 질의 여부 (True: 생략된 주어 회고 질의, False: 명시적 표현)",
     )
+    matched_author_name: Optional[str] = Field(
+        default=None,
+        description="매칭된 권한 액터/작성자 명칭 (WorkItem synthesis 호환 필드)",
+    )
 
 
 
