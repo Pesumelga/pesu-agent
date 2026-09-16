@@ -78,6 +78,7 @@ from pesu_agent.investigation.workitem_synthesis import (
     OpenRouterDecisiveLifecycleAuthorityVerifier,
     WorkItemSynthesisConfig,
     WorkItemTraceabilityChain,
+    ClaimTraceabilityRecord,
 )
 from pesu_agent.llm.config import LLMConfig
 from pesu_agent.llm.openrouter import OpenRouterAPIError
@@ -107,6 +108,7 @@ from pesu_agent.search.temporal import TemporalStrictness, TemporalResolutionSta
 from pesu_agent.ui.grounded_answer_builder import (
     GroundedWorkItemAnswerBuilder,
     GroundedWorkItemAnswerPayload,
+    GroundedWorkItemCard,
 )
 from pesu_agent.ui.result_presenter import present_grounded_investigation_result
 
@@ -437,6 +439,79 @@ def run_harness_contract_preflight(
         and hasattr(test_actor_scope, "matched_author_name")
     )
 
+    # 9. Traceability Chain Contract
+    chain_fields = set(WorkItemTraceabilityChain.model_fields.keys())
+    traceability_chain_valid = bool(
+        "work_item_id" in chain_fields
+        and "governing_claim_ids" in chain_fields
+        and "claim_traces" in chain_fields
+        and "all_evidence_ids" in chain_fields
+        and "is_traceable" in chain_fields
+        and "final_status" in chain_fields
+        and "claim_ids" not in chain_fields
+        and "evidence_keys" not in chain_fields
+    )
+
+    # 10. Claim Trace Record Contract
+    record_fields = set(ClaimTraceabilityRecord.model_fields.keys())
+    claim_trace_record_valid = bool(
+        "claim_id" in record_fields
+        and "statement" in record_fields
+        and "evidence_ids" in record_fields
+        and "citations" in record_fields
+        and "decisive_authority" in record_fields
+        and "lifecycle_signal" in record_fields
+        and "relation" in record_fields
+        and "episode_membership" in record_fields
+    )
+
+    # 11. Final State Extraction Contract
+    # Verifies that authoritative final state fields exist and are directly extractable
+    # with DIAGNOSTIC_FINAL_STATE_SEMANTIC_AUTHORITY = 0 (no re-reconciliation in harness).
+    final_state_extraction_valid = bool(
+        "status" in WorkItemNode.model_fields
+        and "final_status" in chain_fields
+        and "status" in GroundedWorkItemCard.model_fields
+    )
+
+    # 12. Diagnostic Report Serialization Contract
+    # Verify build_case_diagnostic_report produces valid JSON serializable structure
+    try:
+        sample_chain = WorkItemTraceabilityChain(
+            work_item_id="WI-PREFLIGHT",
+            title="Preflight WorkItem",
+            kind=WorkItemKind.TASK,
+            final_status=WorkItemStatus.COMPLETED,
+            governing_claim_ids=[],
+            claim_traces=[],
+            all_evidence_ids=[],
+            is_traceable=True,
+        )
+        sample_trace = ProductionTraceResult(
+            success=True,
+            question="Preflight Question?",
+            graph=test_graph,
+            work_items={"WI-PREFLIGHT": test_wi},
+            traceability_chains={"WI-PREFLIGHT": sample_chain},
+            stop_reason="COMPLETED",
+        )
+        sample_report = build_case_diagnostic_report(
+            case_id="PREFLIGHT",
+            question="Preflight Question?",
+            expected_final_state="COMPLETED",
+            raw_query_records=[],
+            candidates=[],
+            selected_candidates=[],
+            pipeline_boundary_telemetry={},
+            trace_result=sample_trace,
+            grounded_answer=ans_test,
+        )
+        _serialized = json.dumps(sample_report, ensure_ascii=False)
+        report_serialization_valid = isinstance(_serialized, str) and len(_serialized) > 0
+    except Exception as ex:
+        logger.warning(f"Preflight report serialization failed: {ex}")
+        report_serialization_valid = False
+
     preflight_results = {
         "STAGE1A_CONFIG_CONTRACT_VALID": stage1a_valid,
         "STAGE1B_CONFIG_CONTRACT_VALID": stage1b_valid,
@@ -446,6 +521,10 @@ def run_harness_contract_preflight(
         "WORK_ITEMS_CONTAINER_CONTRACT_VALID": work_items_container_valid,
         "WORK_ITEM_CLAIM_LINKS_CONTAINER_CONTRACT_VALID": claim_links_valid,
         "ACTOR_SCOPE_CONTRACT_VALID": actor_scope_valid,
+        "TRACEABILITY_CHAIN_CONTRACT_VALID": traceability_chain_valid,
+        "CLAIM_TRACE_RECORD_CONTRACT_VALID": claim_trace_record_valid,
+        "FINAL_STATE_EXTRACTION_CONTRACT_VALID": final_state_extraction_valid,
+        "DIAGNOSTIC_REPORT_SERIALIZATION_CONTRACT_VALID": report_serialization_valid,
     }
 
     return preflight_results
@@ -460,116 +539,21 @@ def is_target_text(t: str) -> bool:
     )
 
 
-async def execute_case_diagnostic(
-    case_spec: Dict[str, Any],
-    retrieval_coordinator: ProductionInvestigationRetrievalCoordinator,
-    trace_coordinator: ProductionRealTraceCoordinator,
-    thread_reader: Optional[WebviewThreadReader] = None,
-    is_dry_run: bool = False,
-) -> Dict[str, Any]:
-    case_id = case_spec["case_id"]
-    question = case_spec["question"]
-    expected_final_state = case_spec["expected_final_state"]
-    exact_queries = case_spec["exact_slack_queries"]
-    actor_scope_dict = case_spec["actor_scope"]
-    temporal_scope_dict = case_spec["temporal_scope"]
-
-    logger.info(f"\n=======================================================")
-    logger.info(f"▶ EXECUTING CASE DIAGNOSTIC: {case_id}")
-    logger.info(f"  Question: {question}")
-    logger.info(f"  Expected Diagnostic State: {expected_final_state}")
-    logger.info(f"=======================================================")
-
-    actor_scope = ResolvedActorScope(
-        kind=ActorScopeKind(actor_scope_dict["kind"]),
-        status=ActorResolutionStatus(actor_scope_dict["status"]),
-        is_implicit=actor_scope_dict.get("is_implicit", False),
-    )
-    temporal_scope = ResolvedTemporalScope(
-        strictness=TemporalStrictness(temporal_scope_dict["strictness"]),
-        status=TemporalResolutionStatus(temporal_scope_dict["status"]),
-    )
-
-    t0 = time.perf_counter()
-
-    # Step 1: Retrieval via single shared ProductionInvestigationRetrievalCoordinator
-    thread_fn = thread_reader.read_thread_result if thread_reader else None
-    search_queries = [
-        SearchQuery(
-            query=q_spec["compiled_query"],
-            purpose=q_spec.get("purpose", "Predeclared diagnostic query"),
-            target_channel_hint=q_spec.get("target_channel_hint"),
-        )
-        for q_spec in exact_queries[:case_spec.get("query_limit", 3)]
-    ]
-    frozen_plan = InvestigationPlan(
-        objective=case_spec.get("planner_objective", "Diagnostic Plan"),
-        search_queries=search_queries,
-        questions_to_resolve=[question],
-        anchor_terms=[],
-    )
-    retrieval_res: RetrievalCoordinatorResult = await retrieval_coordinator.retrieve_precomputed(
-        plan=frozen_plan,
-        actor_scope=actor_scope,
-        temporal_scope=temporal_scope,
-        investigation_id=f"diag_{case_id.lower()}",
-        thread_reader_fn=thread_fn,
-    )
-
-    candidates = retrieval_res.candidates
-    selected_candidates = retrieval_res.selected_candidates
-    evidence_package = retrieval_res.evidence_package
-    raw_query_records = retrieval_res.raw_query_records
-    pipeline_boundary_telemetry = retrieval_res.pipeline_boundary_telemetry
-
-    retrieval_latency = time.perf_counter() - t0
-    logger.info(
-        f"📦 [RETRIEVAL_COMPLETE] {case_id}: Raw queries={len(raw_query_records)}, "
-        f"Candidates={len(candidates)}, Selected={len(selected_candidates)} (Latency: {retrieval_latency:.2f}s)"
-    )
-
-    if is_dry_run:
-        logger.info(f"🧪 [DRY_RUN] Bypassing provider calls for {case_id}")
-        dummy_graph = InvestigationStateGraph(question=question)
-        dummy_ans = GroundedWorkItemAnswerBuilder().build_answer(
-            question=question,
-            graph=dummy_graph,
-            work_items={},
-            traceability_chains={},
-        )
-        return {
-            "case_id": case_id,
-            "question": question,
-            "expected_final_state": expected_final_state,
-            "actual_final_state": "DRY_RUN",
-            "retrieval_candidates": len(candidates),
-            "selected_candidates": len(selected_candidates),
-            "dry_run": True,
-        }
-
-    # Step 2: Full Multi-Stage WorkItem Trace Coordinator Execution
-    t_synth_start = time.perf_counter()
-    trace_result: ProductionTraceResult = await trace_coordinator.trace_and_synthesize_async(
-        question=question,
-        candidates=selected_candidates if selected_candidates else candidates,
-        investigation_objective=case_spec.get("planner_objective"),
-        temporal_scope=temporal_scope,
-        actor_scope=actor_scope,
-        candidate_query_provenance=retrieval_res.candidate_query_provenance,
-    )
-    synth_latency = time.perf_counter() - t_synth_start
-
-    # Step 3: Grounded Answer Building
-    answer_builder = GroundedWorkItemAnswerBuilder()
-    grounded_answer = answer_builder.build_answer(
-        question=question,
-        graph=trace_result.graph,
-        work_items=trace_result.work_items,
-        traceability_chains=trace_result.traceability_chains,
-    )
-
-    total_latency = time.perf_counter() - t0
-
+def build_case_diagnostic_report(
+    case_id: str,
+    question: str,
+    expected_final_state: str,
+    raw_query_records: list[dict[str, Any]],
+    candidates: list[EvidenceItem],
+    selected_candidates: list[EvidenceItem],
+    pipeline_boundary_telemetry: dict[str, Any],
+    trace_result: ProductionTraceResult,
+    grounded_answer: GroundedWorkItemAnswerPayload,
+    retrieval_latency: float = 0.0,
+    synth_latency: float = 0.0,
+    total_latency: float = 0.0,
+) -> dict[str, Any]:
+    """Extracts boundary trace, checkpoints, and returns the case diagnostic report dictionary."""
     # Extract Boundary Trace Fields (Section 4)
     raw_result_ids = []
     post_integrity_ids = []
@@ -668,13 +652,23 @@ async def execute_case_diagnostic(
         else:
             final_workitem_state = wi_statuses[0]
 
-    traceable_claim_ids = []
-    traceable_evidence_ids = []
+    # Traceability contract audit resolution (Task 11R10)
+    # ALL_TRACEABLE_CLAIM_IDS = claim_traces[*].claim_id
+    # GOVERNING_CLAIM_IDS = governing_claim_ids
+    # ALL_TRACEABLE_EVIDENCE_IDS = all_evidence_ids
+    all_traceable_claim_ids = []
+    governing_claim_ids = []
+    all_traceable_evidence_ids = []
+
     for wid, chain in trace_result.traceability_chains.items():
-        traceable_claim_ids.extend(chain.claim_ids)
-        traceable_evidence_ids.extend(chain.evidence_keys)
-    traceable_claim_ids = list(dict.fromkeys(traceable_claim_ids))
-    traceable_evidence_ids = list(dict.fromkeys(traceable_evidence_ids))
+        for ct in chain.claim_traces:
+            all_traceable_claim_ids.append(ct.claim_id)
+        governing_claim_ids.extend(chain.governing_claim_ids)
+        all_traceable_evidence_ids.extend(chain.all_evidence_ids)
+
+    all_traceable_claim_ids = list(dict.fromkeys(all_traceable_claim_ids))
+    governing_claim_ids = list(dict.fromkeys(governing_claim_ids))
+    all_traceable_evidence_ids = list(dict.fromkeys(all_traceable_evidence_ids))
 
     boundary_trace = {
         "RAW_RESULT_IDS": raw_result_ids,
@@ -692,12 +686,13 @@ async def execute_case_diagnostic(
         "STAGE2_5_OUTPUT": stage2_5_output,
         "RECONCILIATION_OUTPUT": reconciliation_output,
         "FINAL_WORKITEM_STATE": final_workitem_state,
-        "TRACEABLE_CLAIM_IDS": traceable_claim_ids,
-        "TRACEABLE_EVIDENCE_IDS": traceable_evidence_ids,
+        "ALL_TRACEABLE_CLAIM_IDS": all_traceable_claim_ids,
+        "GOVERNING_CLAIM_IDS": governing_claim_ids,
+        "ALL_TRACEABLE_EVIDENCE_IDS": all_traceable_evidence_ids,
         "GROUNDED_ANSWER": extract_grounded_answer_report(grounded_answer),
     }
 
-    # Case A Specific 10 Checkpoints (Section 5)
+    # Case A Specific Checkpoints (Section 4 & 5)
     case_a_checkpoints = None
     if case_id == "CASE_A":
         target_in_raw = any(
@@ -730,29 +725,53 @@ async def execute_case_diagnostic(
             if is_target_text(en.text or "") or TARGET_PERMALINK_SUBSTRING in (en.canonical_permalink or "")
         ]
 
+        # Target proposed and verified claims in graph by evidence lineage
         target_supports_proposed = False
         target_supports_verified = False
         for cid, c in trace_result.graph.claim_nodes.items():
-            links = [l for l in trace_result.graph.claim_evidence_links.values() if l.claim_id == cid]
+            links = [l for l in trace_result.graph.claim_evidence_links if l.claim_id == cid]
             c_ev_ids = [l.evidence_id for l in links]
-            is_target_claim = any(eid in target_ev_ids for eid in c_ev_ids) or is_target_text(c.statement)
+            is_target_claim = any(eid in target_ev_ids for eid in c_ev_ids)
             if is_target_claim:
                 target_supports_proposed = True
                 if getattr(c, "verdict", None) == "VERIFIED" or getattr(c, "status", None) in ("SUPPORTED", "PARTIALLY_SUPPORTED"):
                     target_supports_verified = True
 
-        target_reaches_final_trace = False
-        for e_key in traceable_evidence_ids:
-            if is_target_text(e_key):
-                target_reaches_final_trace = True
-                break
-        if not target_reaches_final_trace:
-            # Check if any selected item that matched target has its key in traceable_evidence_ids
-            for sc in selected_candidates:
-                if is_target_text(sc.text or "") or TARGET_PERMALINK_SUBSTRING in (sc.permalink or ""):
-                    if get_canonical_evidence_key(sc) in traceable_evidence_ids:
-                        target_reaches_final_trace = True
-                        break
+        # Target traceable claim IDs by evidence lineage (TARGET_CLAIM_LINEAGE_USES_EVIDENCE_IDS = true)
+        # TARGET_EVIDENCE_IDS -> ClaimTraceabilityRecord.evidence_ids / citations -> TARGET_TRACEABLE_CLAIM_IDS
+        target_traceable_claim_ids = []
+        for wid, chain in trace_result.traceability_chains.items():
+            for ct in chain.claim_traces:
+                ev_lineage_match = any(eid in target_ev_ids for eid in ct.evidence_ids) or any(
+                    cit.get("evidence_id") in target_ev_ids or TARGET_PERMALINK_SUBSTRING in (cit.get("permalink") or "")
+                    for cit in ct.citations
+                )
+                if ev_lineage_match:
+                    target_traceable_claim_ids.append(ct.claim_id)
+
+        target_traceable_claim_ids = sorted(list(dict.fromkeys(target_traceable_claim_ids)))
+        target_claim_present_in_claim_traces = bool(target_traceable_claim_ids)
+
+        # Target evidence present in final trace
+        target_evidence_present_in_final_trace = bool(
+            any(eid in all_traceable_evidence_ids for eid in target_ev_ids)
+            or any(
+                TARGET_PERMALINK_SUBSTRING in (cit.get("permalink") or "")
+                for chain in trace_result.traceability_chains.values()
+                for ct in chain.claim_traces
+                for cit in ct.citations
+            )
+        )
+
+        # Official definitions:
+        # TARGET_REACHES_FINAL_TRACE = bool(TARGET_TRACEABLE_CLAIM_IDS or TARGET_EVIDENCE_PRESENT_IN_FINAL_TRACE)
+        # TARGET_CLAIM_IS_GOVERNING_CLAIM = bool(TARGET_TRACEABLE_CLAIM_IDS ∩ GOVERNING_CLAIM_IDS)
+        target_reaches_final_trace = bool(
+            target_traceable_claim_ids or target_evidence_present_in_final_trace
+        )
+        target_claim_is_governing_claim = bool(
+            set(target_traceable_claim_ids).intersection(set(governing_claim_ids))
+        )
 
         case_a_checkpoints = {
             "TARGET_PRESENT_IN_RAW": target_in_raw,
@@ -764,6 +783,10 @@ async def execute_case_diagnostic(
             "TARGET_IN_ASSESSOR_INPUT": target_in_assessor_input,
             "TARGET_SUPPORTS_PROPOSED_CLAIM": target_supports_proposed,
             "TARGET_SUPPORTS_VERIFIED_CLAIM": target_supports_verified,
+            "TARGET_TRACEABLE_CLAIM_IDS": target_traceable_claim_ids,
+            "TARGET_CLAIM_PRESENT_IN_CLAIM_TRACES": target_claim_present_in_claim_traces,
+            "TARGET_CLAIM_IS_GOVERNING_CLAIM": target_claim_is_governing_claim,
+            "TARGET_EVIDENCE_PRESENT_IN_FINAL_TRACE": target_evidence_present_in_final_trace,
             "TARGET_REACHES_FINAL_TRACE": target_reaches_final_trace,
         }
 
@@ -775,7 +798,7 @@ async def execute_case_diagnostic(
         and len(stage1b_output) > 0
         and len(stage2_output) > 0
         and len(reconciliation_output) > 0
-        and len(traceable_claim_ids) > 0
+        and len(all_traceable_claim_ids) > 0
         and bool(grounded_answer.formatted_markdown_answer)
     )
 
@@ -800,6 +823,135 @@ async def execute_case_diagnostic(
             "total_seconds": total_latency,
         },
     }
+
+
+async def execute_case_diagnostic(
+    case_spec: Dict[str, Any],
+    retrieval_coordinator: ProductionInvestigationRetrievalCoordinator,
+    trace_coordinator: ProductionRealTraceCoordinator,
+    thread_reader: Optional[WebviewThreadReader] = None,
+    is_dry_run: bool = False,
+) -> Dict[str, Any]:
+    case_id = case_spec["case_id"]
+    question = case_spec["question"]
+    expected_final_state = case_spec["expected_final_state"]
+    exact_queries = case_spec["exact_slack_queries"]
+    actor_scope_dict = case_spec["actor_scope"]
+    temporal_scope_dict = case_spec["temporal_scope"]
+
+    logger.info(f"\n=======================================================")
+    logger.info(f"▶ EXECUTING CASE DIAGNOSTIC: {case_id}")
+    logger.info(f"  Question: {question}")
+    logger.info(f"  Expected Diagnostic State: {expected_final_state}")
+    logger.info(f"  Exact Search Queries: {exact_queries}")
+    logger.info(f"  Actor Scope: {actor_scope_dict}")
+    logger.info(f"  Temporal Scope: {temporal_scope_dict}")
+    logger.info(f"=======================================================")
+
+    actor_scope = ResolvedActorScope(
+        kind=ActorScopeKind(actor_scope_dict["kind"]),
+        status=ActorResolutionStatus(actor_scope_dict["status"]),
+        is_implicit=actor_scope_dict.get("is_implicit", False),
+    )
+    temporal_scope = ResolvedTemporalScope(
+        strictness=TemporalStrictness(temporal_scope_dict["strictness"]),
+        status=TemporalResolutionStatus(temporal_scope_dict["status"]),
+    )
+
+    t0 = time.perf_counter()
+
+    # Step 1: Retrieval via single shared ProductionInvestigationRetrievalCoordinator
+    thread_fn = thread_reader.read_thread_result if thread_reader else None
+    search_queries = [
+        SearchQuery(
+            query=q_spec["compiled_query"],
+            purpose=q_spec.get("purpose", "Predeclared diagnostic query"),
+            target_channel_hint=q_spec.get("target_channel_hint"),
+        )
+        for q_spec in exact_queries[:case_spec.get("query_limit", 3)]
+    ]
+    frozen_plan = InvestigationPlan(
+        objective=case_spec.get("planner_objective", "Diagnostic Plan"),
+        search_queries=search_queries,
+        questions_to_resolve=[question],
+        anchor_terms=[],
+    )
+    retrieval_res: RetrievalCoordinatorResult = await retrieval_coordinator.retrieve_precomputed(
+        plan=frozen_plan,
+        actor_scope=actor_scope,
+        temporal_scope=temporal_scope,
+        investigation_id=f"diag_{case_id.lower()}",
+        thread_reader_fn=thread_fn,
+    )
+
+    candidates = retrieval_res.candidates
+    selected_candidates = retrieval_res.selected_candidates
+    evidence_package = retrieval_res.evidence_package
+    raw_query_records = retrieval_res.raw_query_records
+    pipeline_boundary_telemetry = retrieval_res.pipeline_boundary_telemetry
+
+    retrieval_latency = time.perf_counter() - t0
+    logger.info(
+        f"📦 [RETRIEVAL_COMPLETE] {case_id}: Raw queries={len(raw_query_records)}, "
+        f"Candidates={len(candidates)}, Selected={len(selected_candidates)} (Latency: {retrieval_latency:.2f}s)"
+    )
+
+    if is_dry_run:
+        logger.info(f"🧪 [DRY_RUN] Bypassing provider calls for {case_id}")
+        dummy_graph = InvestigationStateGraph(question=question)
+        dummy_ans = GroundedWorkItemAnswerBuilder().build_answer(
+            question=question,
+            graph=dummy_graph,
+            work_items={},
+            traceability_chains={},
+        )
+        return {
+            "case_id": case_id,
+            "question": question,
+            "expected_final_state": expected_final_state,
+            "actual_final_state": "DRY_RUN",
+            "retrieval_candidates": len(candidates),
+            "selected_candidates": len(selected_candidates),
+            "dry_run": True,
+        }
+
+    # Step 2: Full Multi-Stage WorkItem Trace Coordinator Execution
+    t_synth_start = time.perf_counter()
+    trace_result: ProductionTraceResult = await trace_coordinator.trace_and_synthesize_async(
+        question=question,
+        candidates=selected_candidates if selected_candidates else candidates,
+        investigation_objective=case_spec.get("planner_objective"),
+        temporal_scope=temporal_scope,
+        actor_scope=actor_scope,
+        candidate_query_provenance=retrieval_res.candidate_query_provenance,
+    )
+    synth_latency = time.perf_counter() - t_synth_start
+
+    # Step 3: Grounded Answer Building
+    answer_builder = GroundedWorkItemAnswerBuilder()
+    grounded_answer = answer_builder.build_answer(
+        question=question,
+        graph=trace_result.graph,
+        work_items=trace_result.work_items,
+        traceability_chains=trace_result.traceability_chains,
+    )
+
+    total_latency = time.perf_counter() - t0
+
+    return build_case_diagnostic_report(
+        case_id=case_id,
+        question=question,
+        expected_final_state=expected_final_state,
+        raw_query_records=raw_query_records,
+        candidates=candidates,
+        selected_candidates=selected_candidates,
+        pipeline_boundary_telemetry=pipeline_boundary_telemetry,
+        trace_result=trace_result,
+        grounded_answer=grounded_answer,
+        retrieval_latency=retrieval_latency,
+        synth_latency=synth_latency,
+        total_latency=total_latency,
+    )
 
 
 async def main() -> int:
@@ -856,7 +1008,7 @@ async def main() -> int:
         failed_checks = [k for k, v in preflight_results.items() if not v]
         logger.error(f"❌ HARNESS CONTRACT PREFLIGHT FAILED: {failed_checks}! Aborting before any live Slack read.")
         return 1
-    logger.info("✅ [HARNESS_PREFLIGHT_PASSED] All 8 harness contracts verified.")
+    logger.info("✅ [HARNESS_PREFLIGHT_PASSED] All 12 harness contracts verified.")
 
     # Instrument Physical Provider Call Tracking (Section 13)
     trackers = {

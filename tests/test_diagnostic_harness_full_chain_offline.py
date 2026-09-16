@@ -77,10 +77,12 @@ from pesu_agent.ui.grounded_answer_builder import (
 from pesu_agent.llm.config import LLMConfig
 from pesu_agent.llm.models import LLMMessage, LLMResponse, LLMUsageStats
 from pesu_agent.llm.provider import ModelProvider
+import json
 from scripts.diagnose_task11r7_full_production_pipeline import (
     build_diagnostic_semantic_components,
     extract_grounded_answer_report,
     run_harness_contract_preflight,
+    build_case_diagnostic_report,
 )
 
 
@@ -101,7 +103,12 @@ def test_layer_a_real_construction_contract():
 
     # Preflight Check Verification
     preflight = run_harness_contract_preflight(trace_coord)
+    assert len(preflight) == 12, f"Expected 12 preflight contracts, got {len(preflight)}"
     assert all(preflight.values()), f"Preflight checks failed: {preflight}"
+    assert preflight["TRACEABILITY_CHAIN_CONTRACT_VALID"] is True
+    assert preflight["CLAIM_TRACE_RECORD_CONTRACT_VALID"] is True
+    assert preflight["FINAL_STATE_EXTRACTION_CONTRACT_VALID"] is True
+    assert preflight["DIAGNOSTIC_REPORT_SERIALIZATION_CONTRACT_VALID"] is True
 
     # Stage 1A Real Class & Contract
     g1a = s_coord.stage1a_coordinator.grouper
@@ -338,7 +345,7 @@ async def test_layer_b_full_chain_harness_orchestration():
     assert grounded_answer.is_conclusive is True
     assert "[완료]" in grounded_answer.summary_headline
 
-    # 6. Diagnostic Report Serialization
+    # 6. Diagnostic Report Extraction
     report = extract_grounded_answer_report(grounded_answer)
     assert isinstance(report, dict)
     assert report["summary_headline"] == grounded_answer.summary_headline
@@ -346,6 +353,47 @@ async def test_layer_b_full_chain_harness_orchestration():
     assert report["is_conclusive"] is True
     assert report["cards_count"] == 1
 
-    # Final Contract Declaration
+    # 7. Postprocessing via Unified build_case_diagnostic_report (Task 11R10)
+    case_report = build_case_diagnostic_report(
+        case_id="CASE_A",
+        question="고객 만족도 현황 페이지는 1차 배포가 완료된 상태인가?",
+        expected_final_state="COMPLETED",
+        raw_query_records=[{"raw_items": [{"url": candidate.permalink, "body_valid": True}]}],
+        candidates=[candidate],
+        selected_candidates=[candidate],
+        pipeline_boundary_telemetry={"post_dedupe_keys": ["EV-001"]},
+        trace_result=trace_res,
+        grounded_answer=grounded_answer,
+        retrieval_latency=0.1,
+        synth_latency=0.5,
+        total_latency=0.6,
+    )
+
+    assert case_report["case_id"] == "CASE_A"
+    assert case_report["actual_final_state"] == "COMPLETED"
+    assert case_report["full_pipeline_exercised"] is True
+
+    boundary = case_report["pipeline_boundary_trace"]
+    assert "ALL_TRACEABLE_CLAIM_IDS" in boundary
+    assert "GOVERNING_CLAIM_IDS" in boundary
+    assert "ALL_TRACEABLE_EVIDENCE_IDS" in boundary
+    assert boundary["ALL_TRACEABLE_CLAIM_IDS"] == ["C1"]
+    assert boundary["GOVERNING_CLAIM_IDS"] == ["C1"]
+
+    checkpoints = case_report["case_a_checkpoints"]
+    assert checkpoints["TARGET_PRESENT_IN_RAW"] is True
+    assert checkpoints["TARGET_SELECTED"] is True
+    assert checkpoints["TARGET_REACHES_FINAL_TRACE"] is True
+    assert checkpoints["TARGET_CLAIM_PRESENT_IN_CLAIM_TRACES"] is True
+    assert checkpoints["TARGET_CLAIM_IS_GOVERNING_CLAIM"] is True
+    assert checkpoints["TARGET_EVIDENCE_PRESENT_IN_FINAL_TRACE"] is True
+
+    # 8. Final Diagnostic JSON Serialization
+    serialized_json = json.dumps(case_report, indent=2, ensure_ascii=False)
+    assert isinstance(serialized_json, str) and len(serialized_json) > 0
+
+    # Final Contract Declarations
     OFFLINE_DIAGNOSTIC_FULL_CHAIN_CONTRACT_PASS = True
+    OFFLINE_DIAGNOSTIC_POSTPROCESSING_CONTRACT_PASS = True
     assert OFFLINE_DIAGNOSTIC_FULL_CHAIN_CONTRACT_PASS is True
+    assert OFFLINE_DIAGNOSTIC_POSTPROCESSING_CONTRACT_PASS is True
