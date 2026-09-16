@@ -1027,8 +1027,12 @@ async def main() -> int:
         logger.info("🧪 [DRY_RUN] SyntheticSearchBackend initialized.")
     else:
         if not os.getenv("OPENROUTER_API_KEY"):
-            logger.error("❌ OPENROUTER_API_KEY is not set!")
-            return 1
+            resolved_key = LLMConfig().get_api_key_value()
+            if resolved_key:
+                os.environ["OPENROUTER_API_KEY"] = resolved_key
+            else:
+                logger.error("❌ OPENROUTER_API_KEY is not set!")
+                return 1
 
         logger.info("🌐 [SLACK_BACKEND_INIT] Creating read-only WebViewSlackSearchBackend (WEBVIEW_DIRECT)...")
         search_backend = create_slack_search_backend(
