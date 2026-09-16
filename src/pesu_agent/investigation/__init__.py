@@ -208,6 +208,7 @@ from pesu_agent.investigation.synthetic_e2e_cases import (
 from pesu_agent.investigation.production_trace_coordinator import (
     ProductionRealTraceCoordinator,
     ProductionTraceResult,
+    create_authoritative_synthesis_coordinator,
 )
 from pesu_agent.investigation.retrieval_coordinator import (
     ProductionInvestigationRetrievalCoordinator,
@@ -309,6 +310,7 @@ __all__ = [
     "RetrievalCoordinatorResult",
     "ProductionRealTraceCoordinator",
     "ProductionTraceResult",
+    "create_authoritative_synthesis_coordinator",
     "ProposedClaim",
     "ProposedInformationGap",
     "ProposedRetrievalRequest",

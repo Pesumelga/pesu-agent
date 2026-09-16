@@ -61,6 +61,7 @@ from pesu_agent.investigation.workitem_synthesis import (
     WorkItemValidationError,
     build_work_item_traceability_chain,
 )
+from pesu_agent.llm.config import LLMConfig
 
 logger = logging.getLogger(__name__)
 
@@ -383,3 +384,48 @@ class ProductionRealTraceCoordinator:
                 candidate_query_provenance=candidate_query_provenance,
             )
         )
+
+
+def create_authoritative_synthesis_coordinator(
+    synthesis_config: Optional[WorkItemSynthesisConfig] = None,
+    llm_config: Optional[LLMConfig] = None,
+) -> DecomposedWorkItemSynthesisCoordinator:
+    """Constructs a DecomposedWorkItemSynthesisCoordinator wired with authoritative
+    qualified OpenRouter components (GPT-5.6-Luna, qualified reasoning effort, zero temperature)
+    and an explicit LLMConfig.
+
+    Invariants:
+    - SYNTHESIS_CONFIG_SEPARATED_FROM_LLM_CONFIG = True
+    - ALL_STAGES_RECEIVE_EXPLICIT_LLM_CONFIG = True
+    """
+    resolved_llm_cfg = llm_config or LLMConfig()
+    resolved_synthesis_cfg = synthesis_config or WorkItemSynthesisConfig()
+
+    return DecomposedWorkItemSynthesisCoordinator(
+        membership_grouper=OpenRouterEpisodeMembershipGrouper(
+            config=resolved_llm_cfg,
+            model="openai/gpt-5.6-luna",
+            reasoning_effort="medium",
+            temperature=0.0,
+        ),
+        relation_verifier=OpenRouterWorkItemRelationVerifier(
+            config=resolved_llm_cfg,
+            model="openai/gpt-5.6-luna",
+            reasoning_effort="medium",
+            temperature=0.0,
+        ),
+        lifecycle_verifier=OpenRouterWorkItemLifecycleVerifier(
+            config=resolved_llm_cfg,
+            model="openai/gpt-5.6-luna",
+            reasoning_effort="medium",
+            temperature=0.0,
+        ),
+        authority_verifier=OpenRouterDecisiveLifecycleAuthorityVerifier(
+            config=resolved_llm_cfg,
+            model="openai/gpt-5.6-luna",
+            reasoning_effort="high",
+            temperature=0.0,
+        ),
+        config=resolved_synthesis_cfg,
+    )
+

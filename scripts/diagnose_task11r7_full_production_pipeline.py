@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from datetime import datetime, timezone
+import functools
 import hashlib
 import json
 import logging
@@ -78,13 +79,18 @@ from pesu_agent.investigation.workitem_synthesis import (
     WorkItemSynthesisConfig,
     WorkItemTraceabilityChain,
 )
+from pesu_agent.llm.config import LLMConfig
+from pesu_agent.llm.openrouter import OpenRouterAPIError
 from pesu_agent.investigation.production_trace_coordinator import (
     ProductionRealTraceCoordinator,
     ProductionTraceResult,
+    create_authoritative_synthesis_coordinator,
 )
 from pesu_agent.investigation.graph_models import (
     InvestigationStateGraph,
+    WorkItemCategory,
     WorkItemEpisodeMembership,
+    WorkItemKind,
     WorkItemNode,
     WorkItemStatus,
 )
@@ -98,7 +104,10 @@ from pesu_agent.search.webview_slack_search import WebViewSlackSearchBackend
 from pesu_agent.search.webview_thread_reader import WebviewThreadReader
 from pesu_agent.search.actor import ActorScopeKind, ActorResolutionStatus
 from pesu_agent.search.temporal import TemporalStrictness, TemporalResolutionStatus
-from pesu_agent.ui.grounded_answer_builder import GroundedWorkItemAnswerBuilder
+from pesu_agent.ui.grounded_answer_builder import (
+    GroundedWorkItemAnswerBuilder,
+    GroundedWorkItemAnswerPayload,
+)
 from pesu_agent.ui.result_presenter import present_grounded_investigation_result
 
 logging.basicConfig(
@@ -256,6 +265,192 @@ def assert_semantic_runtime_configurations(coordinator: ProductionRealTraceCoord
     logger.info("✅ [CONFIG_ASSERTION_PASSED] All 6 semantic component configurations verified.")
 
 
+def extract_grounded_answer_report(grounded_answer: Any) -> dict[str, Any]:
+    """Extracts report dictionary from GroundedWorkItemAnswerPayload using declared schema fields."""
+    summary_text = getattr(grounded_answer, "formatted_markdown_answer", "") or ""
+    summary_headline = getattr(grounded_answer, "summary_headline", "") or ""
+    return {
+        "summary": summary_text,
+        "summary_headline": summary_headline,
+        "formatted_markdown_answer": summary_text,
+        "is_conclusive": getattr(grounded_answer, "is_conclusive", False),
+        "cards_count": len(getattr(grounded_answer, "work_item_cards", [])),
+        "cards": [card.model_dump() for card in getattr(grounded_answer, "work_item_cards", [])],
+    }
+
+
+def build_diagnostic_semantic_components(
+    synthesis_config: Optional[WorkItemSynthesisConfig] = None,
+    llm_config: Optional[LLMConfig] = None,
+) -> DecomposedWorkItemSynthesisCoordinator:
+    """Builds the 4-stage decomposed WorkItem synthesis coordinator for diagnostic harness."""
+    return create_authoritative_synthesis_coordinator(
+        synthesis_config=synthesis_config,
+        llm_config=llm_config,
+    )
+
+
+class ComponentProviderTracker:
+    def __init__(self, name: str, component: Any):
+        self.name = name
+        self.component = component
+        self.logical_calls: int = 0
+        self.physical_calls: int = 0
+        self.http_400_count: int = 0
+        self.http_200_count: int = 0
+        self.retry_count: int = 0
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "LOGICAL_CALLS": self.logical_calls,
+            "PHYSICAL_CALLS": self.physical_calls,
+            "HTTP_400_COUNT": self.http_400_count,
+            "HTTP_200_COUNT": self.http_200_count,
+            "RETRY_COUNT": self.retry_count,
+        }
+
+
+def instrument_component_provider(name: str, component: Any) -> ComponentProviderTracker:
+    tracker = ComponentProviderTracker(name, component)
+    provider = getattr(component, "provider", None)
+    if provider is None or not hasattr(provider, "generate"):
+        return tracker
+
+    original_generate = provider.generate
+    original_generate_structured = getattr(provider, "generate_structured", None)
+
+    if original_generate_structured:
+        @functools.wraps(original_generate_structured)
+        async def tracked_generate_structured(*args: Any, **kwargs: Any) -> Any:
+            tracker.logical_calls += 1
+            return await original_generate_structured(*args, **kwargs)
+        provider.generate_structured = tracked_generate_structured
+
+    @functools.wraps(original_generate)
+    async def tracked_generate(*args: Any, **kwargs: Any) -> Any:
+        tracker.physical_calls += 1
+        try:
+            resp = await original_generate(*args, **kwargs)
+            tracker.http_200_count += 1
+            return resp
+        except OpenRouterAPIError as err:
+            if getattr(err, "status_code", None) == 400:
+                tracker.http_400_count += 1
+                tracker.retry_count += 1
+            raise
+
+    provider.generate = tracked_generate
+    return tracker
+
+
+def run_harness_contract_preflight(
+    trace_coordinator: ProductionRealTraceCoordinator,
+) -> dict[str, bool]:
+    """Runs strict preflight assertions on coordinator and graph contracts before live Slack reads.
+
+    If any check fails, abort immediately (LIVE_SLACK_READS = 0).
+    """
+    synth = trace_coordinator.synthesis_coordinator
+    g1a = synth.stage1a_coordinator.grouper
+    v1b = synth.stage1b_coordinator.verifier
+    v2 = synth.stage2_coordinator.verifier
+    v25 = synth.stage25_coordinator.verifier if synth.stage25_coordinator else None
+
+    # 1. Stage 1A Config Contract
+    stage1a_valid = bool(
+        isinstance(getattr(g1a, "config", None), LLMConfig)
+        and callable(getattr(g1a.config, "get_api_key_value", None))
+        and g1a.model == "openai/gpt-5.6-luna"
+        and g1a.reasoning_effort == "medium"
+        and g1a.temperature == 0.0
+    )
+
+    # 2. Stage 1B Config Contract
+    stage1b_valid = bool(
+        isinstance(getattr(v1b, "config", None), LLMConfig)
+        and callable(getattr(v1b.config, "get_api_key_value", None))
+        and v1b.model == "openai/gpt-5.6-luna"
+        and v1b.reasoning_effort == "medium"
+        and v1b.temperature == 0.0
+    )
+
+    # 3. Stage 2 Config Contract
+    stage2_valid = bool(
+        isinstance(getattr(v2, "config", None), LLMConfig)
+        and callable(getattr(v2.config, "get_api_key_value", None))
+        and v2.model == "openai/gpt-5.6-luna"
+        and v2.reasoning_effort == "medium"
+        and v2.temperature == 0.0
+    )
+
+    # 4. Stage 2.5 Config Contract
+    stage25_valid = bool(
+        v25 is not None
+        and isinstance(getattr(v25, "config", None), LLMConfig)
+        and callable(getattr(v25.config, "get_api_key_value", None))
+        and v25.model == "openai/gpt-5.6-luna"
+        and v25.reasoning_effort == "high"
+        and v25.temperature == 0.0
+    )
+
+    # 5. Answer Payload Contract
+    fields = set(GroundedWorkItemAnswerPayload.model_fields.keys())
+    answer_payload_valid = bool(
+        "formatted_markdown_answer" in fields
+        and "summary_headline" in fields
+        and "grounded_summary" not in fields
+    )
+
+    # 6. Work Items Container Contract (build_answer expects dict)
+    test_graph = InvestigationStateGraph()
+    test_wi = WorkItemNode(
+        work_item_id="WI-PREFLIGHT",
+        title="Preflight WorkItem",
+        kind=WorkItemKind.TASK,
+        status=WorkItemStatus.COMPLETED,
+        category=WorkItemCategory.WORK_ITEM,
+    )
+    try:
+        ans_test = GroundedWorkItemAnswerBuilder.build_answer(
+            question="Preflight Question?",
+            graph=test_graph,
+            work_items={"WI-PREFLIGHT": test_wi},
+            traceability_chains={},
+        )
+        work_items_container_valid = isinstance(ans_test, GroundedWorkItemAnswerPayload)
+    except Exception:
+        work_items_container_valid = False
+
+    # 7. Work Item Claim Links Container Contract (InvestigationStateGraph.work_item_claim_links is a list)
+    claim_links_valid = isinstance(test_graph.work_item_claim_links, list)
+
+    # 8. Actor Scope Contract
+    test_actor_scope = ResolvedActorScope(
+        kind=ActorScopeKind.UNSPECIFIED,
+        status=ActorResolutionStatus.RESOLVED,
+        is_implicit=False,
+    )
+    actor_scope_valid = (
+        hasattr(test_actor_scope, "kind")
+        and hasattr(test_actor_scope, "status")
+        and hasattr(test_actor_scope, "is_implicit")
+        and hasattr(test_actor_scope, "matched_author_name")
+    )
+
+    preflight_results = {
+        "STAGE1A_CONFIG_CONTRACT_VALID": stage1a_valid,
+        "STAGE1B_CONFIG_CONTRACT_VALID": stage1b_valid,
+        "STAGE2_CONFIG_CONTRACT_VALID": stage2_valid,
+        "STAGE2_5_CONFIG_CONTRACT_VALID": stage25_valid,
+        "ANSWER_PAYLOAD_CONTRACT_VALID": answer_payload_valid,
+        "WORK_ITEMS_CONTAINER_CONTRACT_VALID": work_items_container_valid,
+        "WORK_ITEM_CLAIM_LINKS_CONTAINER_CONTRACT_VALID": claim_links_valid,
+        "ACTOR_SCOPE_CONTRACT_VALID": actor_scope_valid,
+    }
+
+    return preflight_results
+
+
 def is_target_text(t: str) -> bool:
     return bool(
         TARGET_PERMALINK_SUBSTRING in (t or "")
@@ -339,7 +534,7 @@ async def execute_case_diagnostic(
         dummy_ans = GroundedWorkItemAnswerBuilder().build_answer(
             question=question,
             graph=dummy_graph,
-            work_items=[],
+            work_items={},
             traceability_chains={},
         )
         return {
@@ -369,7 +564,7 @@ async def execute_case_diagnostic(
     grounded_answer = answer_builder.build_answer(
         question=question,
         graph=trace_result.graph,
-        work_items=list(trace_result.work_items.values()),
+        work_items=trace_result.work_items,
         traceability_chains=trace_result.traceability_chains,
     )
 
@@ -499,12 +694,7 @@ async def execute_case_diagnostic(
         "FINAL_WORKITEM_STATE": final_workitem_state,
         "TRACEABLE_CLAIM_IDS": traceable_claim_ids,
         "TRACEABLE_EVIDENCE_IDS": traceable_evidence_ids,
-        "GROUNDED_ANSWER": {
-            "summary": grounded_answer.grounded_summary,
-            "is_conclusive": grounded_answer.is_conclusive,
-            "cards_count": len(grounded_answer.work_item_cards),
-            "cards": [card.model_dump() for card in grounded_answer.work_item_cards],
-        },
+        "GROUNDED_ANSWER": extract_grounded_answer_report(grounded_answer),
     }
 
     # Case A Specific 10 Checkpoints (Section 5)
@@ -586,7 +776,7 @@ async def execute_case_diagnostic(
         and len(stage2_output) > 0
         and len(reconciliation_output) > 0
         and len(traceable_claim_ids) > 0
-        and bool(grounded_answer.grounded_summary)
+        and bool(grounded_answer.formatted_markdown_answer)
     )
 
     logger.info(f"🏁 [CASE_COMPLETE] {case_id}: Final State={final_workitem_state} (Expected={expected_final_state})")
@@ -655,19 +845,28 @@ async def main() -> int:
 
     # Instantiate Components & Assert Configs
     s_cfg = WorkItemSynthesisConfig()
-    s_coord = DecomposedWorkItemSynthesisCoordinator(
-        membership_grouper=OpenRouterEpisodeMembershipGrouper(config=s_cfg),
-        relation_verifier=OpenRouterWorkItemRelationVerifier(config=s_cfg),
-        lifecycle_verifier=OpenRouterWorkItemLifecycleVerifier(config=s_cfg),
-        authority_verifier=OpenRouterDecisiveLifecycleAuthorityVerifier(
-            model="openai/gpt-5.6-luna",
-            reasoning_effort="high",
-            temperature=0.0,
-        ),
-        config=s_cfg,
-    )
+    s_coord = build_diagnostic_semantic_components(synthesis_config=s_cfg)
     trace_coordinator = ProductionRealTraceCoordinator(synthesis_coordinator=s_coord)
     assert_semantic_runtime_configurations(trace_coordinator)
+
+    # Harness Contract Preflight (Section 6)
+    preflight_results = run_harness_contract_preflight(trace_coordinator)
+    logger.info(f"📋 [HARNESS_PREFLIGHT] Results: {preflight_results}")
+    if not all(preflight_results.values()):
+        failed_checks = [k for k, v in preflight_results.items() if not v]
+        logger.error(f"❌ HARNESS CONTRACT PREFLIGHT FAILED: {failed_checks}! Aborting before any live Slack read.")
+        return 1
+    logger.info("✅ [HARNESS_PREFLIGHT_PASSED] All 8 harness contracts verified.")
+
+    # Instrument Physical Provider Call Tracking (Section 13)
+    trackers = {
+        "EvidenceAssessor": instrument_component_provider("EvidenceAssessor", trace_coordinator.evidence_assessor),
+        "ClaimVerifier": instrument_component_provider("ClaimVerifier", trace_coordinator.claim_verifier),
+        "Stage1A": instrument_component_provider("Stage1A", trace_coordinator.synthesis_coordinator.stage1a_coordinator.grouper),
+        "Stage1B": instrument_component_provider("Stage1B", trace_coordinator.synthesis_coordinator.stage1b_coordinator.verifier),
+        "Stage2": instrument_component_provider("Stage2", trace_coordinator.synthesis_coordinator.stage2_coordinator.verifier),
+        "Stage2.5": instrument_component_provider("Stage2.5", trace_coordinator.synthesis_coordinator.stage25_coordinator.verifier),
+    }
 
     host = None
     if args.dry_run:
@@ -707,6 +906,16 @@ async def main() -> int:
                 is_dry_run=args.dry_run,
             )
             case_diagnostics.append(diag_res)
+
+            # Section 11: Fail-fast by case
+            if not args.dry_run:
+                if not diag_res.get("full_pipeline_exercised", False) or diag_res.get("stop_reason") != "COMPLETED":
+                    logger.error(
+                        f"🛑 [FAIL_FAST] Case {case_spec['case_id']} did not complete full pipeline! "
+                        f"(stop_reason={diag_res.get('stop_reason')}, exercised={diag_res.get('full_pipeline_exercised')}). "
+                        "Halting further diagnostic execution."
+                    )
+                    break
     finally:
         if host and hasattr(host, "stop"):
             logger.info("🛑 [SLACK_HOST_STOP] Stopping session-scoped PesuWebViewHost...")
@@ -717,6 +926,9 @@ async def main() -> int:
 
     # Section 6 Full Pipeline Exercise Assessment
     all_cases_exercised = all(c.get("full_pipeline_exercised", False) for c in case_diagnostics) if not args.dry_run else False
+
+    provider_telemetry = {name: t.to_dict() for name, t in trackers.items()}
+    anomaly_reproduced = any(t.http_400_count > 0 and t.http_200_count > 0 for t in trackers.values())
 
     full_report = {
         "metadata": {
@@ -730,6 +942,9 @@ async def main() -> int:
             "frozen_manifest_drift": 0,
             "fixture_sha256": fixture_sha256,
             "semantic_configurations": AUTHORITATIVE_SEMANTIC_CONFIGS,
+            "preflight_contracts": preflight_results,
+            "provider_call_telemetry": provider_telemetry,
+            "provider_execution_anomaly_reproduced": anomaly_reproduced,
             "invariants": {
                 "A_B_C_ROLE": "DIAGNOSTIC_CASES",
                 "QUALIFICATION_SCORE_CONTRIBUTION": 0,
