@@ -66,3 +66,28 @@ slackbot_dm_write_occurred = true
 - 2026-08-21: Phase 4 Closure — BootstrapCapability 도입, AST 범위 확대
 - 2026-09-17: Task 11R10D/E Slackbot Typeahead DM 오발송 사고 등록 (누적 4건, Slackbot 1건)
 - 2026-09-17: Task 11R10F Safe Search Suggestion Containment & Explicit Safe Activation 구현 완료
+- 2026-09-17: Task 11R10J Case B Historical Self-Contamination Adjudication & Diagnostic Suite Retirement
+
+## Task 11R10J — Case B Diagnostic Contamination Adjudication & Suite Retirement
+
+```
+CASE_B_DIAGNOSTIC_VALIDITY = INVALIDATED_BY_HISTORICAL_SELF_CONTAMINATION
+CASE_B_LIVE_REPLAY = PROHIBITED
+ORIGINAL_A_B_C_DIAGNOSTIC_SUITE_STATUS = RETIRED_DUE_CASE_B_SELF_CONTAMINATION
+A_B_C_FULL_DIAGNOSTIC_SUITE_COMPLETED = false
+```
+
+### Formal Adjudication Scope
+Task 11R10I established that in Case B, all five selected evidence items originated from historical accidental agent-generated Slackbot/query echo messages containing only the exact Case B question text (originating in DM channel `D07RA9YDE8G`).
+- `CASE_B_SEMANTIC_PIPELINE_DEFECT = false`
+- `CASE_B_DIAGNOSTIC_CONTAMINATION = CONFIRMED`
+- `SEMANTIC_PIPELINE_REMEDIATION_REQUIRED = false`
+- `EVIDENCE_ASSESSOR_REMEDIATION_REQUIRED = false`
+- `CLAIM_VERIFIER_REMEDIATION_REQUIRED = false`
+- `FROZEN_STAGE_REMEDIATION_REQUIRED = false`
+- `PROVIDER_REMEDIATION_FOR_CASE_B_FAILURE = false`
+- `CASE_B_RETRIEVAL_ADEQUACY = UNRESOLVED`
+
+Case B is permanently retired as a clean diagnostic case and must never be replayed.
+Predeclared Case C is executed independently exactly once in Task 11R10J.
+
