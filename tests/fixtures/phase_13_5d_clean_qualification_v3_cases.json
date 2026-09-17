@@ -1,0 +1,142 @@
+{
+  "qualification_version": "3.0.0-clean",
+  "task": "PHASE_13_5D_TASK_11",
+  "exact_live_query_plan_predeclared": true,
+  "case_count": 3,
+  "execution_order": [
+    "Q2-02",
+    "Q2-03",
+    "Q2-04"
+  ],
+  "cases": [
+    {
+      "case_id": "Q2-02",
+      "topic": "지점 개설 진행 상황",
+      "question": "현재 지점 개설이 진행 중인 후보는 몇 곳이며, Slack에서 확인되는 각 후보의 현재 진행 단계는 어디까지야?",
+      "search_scope": "production_global_read_only",
+      "actor_scope": {
+        "kind": "UNSPECIFIED",
+        "status": "RESOLVED",
+        "is_implicit": false
+      },
+      "temporal_scope": {
+        "strictness": "NONE",
+        "status": "NONE",
+        "interval": null
+      },
+      "channel_scope": "global_read_only",
+      "query_limit": 3,
+      "max_results_per_query": 5,
+      "exact_slack_queries": [
+        {
+          "order": 1,
+          "raw_planner_query": "지점 개설 계약서 출자좌수 양수도 계약서 보안서약서",
+          "compiled_query": "지점 개설 계약서 출자좌수 양수도 계약서 보안서약서",
+          "purpose": "지점 개설 관련 주요 계약서 작성 및 진행 절차를 확인한다.",
+          "target_channel_hint": null
+        },
+        {
+          "order": 2,
+          "raw_planner_query": "지점 개설 김영선 검수 계약서",
+          "compiled_query": "지점 개설 김영선 검수 계약서",
+          "purpose": "김영선에게 요청된 지점 개설 계약서 검수 논의를 확인한다.",
+          "target_channel_hint": null
+        },
+        {
+          "order": 3,
+          "raw_planner_query": "지점 개설 일정 계약 서약서",
+          "compiled_query": "지점 개설 일정 계약 서약서",
+          "purpose": "지점 개설 진행 일정 및 계약·서약서 절차를 확인한다.",
+          "target_channel_hint": null
+        }
+      ],
+      "planner_objective": "현재 개설 진행 중인 지점 후보 수와 각 후보의 계약서·서약서 작성 및 검수 등 진행 단계를 파악한다."
+    },
+    {
+      "case_id": "Q2-03",
+      "topic": "지점 정산 담당 및 최종 정산 방식",
+      "question": "현재 지점 정산 업무는 누가 담당하고 있으며, 앞으로 지점 정산은 어떤 방식으로 진행하기로 최종 결정되었어?",
+      "search_scope": "production_global_read_only",
+      "actor_scope": {
+        "kind": "UNSPECIFIED",
+        "status": "RESOLVED",
+        "is_implicit": false
+      },
+      "temporal_scope": {
+        "strictness": "NONE",
+        "status": "NONE",
+        "interval": null
+      },
+      "channel_scope": "global_read_only",
+      "query_limit": 3,
+      "max_results_per_query": 5,
+      "exact_slack_queries": [
+        {
+          "order": 1,
+          "raw_planner_query": "지점 정산 손익계산서 업로드",
+          "compiled_query": "지점 정산 손익계산서 업로드",
+          "purpose": "손익계산서 업로드 기반 지점 정산 방식 결정 및 현황을 확인한다.",
+          "target_channel_hint": null
+        },
+        {
+          "order": 2,
+          "raw_planner_query": "지점 정산 공동인증서 손익계산서",
+          "compiled_query": "지점 정산 공동인증서 손익계산서",
+          "purpose": "공동인증서 등 대안 검토와 최종 정산 방식 간 논의를 확인한다.",
+          "target_channel_hint": null
+        },
+        {
+          "order": 3,
+          "raw_planner_query": "지점 정산 슈퍼바이저 정산 방식",
+          "compiled_query": "지점 정산 슈퍼바이저 정산 방식",
+          "purpose": "지점 정산 담당자 및 결정된 정산 방식을 확인한다.",
+          "target_channel_hint": null
+        }
+      ],
+      "planner_objective": "지점 정산 업무 담당 역할과 최종 결정된 정산 방식을 확인하고 과거 대안과 구별한다."
+    },
+    {
+      "case_id": "Q2-04",
+      "topic": "지점 개설 시 로열티 요율",
+      "question": "지점 개설 시 로열티 요율은 외부 세무사와 혜움 내부 근무 세무사에게 각각 어떻게 적용되고, 내부 근무 세무사의 경우 예외적으로 조정될 수 있다면 어떤 기준으로 결정돼?",
+      "search_scope": "production_global_read_only",
+      "actor_scope": {
+        "kind": "UNSPECIFIED",
+        "status": "RESOLVED",
+        "is_implicit": false
+      },
+      "temporal_scope": {
+        "strictness": "NONE",
+        "status": "NONE",
+        "interval": null
+      },
+      "channel_scope": "global_read_only",
+      "query_limit": 3,
+      "max_results_per_query": 5,
+      "exact_slack_queries": [
+        {
+          "order": 1,
+          "raw_planner_query": "지점 개설 로열티 요율",
+          "compiled_query": "지점 개설 로열티 요율",
+          "purpose": "지점 개설 시 적용되는 로열티 요율 정책을 확인한다.",
+          "target_channel_hint": null
+        },
+        {
+          "order": 2,
+          "raw_planner_query": "내부 근무 세무사 지점 로열티",
+          "compiled_query": "내부 근무 세무사 지점 로열티",
+          "purpose": "내부 근무 세무사에게 적용되는 지점 로열티 요율 및 조건 논의를 확인한다.",
+          "target_channel_hint": null
+        },
+        {
+          "order": 3,
+          "raw_planner_query": "외부 세무사 지점 로열티",
+          "compiled_query": "외부 세무사 지점 로열티",
+          "purpose": "외부 세무사에게 적용되는 지점 로열티 요율 정책을 확인한다.",
+          "target_channel_hint": null
+        }
+      ],
+      "planner_objective": "지점 개설 시 외부 세무사와 내부 근무 세무사에 대한 로열티 요율 적용 기준 및 예외 조정 기준을 확인한다."
+    }
+  ]
+}

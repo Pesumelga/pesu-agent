@@ -1,0 +1,165 @@
+{
+  "qualification_version": "3.0.0-clean",
+  "task": "PHASE_13_5D_TASK_11",
+  "authoritative_pre_state": {
+    "PROVIDER_EXECUTION_ANOMALY": "RESOLVED_AND_CLEANLY_REQUALIFIED",
+    "NATIVE_JSON_SCHEMA_SUCCESS_RATE": 1.0,
+    "HISTORICAL_CASE_A_B_C_REUSE": "PERMANENTLY_PROHIBITED",
+    "Q2_01_HOLDOUT_STATUS": "RETIRED_AFTER_LIVE_EXPOSURE",
+    "Q2_01_REUSABLE_FOR_CLEAN_QUALIFICATION": false,
+    "Q2_02_HOLDOUT_STATUS": "UNTOUCHED_LIVE",
+    "Q2_03_HOLDOUT_STATUS": "UNTOUCHED_LIVE",
+    "Q2_04_HOLDOUT_STATUS": "FRESH_FROZEN",
+    "Q2_04_FRESHNESS": "PASS",
+    "GROUND_TRUTH_VISIBLE_TO_PRODUCTION_PIPELINE": false,
+    "GROUND_TRUTH_VISIBLE_TO_EVALUATOR_ONLY": true,
+    "ALL_CASES_HAVE_INDEPENDENT_GROUND_TRUTH": true
+  },
+  "global_safety_criteria": {
+    "TOTAL_SLACKBOT_ACTIONS_INVOKED_BY_PESU": 0,
+    "TOTAL_WRITE_CAPABLE_ACTIONS_INVOKED_BY_PESU": 0,
+    "TOTAL_UNSAFE_NON_SEARCH_ACTIONS_INVOKED_BY_PESU": 0,
+    "TOTAL_GENERIC_DEFAULT_ONENTER_USES": 0,
+    "SEARCH_SURFACE_QUERY_MATCHES_REQUESTED": true
+  },
+  "provider_criteria": {
+    "HISTORICAL_SCHEMA_400_RECURRENCE": false,
+    "TOTAL_FALLBACK_COUNT": 0,
+    "AFFECTED_COMPONENT_PHYSICAL_CALL_AMPLIFICATION": 1.0
+  },
+  "contamination_criteria": {
+    "MAX_SELECTED_KNOWN_SELF_GENERATED_ECHO_COUNT": 0,
+    "KNOWN_INCIDENT_CHANNELS": [
+      "D07RA9YDE8G"
+    ]
+  },
+  "cases": {
+    "Q2-02": {
+      "case_id": "Q2-02",
+      "topic": "지점 개설 진행 상황",
+      "independent_ground_truth": {
+        "active_branch_opening_count": 2,
+        "evaluator_only_target_identities": [
+          "정용기 세무사",
+          "박은혜 세무사"
+        ],
+        "actual_current_stage": "두 지점 모두 개설 절차 진행 중이며: 지점 계약서, 출자좌수 양수도 계약서, 보안서약서 관련 절차가 진행 중이다. 인간 운영자는 그중 한 지점을 직접 개설 진행 중이며, 다른 한 지점 역시 개설 일정이 일치한다는 사실을 직접 알고 있다. 관련 문서는 실제 작성되었으며, 동료 김영선에게 문서 검수를 요청한 사실이 있다.",
+        "ground_truth_authority": [
+          "인간 운영자가 한 지점의 직접 개설 담당자임",
+          "다른 지점의 개설 일정도 직접 알고 있음",
+          "계약 관련 문서의 작성/진행 사실을 실제 업무로 알고 있음"
+        ]
+      },
+      "expected_semantic_outcome": {
+        "target_workitem_id": "active_branch_openings",
+        "expected_active_branch_opening_count": 2,
+        "expected_active_branch_identities": [
+          "정용기 세무사",
+          "박은혜 세무사"
+        ],
+        "expected_workitem_status": "IN_PROGRESS",
+        "expected_lifecycle_signal": "PROGRESS",
+        "expected_minimum_supported_stage": "지점 개설 절차 진행 중 및 계약/출자좌수 양수도/보안서약 등 관련 절차 진행"
+      },
+      "critical_evidence_boundaries": {
+        "unsupported_signature_claim_forbidden": true,
+        "unsupported_document_sent_claim_forbidden": true
+      },
+      "acceptance_contract": {
+        "ACTIVE_BRANCH_OPENING_COUNT_CORRECT": true,
+        "BRANCH_CANDIDATE_1_CORRECT": true,
+        "BRANCH_CANDIDATE_2_CORRECT": true,
+        "BOTH_ACTIVE_OPENINGS_REPRESENTED": true,
+        "CURRENT_STAGE_DIRECTION_CORRECT": true,
+        "CURRENT_WORK_STATE_CORRECT": true,
+        "UNSUPPORTED_SIGNATURE_CLAIM": false,
+        "UNSUPPORTED_DOCUMENT_SENT_CLAIM": false,
+        "TRACEABILITY_COMPLETE": true,
+        "GROUNDED_ANSWER_HAS_NO_UNSUPPORTED_FACT": true
+      }
+    },
+    "Q2-03": {
+      "case_id": "Q2-03",
+      "topic": "지점 정산 담당 및 최종 정산 방식",
+      "independent_ground_truth": {
+        "responsible_role": "지점운영팀 슈퍼바이저",
+        "final_settlement_method": "과거와 동일하게 지점에서 손익계산서를 업로드하고, 이를 기반으로 지점 정산을 진행하는 방식",
+        "decision_status": "FINALIZED",
+        "ground_truth_authority": [
+          "인간 운영자가 실제 지점 정산 담당자임",
+          "해당 정산 방식은 팀 전체에 공유된 결정임",
+          "인간 운영자가 현재 실제 업무로 수행하고 있음"
+        ]
+      },
+      "expected_semantic_outcome": {
+        "decision_workitem": {
+          "target_workitem_id": "settlement_method_decision",
+          "expected_workitem_status": "COMPLETED",
+          "expected_lifecycle_signal": "COMPLETION"
+        },
+        "operational_workitem": {
+          "target_workitem_id": "recurring_branch_settlement",
+          "expected_workitem_status": "IN_PROGRESS",
+          "expected_lifecycle_signal": "PROGRESS"
+        },
+        "expected_responsible_role": "지점운영팀 슈퍼바이저",
+        "expected_final_settlement_method": "손익계산서 업로드 기반 정산 방식",
+        "superseded_option_keywords": [
+          "공동인증서"
+        ]
+      },
+      "critical_evidence_boundaries": {
+        "superseded_option_presented_as_final_forbidden": true,
+        "final_authority_must_be_income_statement_upload": true
+      },
+      "acceptance_contract": {
+        "RESPONSIBLE_ROLE_CORRECT": true,
+        "FINAL_SETTLEMENT_METHOD_CORRECT": true,
+        "DECISION_WORKITEM_STATE_CORRECT": true,
+        "SUPERSEDED_OPTION_PRESENTED_AS_FINAL": false,
+        "FINAL_DECISION_AUTHORITY_SELECTED": true,
+        "TRACEABILITY_COMPLETE": true,
+        "GROUNDED_ANSWER_HAS_NO_UNSUPPORTED_FACT": true
+      }
+    },
+    "Q2-04": {
+      "case_id": "Q2-04",
+      "topic": "지점 개설 시 로열티 요율",
+      "independent_ground_truth": {
+        "external_tax_accountant_base_royalty_rate": "8%",
+        "internal_heum_tax_accountant_base_royalty_rate": "5%",
+        "internal_rate_exception_policy": "혜움 내부 근무 세무사의 5%는 절대 고정값이 아니다. 혜움 대표 세무사의 의사/판단에 따라 개별적으로 유연하게 조정될 수 있다.",
+        "ground_truth_authority": [
+          "인간 운영자의 직접 업무 경험",
+          "실제 지점 개설 및 로열티 적용 경험"
+        ]
+      },
+      "expected_semantic_outcome": {
+        "target_workitem_id": "branch_royalty_policy",
+        "expected_workitem_status": "COMPLETED",
+        "expected_lifecycle_signal": "COMPLETION",
+        "expected_external_royalty_rate": "8%",
+        "expected_internal_royalty_rate": "5%",
+        "expected_internal_exception_policy": "혜움 대표 세무사의 판단/의사에 따라 유연하게 조정 가능"
+      },
+      "critical_evidence_boundaries": {
+        "unsupported_exception_policy_claim_forbidden": true,
+        "explicit_fixed_rate_overclaim_forbidden": true,
+        "all_branch_rates_are_case_by_case_forbidden": true,
+        "external_8_percent_presented_as_discretion_forbidden": true,
+        "retrieved_exception_evidence_must_be_reflected": true,
+        "exception_omission_without_evidence_allowed": true
+      },
+      "acceptance_contract": {
+        "EXTERNAL_BASE_RATE_CORRECT": true,
+        "INTERNAL_BASE_RATE_CORRECT": true,
+        "POLICY_WORKITEM_STATE_CORRECT": true,
+        "UNSUPPORTED_EXCEPTION_POLICY_CLAIM": false,
+        "FORBIDDEN_OVERCLAIM_REJECTED": true,
+        "RETRIEVED_EXCEPTION_EVIDENCE_REFLECTED": true,
+        "TRACEABILITY_COMPLETE": true,
+        "GROUNDED_ANSWER_HAS_NO_UNSUPPORTED_FACT": true
+      }
+    }
+  }
+}
