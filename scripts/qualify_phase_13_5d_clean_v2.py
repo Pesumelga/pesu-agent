@@ -774,6 +774,10 @@ async def execute_case_production(
     selected_evidence = retrieval_res.selected_candidates
     logger.info(f"📦 [RETRIEVAL_COMPLETE] Case {case_id}: {len(selected_evidence)} evidence items selected.")
 
+    # Canonical fail-closed invariant: raw_query_records must exist and not be None
+    if not hasattr(retrieval_res, "raw_query_records") or retrieval_res.raw_query_records is None:
+        raise AttributeError(f"RetrievalCoordinatorResult for case {case_id} missing canonical 'raw_query_records' field")
+
     # Execute trace pipeline
     if is_dry_run:
         # In dry-run offline mode, synthesize mock production output
@@ -825,33 +829,107 @@ async def execute_case_production(
             "claims": mock_claims,
             "workitems": mock_workitems,
             "grounded_answer": mock_answer,
-            "raw_query_records": retrieval_res.raw_query_records if hasattr(retrieval_res, "raw_query_records") else [],
+            "raw_query_records": retrieval_res.raw_query_records,
             "executed_at": datetime.now(timezone.utc).isoformat(),
         }
     else:
-        trace_result: ProductionTraceResult = await trace_coordinator.execute_trace(
-            investigation_id=f"clean_v2_{case_id.lower()}",
-            plan=plan,
-            evidence=selected_evidence,
-            actor_scope=actor_scope,
+        trace_result: ProductionTraceResult = await trace_coordinator.trace_and_synthesize_async(
+            question=question,
+            candidates=selected_evidence,
+            investigation_objective=plan.objective,
             temporal_scope=temporal_scope,
+            actor_scope=actor_scope,
+            candidate_query_provenance=getattr(retrieval_res, "candidate_query_provenance", None),
         )
 
         answer_builder = GroundedWorkItemAnswerBuilder()
-        grounded_answer = answer_builder.build_answer(
+        answer_payload = answer_builder.build_answer(
             question=question,
-            workitems=trace_result.workitems,
             graph=trace_result.graph,
+            work_items=trace_result.work_items,
+            traceability_chains=trace_result.traceability_chains,
+            stop_reason=trace_result.stop_reason,
         )
+        grounded_answer = (
+            answer_payload.formatted_markdown_answer
+            if hasattr(answer_payload, "formatted_markdown_answer")
+            else str(answer_payload)
+        )
+
+        # Extract structured claims with evidence links for traceability evaluation
+        claims_list: list[dict[str, Any]] = []
+        seen_cids: set[str] = set()
+        if trace_result.traceability_chains:
+            for chain in trace_result.traceability_chains.values():
+                for ct in chain.claim_traces:
+                    if ct.claim_id not in seen_cids:
+                        seen_cids.add(ct.claim_id)
+                        claims_list.append({
+                            "claim_id": ct.claim_id,
+                            "statement": ct.statement,
+                            "evidence_ids": list(ct.evidence_ids),
+                            "lifecycle_signal": (
+                                ct.lifecycle_signal.value
+                                if hasattr(ct.lifecycle_signal, "value")
+                                else str(ct.lifecycle_signal) if ct.lifecycle_signal else None
+                            ),
+                        })
+        if hasattr(trace_result, "graph") and trace_result.graph:
+            for cid, cnode in trace_result.graph.claim_nodes.items():
+                if cid not in seen_cids:
+                    seen_cids.add(cid)
+                    ev_ids = [
+                        l.evidence_id
+                        for l in trace_result.graph.claim_evidence_links
+                        if l.claim_id == cid
+                    ]
+                    claims_list.append({
+                        "claim_id": cid,
+                        "statement": cnode.statement,
+                        "evidence_ids": ev_ids,
+                    })
+
+        # Extract canonical workitems for state and decisive authority evaluation
+        workitems_list: list[dict[str, Any]] = []
+        for wid, wi in trace_result.work_items.items():
+            chain = trace_result.traceability_chains.get(wid)
+            wi_status = None
+            if chain and chain.final_status:
+                wi_status = chain.final_status.value if hasattr(chain.final_status, "value") else str(chain.final_status)
+            elif wi.status:
+                wi_status = wi.status.value if hasattr(wi.status, "value") else str(wi.status)
+            else:
+                wi_status = WorkItemStatus.UNKNOWN.value
+
+            wi_signal = None
+            if chain and chain.claim_traces:
+                for ct in chain.claim_traces:
+                    if ct.lifecycle_signal and ct.lifecycle_signal != WorkItemLifecycleSignal.NONE:
+                        wi_signal = ct.lifecycle_signal.value if hasattr(ct.lifecycle_signal, "value") else str(ct.lifecycle_signal)
+                        break
+
+            claim_ids = list(chain.governing_claim_ids) if (chain and chain.governing_claim_ids) else list(wi.claim_ids)
+
+            workitems_list.append({
+                "work_item_id": wid,
+                "title": wi.title,
+                "status": wi_status,
+                "lifecycle_signal": wi_signal,
+                "claim_ids": claim_ids,
+            })
 
         production_result = {
             "case_id": case_id,
             "question": question,
-            "evidence": [e.to_dict() if hasattr(e, "to_dict") else e for e in selected_evidence],
-            "claims": [c.to_dict() if hasattr(c, "to_dict") else c for c in trace_result.claims],
-            "workitems": [w.to_dict() if hasattr(w, "to_dict") else w for w in trace_result.workitems],
+            "evidence": [
+                e.to_dict() if hasattr(e, "to_dict")
+                else (e.model_dump() if hasattr(e, "model_dump") else dict(e))
+                for e in selected_evidence
+            ],
+            "claims": claims_list,
+            "workitems": workitems_list,
             "grounded_answer": grounded_answer,
-            "raw_query_records": retrieval_res.query_records,
+            "raw_query_records": retrieval_res.raw_query_records,
             "executed_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -993,10 +1071,12 @@ async def run_clean_qualification_v2(is_dry_run: bool = False, authorized_live: 
         cid = case_spec["case_id"]
         prod_res = case_results[cid]
 
-        # Evaluate self-contamination
+        # Evaluate self-contamination (Fail-closed if raw_query_records missing)
+        if "raw_query_records" not in prod_res or prod_res["raw_query_records"] is None:
+            raise KeyError(f"Case {cid} production result missing canonical 'raw_query_records'")
         target_queries = {case_spec["question"].strip(), *[q["compiled_query"].strip() for q in case_spec.get("exact_slack_queries", [])]}
         contam_report = evaluate_self_contamination(
-            raw_query_records=prod_res.get("raw_query_records", []),
+            raw_query_records=prod_res["raw_query_records"],
             selected_candidates=[EvidenceItem(**e) if isinstance(e, dict) else e for e in prod_res.get("evidence", [])],
             target_queries=target_queries,
         )

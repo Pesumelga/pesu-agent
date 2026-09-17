@@ -418,3 +418,236 @@ def test_dry_run_offline_execution_pure():
     """Offline dry-run executes purely with SyntheticSearchBackend and zero live network."""
     exit_code = asyncio.run(run_clean_qualification_v2(is_dry_run=True, authorized_live=False))
     assert exit_code == 0
+
+
+# =============================================================================
+# 9. Real Production Coordinator & Boundary Interface Contract Tests
+# =============================================================================
+
+def test_real_trace_coordinator_api_boundary_contract():
+    """Authoritative check: ProductionRealTraceCoordinator exposes trace_and_synthesize_async and NOT execute_trace."""
+    from pesu_agent.investigation.production_trace_coordinator import (
+        ProductionRealTraceCoordinator,
+        ProductionTraceResult,
+    )
+    import inspect
+    from scripts.qualify_phase_13_5d_clean_v2 import execute_case_production
+
+    # 1. Real coordinator interface invariant
+    assert hasattr(ProductionRealTraceCoordinator, "trace_and_synthesize_async")
+    assert not hasattr(ProductionRealTraceCoordinator, "execute_trace")
+
+    # 2. ProductionTraceResult attributes invariant
+    assert "work_items" in ProductionTraceResult.model_fields
+    assert "traceability_chains" in ProductionTraceResult.model_fields
+    assert "workitems" not in ProductionTraceResult.model_fields
+    assert "claims" not in ProductionTraceResult.model_fields
+
+    # 3. Runner code must NOT invoke the non-existent execute_trace method
+    runner_src = inspect.getsource(execute_case_production)
+    assert "execute_trace" not in runner_src, (
+        "Runner calls non-existent 'execute_trace' instead of real 'trace_and_synthesize_async'!"
+    )
+
+
+def test_execute_case_production_against_real_coordinator_spec():
+    """Ensures execute_case_production executes cleanly without AttributeError against real ProductionRealTraceCoordinator spec."""
+    import asyncio
+    from unittest.mock import AsyncMock, create_autospec
+    from pesu_agent.investigation.production_trace_coordinator import (
+        ProductionRealTraceCoordinator,
+        ProductionTraceResult,
+    )
+    from pesu_agent.investigation.graph_models import (
+        InvestigationStateGraph,
+        WorkItemNode,
+        WorkItemStatus,
+        WorkItemLifecycleSignal,
+    )
+    from pesu_agent.investigation.workitem_synthesis import (
+        WorkItemTraceabilityChain,
+        ClaimTraceabilityRecord,
+    )
+    from pesu_agent.investigation.retrieval_coordinator import (
+        ProductionInvestigationRetrievalCoordinator,
+        RetrievalCoordinatorResult,
+    )
+    from pesu_agent.investigation.models import (
+        EvidenceItem,
+        EvidencePackage,
+        InvestigationPlan,
+        ResolvedActorScope,
+        ResolvedTemporalScope,
+        SearchQuery,
+    )
+    from scripts.qualify_phase_13_5d_clean_v2 import (
+        execute_case_production,
+        SearchSafetyTracker,
+        CleanPredeclarationLoader,
+    )
+
+    cases_bundle = CleanPredeclarationLoader.load_production_cases()
+    case_spec = cases_bundle["cases"][0]
+
+    # Create real-spec mock for trace coordinator
+    mock_trace_coord = create_autospec(ProductionRealTraceCoordinator, instance=True)
+
+    test_ev = EvidenceItem(
+        evidence_id="ev_01",
+        text="김춘구 님이 기존 제휴처에 매뉴얼 전달 업무를 진행 중이다.",
+        source="slack",
+        permalink="https://slack.com/archives/C1/p1",
+    )
+
+    # Real graph with valid nodes and links
+    real_graph = InvestigationStateGraph(question=case_spec["question"])
+    test_claim_trace = ClaimTraceabilityRecord(
+        claim_id="claim_01",
+        statement="김춘구 님이 기존 제휴처에 매뉴얼 전달 업무를 진행 중이다.",
+        evidence_ids=["ev_01"],
+        lifecycle_signal=WorkItemLifecycleSignal.PROGRESS,
+    )
+    test_chain = WorkItemTraceabilityChain(
+        work_item_id="wi_01",
+        title="제휴 업무 진행",
+        final_status=WorkItemStatus.IN_PROGRESS,
+        governing_claim_ids=["claim_01"],
+        claim_traces=[test_claim_trace],
+        all_evidence_ids=["ev_01"],
+        is_traceable=True,
+    )
+    test_wi_node = WorkItemNode(
+        work_item_id="wi_01",
+        title="제휴 업무 진행",
+        status=WorkItemStatus.IN_PROGRESS,
+        claim_ids=["claim_01"],
+        evidence_ids=["ev_01"],
+    )
+
+    mock_trace_result = ProductionTraceResult(
+        success=True,
+        question=case_spec["question"],
+        graph=real_graph,
+        work_items={"wi_01": test_wi_node},
+        traceability_chains={"wi_01": test_chain},
+    )
+
+    mock_trace_coord.trace_and_synthesize_async = AsyncMock(return_value=mock_trace_result)
+
+    # Mock retrieval coordinator returning valid RetrievalCoordinatorResult
+    mock_retrieval_coord = create_autospec(ProductionInvestigationRetrievalCoordinator, instance=True)
+    mock_retrieval_res = RetrievalCoordinatorResult(
+        evidence_package=EvidencePackage(
+            package_id="pkg_test",
+            query=case_spec["question"],
+            total_items=1,
+            created_at="2026-09-17T00:00:00Z",
+            is_synthetic=False,
+            evidence_items=[test_ev],
+            temporal_scope=ResolvedTemporalScope(),
+            actor_scope=ResolvedActorScope(),
+        ),
+        candidates=[test_ev],
+        selected_candidates=[test_ev],
+        candidate_query_provenance={},
+        plan=InvestigationPlan(
+            objective="test",
+            search_queries=[SearchQuery(query="test", purpose="test")],
+            questions_to_resolve=[case_spec["question"]],
+            anchor_terms=[],
+        ),
+        temporal_scope=ResolvedTemporalScope(),
+        actor_scope=ResolvedActorScope(),
+        raw_query_records=[{"query": "test", "raw_items": []}],
+    )
+    mock_retrieval_coord.retrieve_precomputed = AsyncMock(return_value=mock_retrieval_res)
+
+    async def _run():
+        return await execute_case_production(
+            case_spec=case_spec,
+            search_backend=None,
+            trace_coordinator=mock_trace_coord,
+            retrieval_coordinator=mock_retrieval_coord,
+            thread_reader=None,
+            safety_tracker=SearchSafetyTracker(),
+            is_dry_run=False,
+        )
+
+    prod_res = asyncio.run(_run())
+
+    assert prod_res is not None
+    assert "workitems" in prod_res
+    assert len(prod_res["workitems"]) == 1
+    assert prod_res["workitems"][0]["status"] == "IN_PROGRESS"
+    assert "raw_query_records" in prod_res
+
+    # Also verify that Evaluator can consume this production_result cleanly
+    evaluator = CleanQualificationEvaluator()
+    scorecard = evaluator.evaluate_case(
+        case_id="Q2-01",
+        production_result=prod_res,
+        contamination_report={"CASE_VALIDITY": "VALID"},
+        safety_tracker=SearchSafetyTracker(),
+        provider_telemetry={"schema_400_recurrence": False, "fallback_count": 0},
+    )
+    assert scorecard["traceability"]["complete"] is True
+    assert scorecard["traceability"]["every_final_state_has_traceable_claim_evidence"] is True
+
+
+def test_raw_query_records_missing_fails_closed():
+    """Fail-closed contract: missing or None raw_query_records on RetrievalCoordinatorResult MUST raise and cannot silently become []."""
+    import asyncio
+    from unittest.mock import AsyncMock, create_autospec, MagicMock
+    from pesu_agent.investigation.retrieval_coordinator import ProductionInvestigationRetrievalCoordinator
+    from scripts.qualify_phase_13_5d_clean_v2 import (
+        execute_case_production,
+        SearchSafetyTracker,
+        CleanPredeclarationLoader,
+    )
+
+    cases_bundle = CleanPredeclarationLoader.load_production_cases()
+    case_spec = cases_bundle["cases"][0]
+
+    mock_retrieval_coord = create_autospec(ProductionInvestigationRetrievalCoordinator, instance=True)
+
+    # 1. Test missing attribute on retrieval result
+    bad_result_no_attr = MagicMock(spec=[
+        "evidence_package", "candidates", "selected_candidates",
+        "candidate_query_provenance", "plan", "temporal_scope", "actor_scope"
+    ])
+    bad_result_no_attr.selected_candidates = []
+    mock_retrieval_coord.retrieve_precomputed = AsyncMock(return_value=bad_result_no_attr)
+
+    with pytest.raises(AttributeError, match="missing canonical 'raw_query_records' field"):
+        asyncio.run(execute_case_production(
+            case_spec=case_spec,
+            search_backend=None,
+            trace_coordinator=None,
+            retrieval_coordinator=mock_retrieval_coord,
+            thread_reader=None,
+            safety_tracker=SearchSafetyTracker(),
+            is_dry_run=True,
+        ))
+
+    # 2. Test raw_query_records is None
+    bad_result_none = MagicMock(spec=[
+        "evidence_package", "candidates", "selected_candidates",
+        "candidate_query_provenance", "plan", "temporal_scope", "actor_scope", "raw_query_records"
+    ])
+    bad_result_none.selected_candidates = []
+    bad_result_none.raw_query_records = None
+    mock_retrieval_coord.retrieve_precomputed = AsyncMock(return_value=bad_result_none)
+
+    with pytest.raises(AttributeError, match="missing canonical 'raw_query_records' field"):
+        asyncio.run(execute_case_production(
+            case_spec=case_spec,
+            search_backend=None,
+            trace_coordinator=None,
+            retrieval_coordinator=mock_retrieval_coord,
+            thread_reader=None,
+            safety_tracker=SearchSafetyTracker(),
+            is_dry_run=True,
+        ))
+
+
+
