@@ -104,8 +104,8 @@ class DeterministicMockWebViewHost:
         if "textyObj.setContents" in script and "searchInputBoxInstance.onEnter" not in script:
             return {"ok": True, "setter_succeeded": True}
 
-        # 5c. Decoupled onEnter Invocation & Verification (JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER)
-        if "searchInputBoxInstance.onEnter" in script and "textyObj.setContents" not in script:
+        # 5c. Decoupled Safe Search Submit & Verification (JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER)
+        if ("isExactSafeKeywordSearch" in script or "searchInputBoxInstance.onEnter" in script) and "textyObj.setContents" not in script:
             self.submit_called = True
             if self.simulate_slack_hang_no_transition:
                 self.effective_submit_triggered = False
@@ -123,7 +123,12 @@ class DeterministicMockWebViewHost:
                     "duplicate_search_input_box_count": 0,
                     "onenter_callable": True,
                     "submit_attempt_count": 1,
-                    "submit_method": "SearchInputBox.onEnter",
+                    "submit_method": "SafeSearchSuggestionDOMItem.click[index=0]",
+                    "search_submission_target_safe": True,
+                    "generic_default_onenter_used": False,
+                    "default_suggestion_type": "SAFE_KEYWORD_SEARCH",
+                    "selected_suggestion_type": "SAFE_KEYWORD_SEARCH",
+                    "safe_candidates_count": 1,
                 },
                 "submitted": True,
             }
@@ -396,7 +401,10 @@ def test_setter_and_submit_side_effect_purity():
     from pesu_agent.search.webview_slack_search import JS_SET_TEXTY_QUERY, JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER
     assert "textyObj.setContents" in JS_SET_TEXTY_QUERY
     assert "source: 'api'" in JS_SET_TEXTY_QUERY
-    assert "searchInputBoxInstance.onEnter()" in JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER
+    # Task 11R10F Contract 3: Generic default onEnter is NEVER search authority; explicit safe suggestion activation used
+    assert "isExactSafeKeywordSearch" in JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER
+    assert "SafeSearchSuggestionDOMItem" in JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER
+    assert "generic_default_onenter_used = false" in JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER
 
 
 # =========================================================================
@@ -534,7 +542,7 @@ def test_task11r4_t7_phrase_conjunction_quote_preservation_offline():
     assert f"({expected_arg})" in set_query_calls[0]
 
     # 2. Verify JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER was invoked with exact quoted string
-    submit_calls = [s for s in captured_js_payloads if "searchInputBoxInstance.onEnter()" in s]
+    submit_calls = [s for s in captured_js_payloads if "isExactSafeKeywordSearch" in s or "safeCandidates" in s]
     assert len(submit_calls) >= 1
     assert f"({expected_arg})" in submit_calls[0]
 

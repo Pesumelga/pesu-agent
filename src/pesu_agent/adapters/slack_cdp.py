@@ -1168,22 +1168,152 @@ class SlackReadOnlyCdpAdapter:
                 }};
             }}
 
-            // 5. Exact Keyboard-Free Native Submit via searchInputBoxInstance.onEnter() exactly once
+            // 5. Task 11R10F Safe Search Suggestion Containment & Activation
+            const props = searchInputBoxInstance.props || {{}};
+            const suggestions = Array.isArray(props.suggestions) ? props.suggestions : [];
+            const autocompleteSelectedIndex = (typeof props.autocompleteSelectedIndex === 'number')
+                ? props.autocompleteSelectedIndex
+                : null;
+
+            function isWriteCapableSuggestion(s) {{
+                if (!s || typeof s !== 'object') return false;
+                if (s.is_type_slackbot === true) return true;
+                if (s.type === 'querySlackbot') return true;
+                if (s.key === 'ask-slackbot') return true;
+                if (s.suggestion_sub_type === 'query-slackbot') return true;
+                return false;
+            }}
+
+            function isUnsafeNonSearchSuggestion(s) {{
+                if (!s || typeof s !== 'object') return true;
+                if (isWriteCapableSuggestion(s)) return true;
+                if (s.isNavigational === true || s.is_type_navigational === true) return true;
+                if (s.is_type_channel === true || s.type === 'channel') return true;
+                if (s.is_type_user === true || s.is_type_user_profile === true || s.type === 'member-profile') return true;
+                if (s.is_type_workflow === true || s.type === 'workflowTrigger') return true;
+                if (s.is_type_app_action === true || s.type === 'appAction') return true;
+                if (s.is_type_huddle === true || s.type === 'huddle') return true;
+                if (s.type === 'queryConvoSearch' || s.type === 'querySalesforce') return true;
+                return false;
+            }}
+
+            function isExactSafeKeywordSearch(s) {{
+                if (!s || typeof s !== 'object') return false;
+                const matchesExactPositive = (
+                    s.is_type_query_completion === true &&
+                    s.type === 'queryUser' &&
+                    s.suggestion_sub_type === 'query-echo'
+                );
+                if (!matchesExactPositive) return false;
+                if (isUnsafeNonSearchSuggestion(s)) return false;
+                return true;
+            }}
+
+            // Contract 1: Exactly one safe candidate
+            const safeCandidates = [];
+            for (let idx = 0; idx < suggestions.length; idx++) {{
+                if (isExactSafeKeywordSearch(suggestions[idx])) {{
+                    safeCandidates.push({{ index: idx, suggestion: suggestions[idx] }});
+                }}
+            }}
+
+            if (safeCandidates.length !== 1) {{
+                const errCode = (safeCandidates.length === 0)
+                    ? 'NO_SAFE_SEARCH_SUGGESTION_FOUND'
+                    : 'AMBIGUOUS_MULTIPLE_SAFE_SEARCH_SUGGESTIONS';
+                return {{ ok: false, error: errCode, safe_candidates_count: safeCandidates.length }};
+            }}
+
+            const safeCandidate = safeCandidates[0];
+            const safeIndex = safeCandidate.index;
+            const targetSuggestion = safeCandidate.suggestion;
+
+            // Contract 4: Atomic TOCTOU re-validation
+            if (suggestions[safeIndex] !== targetSuggestion || !isExactSafeKeywordSearch(suggestions[safeIndex])) {{
+                return {{ ok: false, error: 'SUGGESTION_IDENTITY_SHIFTED' }};
+            }}
+
             let submitInvoked = false;
             let submitException = null;
             let submitMethod = "NONE";
 
-            try {{
-                if (typeof searchInputBoxInstance.onEnter === 'function') {{
-                    searchInputBoxInstance.onEnter();
-                    submitInvoked = true;
-                    submitMethod = "SearchInputBox.onEnter";
-                }} else {{
-                    return {{ ok: false, error: 'no_callable_on_enter_found' }};
+            // Contract 3 & 5: Verified UI activation path (DOM item click -> Fiber onAccept)
+            const acList = document.querySelector('#c-search_autocomplete__suggestion_list, [data-qa="search_autocomplete"], .c-search_autocomplete, [role="listbox"]');
+            let safeOption = null;
+            if (acList) {{
+                const options = Array.from(acList.querySelectorAll('[role="option"], .c-search_autocomplete__suggestion_item, [data-qa="search_autocomplete_item"]'));
+                safeOption = options.find(el => {{
+                    const dIdx = el.getAttribute('data-index');
+                    return dIdx !== null && parseInt(dIdx, 10) === safeIndex;
+                }});
+                if (!safeOption && options[safeIndex]) {{
+                    const optType = options[safeIndex].getAttribute('data-type');
+                    if (optType === 'queryUser' || optType === targetSuggestion.type) {{
+                        safeOption = options[safeIndex];
+                    }}
                 }}
-            }} catch (e) {{
-                submitException = e.message;
-                return {{ ok: false, error: 'submit_threw_exception', message: e.message }};
+            }}
+
+            if (safeOption) {{
+                const hasBotId = safeOption.hasAttribute('data-bot-id');
+                const isNav = (safeOption.getAttribute('data-is-navigational') === 'true');
+                if (!hasBotId && !isNav) {{
+                    try {{
+                        safeOption.dispatchEvent(new MouseEvent('mousemove', {{ bubbles: true, cancelable: true, view: window }}));
+                        safeOption.click();
+                        submitInvoked = true;
+                        submitMethod = 'SafeSearchSuggestionDOMItem.click[index=' + safeIndex + ']';
+                    }} catch (e) {{
+                        submitException = String(e);
+                    }}
+                }}
+            }}
+
+            if (!submitInvoked && safeOption) {{
+                try {{
+                    const optFiberKey = Object.keys(safeOption).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                    if (optFiberKey && safeOption[optFiberKey]) {{
+                        let curr = safeOption[optFiberKey];
+                        let depth = 0;
+                        while (curr && depth < 10) {{
+                            if (curr.memoizedProps) {{
+                                if (typeof curr.memoizedProps.onAccept === 'function') {{
+                                    curr.memoizedProps.onAccept(false, false);
+                                    submitInvoked = true;
+                                    submitMethod = 'SafeSearchSuggestionFiber.onAccept[index=' + safeIndex + ']';
+                                    break;
+                                }}
+                            }}
+                            curr = curr.return;
+                            depth++;
+                        }}
+                    }}
+                }} catch (e) {{
+                    if (!submitException) submitException = String(e);
+                }}
+            }}
+
+            if (!submitInvoked) {{
+                try {{
+                    let f = startingFiber;
+                    let depth = 0;
+                    while (f && depth < 20) {{
+                        if (f.memoizedProps && typeof f.memoizedProps.onAccept === 'function') {{
+                            f.memoizedProps.onAccept(false, false);
+                            submitInvoked = true;
+                            submitMethod = 'ReactOmniswitcher.onAccept[index=' + safeIndex + ']';
+                            break;
+                        }}
+                        f = f.return;
+                        depth++;
+                    }}
+                }} catch (e) {{
+                    if (!submitException) submitException = String(e);
+                }}
+            }}
+
+            if (!submitInvoked) {{
+                return {{ ok: false, error: 'SAFE_SEARCH_ACTIVATION_FAILED', message: submitException }};
             }}
 
             return {{

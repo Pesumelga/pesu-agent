@@ -114,6 +114,11 @@ class WebViewSearchFailureCode(str, Enum):
     RESULT_IDENTITY_INVALID = "RESULT_IDENTITY_INVALID"
     RESULT_BODY_INVALID = "RESULT_BODY_INVALID"
     CONTEXT_COLLECTION_NOT_QUALIFIED = "CONTEXT_COLLECTION_NOT_QUALIFIED"
+    UNSAFE_NON_SEARCH_SUGGESTION_SELECTED = "UNSAFE_NON_SEARCH_SUGGESTION_SELECTED"
+    NO_SAFE_SEARCH_SUGGESTION_FOUND = "NO_SAFE_SEARCH_SUGGESTION_FOUND"
+    AMBIGUOUS_MULTIPLE_SAFE_SEARCH_SUGGESTIONS = "AMBIGUOUS_MULTIPLE_SAFE_SEARCH_SUGGESTIONS"
+    SUGGESTION_IDENTITY_SHIFTED = "SUGGESTION_IDENTITY_SHIFTED"
+    SAFE_SEARCH_ACTIVATION_FAILED = "SAFE_SEARCH_ACTIVATION_FAILED"
     UNKNOWN_ERROR = "UNKNOWN_ERROR"
 
 
@@ -433,6 +438,17 @@ JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
             is_updating_display_query: false,
             is_in_composition: false
         },
+        suggestions_count: 0,
+        autocomplete_selected_index: null,
+        default_suggestion_type: 'NONE',
+        selected_suggestion_type: 'NONE',
+        safe_candidates_count: 0,
+        selected_safe_candidate_index: null,
+        search_submission_target_safe: false,
+        generic_default_onenter_used: false,
+        slackbot_action_invoked: false,
+        write_capable_action_invoked: false,
+        unsafe_non_search_action_invoked: false,
         onenter_callable: false,
         submit_attempt_count: 0,
         submit_succeeded: false,
@@ -576,20 +592,211 @@ JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
     }
 
     report.onenter_callable = (typeof searchInputBoxInstance.onEnter === 'function');
-    if (!report.onenter_callable) {
-        return { error: 'ONENTER_NOT_CALLABLE', report };
+
+    // =========================================================================
+    // Task 11R10F: Read-Only Safety Containment & Safe Search Selection Guard
+    // =========================================================================
+    const props = searchInputBoxInstance.props || {};
+    const suggestions = Array.isArray(props.suggestions) ? props.suggestions : [];
+    const autocompleteSelectedIndex = (props.autocompleteSelectedIndex !== undefined && props.autocompleteSelectedIndex !== null)
+        ? props.autocompleteSelectedIndex
+        : null;
+
+    report.suggestions_count = suggestions.length;
+    report.autocomplete_selected_index = autocompleteSelectedIndex;
+
+    function isWriteCapableSuggestion(s) {
+        if (!s || typeof s !== 'object') return false;
+        if (s.is_type_slackbot === true) return true;
+        if (s.type === 'querySlackbot') return true;
+        if (s.key === 'ask-slackbot') return true;
+        if (s.suggestion_sub_type === 'query-slackbot') return true;
+        return false;
     }
 
+    function isUnsafeNonSearchSuggestion(s) {
+        if (!s || typeof s !== 'object') return true;
+        if (isWriteCapableSuggestion(s)) return true;
+        if (s.isNavigational === true || s.is_type_navigational === true) return true;
+        if (s.is_type_channel === true || s.type === 'channel') return true;
+        if (s.is_type_user === true || s.is_type_user_profile === true || s.type === 'member-profile') return true;
+        if (s.is_type_workflow === true || s.type === 'workflowTrigger') return true;
+        if (s.is_type_app_action === true || s.type === 'appAction') return true;
+        if (s.is_type_huddle === true || s.type === 'huddle') return true;
+        if (s.type === 'queryConvoSearch' || s.type === 'querySalesforce') return true;
+        return false;
+    }
+
+    // Contract 2: EXACT structured identity from Task 11R10E evidence
+    // is_type_query_completion === true AND type === "queryUser" AND suggestion_sub_type === "query-echo"
+    // AND unsafe flags MUST NOT be present
+    function isExactSafeKeywordSearch(s) {
+        if (!s || typeof s !== 'object') return false;
+        const matchesExactPositive = (
+            s.is_type_query_completion === true &&
+            s.type === 'queryUser' &&
+            s.suggestion_sub_type === 'query-echo'
+        );
+        if (!matchesExactPositive) return false;
+
+        if (isUnsafeNonSearchSuggestion(s)) return false;
+        return true;
+    }
+
+    function classifySuggestionType(s) {
+        if (!s || typeof s !== 'object') return 'NONE';
+        if (isWriteCapableSuggestion(s)) return 'WRITE_CAPABLE_SLACKBOT';
+        if (s.isNavigational === true || s.is_type_navigational === true || s.is_type_channel === true || s.type === 'channel') {
+            return 'UNSAFE_NON_SEARCH_CHANNEL_NAV';
+        }
+        if (s.is_type_user === true || s.is_type_user_profile === true || s.type === 'member-profile') {
+            return 'UNSAFE_NON_SEARCH_MEMBER_NAV';
+        }
+        if (s.is_type_huddle === true || s.type === 'huddle') return 'UNSAFE_NON_SEARCH_HUDDLE';
+        if (s.is_type_workflow === true || s.type === 'workflowTrigger') return 'UNSAFE_NON_SEARCH_WORKFLOW';
+        if (s.is_type_app_action === true || s.type === 'appAction') return 'UNSAFE_NON_SEARCH_APP_ACTION';
+        if (isExactSafeKeywordSearch(s)) return 'SAFE_KEYWORD_SEARCH';
+        return 'UNKNOWN_NON_SEARCH';
+    }
+
+    const defaultSug = suggestions[0] || null;
+    const selectedSug = (autocompleteSelectedIndex !== null && suggestions[autocompleteSelectedIndex])
+        ? suggestions[autocompleteSelectedIndex]
+        : defaultSug;
+
+    report.default_suggestion_type = classifySuggestionType(defaultSug);
+    report.selected_suggestion_type = classifySuggestionType(selectedSug);
+
+    // Contract 1: Authority is finding EXACTLY ONE safe search candidate across all suggestions
+    const safeCandidates = [];
+    for (let idx = 0; idx < suggestions.length; idx++) {
+        if (isExactSafeKeywordSearch(suggestions[idx])) {
+            safeCandidates.push({ index: idx, suggestion: suggestions[idx] });
+        }
+    }
+    report.safe_candidates_count = safeCandidates.length;
+
+    if (safeCandidates.length !== 1) {
+        report.search_submission_target_safe = false;
+        report.generic_default_onenter_used = false;
+        const errCode = (safeCandidates.length === 0)
+            ? 'NO_SAFE_SEARCH_SUGGESTION_FOUND'
+            : 'AMBIGUOUS_MULTIPLE_SAFE_SEARCH_SUGGESTIONS';
+        return { error: errCode, report };
+    }
+
+    const safeCandidate = safeCandidates[0];
+    const safeIndex = safeCandidate.index;
+    const targetSuggestion = safeCandidate.suggestion;
+    report.selected_safe_candidate_index = safeIndex;
+
+    // Contract 4: Atomic TOCTOU re-validation of candidate identity
+    if (suggestions[safeIndex] !== targetSuggestion || !isExactSafeKeywordSearch(suggestions[safeIndex])) {
+        report.search_submission_target_safe = false;
+        return { error: 'SUGGESTION_IDENTITY_SHIFTED', report };
+    }
+
+    report.search_submission_target_safe = true;
+    report.generic_default_onenter_used = false; // Contract 3: Never use generic default onEnter()
     report.submit_attempt_count = 1;
-    try {
-        searchInputBoxInstance.onEnter();
-        report.submit_succeeded = true;
-        report.submit_method = 'SearchInputBox.onEnter';
-    } catch (err) {
-        report.onenter_invocation_exception = String(err);
-        return { error: 'ONENTER_INVOCATION_EXCEPTION', details: String(err), report };
+
+    // Contract 3 & 5: Verified UI activation path (DOM item click -> React onAccept)
+    let activated = false;
+    let activationMethod = 'NONE';
+
+    const acList = document.querySelector('#c-search_autocomplete__suggestion_list, [data-qa="search_autocomplete"], .c-search_autocomplete, [role="listbox"]');
+    if (acList) {
+        const options = Array.from(acList.querySelectorAll('[role="option"], .c-search_autocomplete__suggestion_item, [data-qa="search_autocomplete_item"]'));
+        let safeOption = options.find(el => {
+            const dIdx = el.getAttribute('data-index');
+            return dIdx !== null && parseInt(dIdx, 10) === safeIndex;
+        });
+        if (!safeOption && options[safeIndex]) {
+            const optType = options[safeIndex].getAttribute('data-type');
+            if (optType === 'queryUser' || optType === targetSuggestion.type) {
+                safeOption = options[safeIndex];
+            }
+        }
+
+        if (safeOption) {
+            const hasBotId = safeOption.hasAttribute('data-bot-id');
+            const isNav = (safeOption.getAttribute('data-is-navigational') === 'true');
+            if (!hasBotId && !isNav) {
+                try {
+                    safeOption.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, view: window }));
+                    safeOption.click();
+                    activated = true;
+                    activationMethod = 'SafeSearchSuggestionDOMItem.click[index=' + safeIndex + ']';
+                } catch (e) {
+                    report.onenter_invocation_exception = String(e);
+                }
+            }
+        }
+
+        // Direct Fiber fallback on safeOption DOM element if click didn't trigger
+        if (!activated && safeOption) {
+            try {
+                const optFiberKey = Object.keys(safeOption).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                if (optFiberKey && safeOption[optFiberKey]) {
+                    let curr = safeOption[optFiberKey];
+                    let depth = 0;
+                    while (curr && depth < 10) {
+                        if (curr.memoizedProps) {
+                            if (typeof curr.memoizedProps.onAccept === 'function') {
+                                curr.memoizedProps.onAccept(false, false);
+                                activated = true;
+                                activationMethod = 'SafeSearchSuggestionFiber.onAccept[index=' + safeIndex + ']';
+                                break;
+                            }
+                            if (typeof curr.memoizedProps.onClick === 'function') {
+                                curr.memoizedProps.onClick({ preventDefault: () => {}, stopPropagation: () => {} });
+                                activated = true;
+                                activationMethod = 'SafeSearchSuggestionFiber.onClick[index=' + safeIndex + ']';
+                                break;
+                            }
+                        }
+                        curr = curr.return;
+                        depth++;
+                    }
+                }
+            } catch (e) {
+                if (!report.onenter_invocation_exception) report.onenter_invocation_exception = String(e);
+            }
+        }
     }
 
+    // Fiber fallback for safe activation if DOM element query was not ready
+    if (!activated) {
+        try {
+            let f = currentFiber;
+            let onAcceptFn = null;
+            let depth = 0;
+            while (f && depth < 20) {
+                if (f.memoizedProps && typeof f.memoizedProps.onAccept === 'function') {
+                    onAcceptFn = f.memoizedProps.onAccept;
+                    break;
+                }
+                f = f.return;
+                depth++;
+            }
+            if (onAcceptFn) {
+                onAcceptFn(false, false);
+                activated = true;
+                activationMethod = 'ReactOmniswitcher.onAccept[index=' + safeIndex + ']';
+            }
+        } catch (e) {
+            if (!report.onenter_invocation_exception) report.onenter_invocation_exception = String(e);
+        }
+    }
+
+    if (!activated) {
+        report.submit_succeeded = false;
+        report.submit_method = 'NONE';
+        return { error: 'SAFE_SEARCH_ACTIVATION_FAILED', report };
+    }
+
+    report.submit_succeeded = true;
+    report.submit_method = activationMethod;
     return { ok: true, report };
 })
 """
@@ -1406,15 +1613,25 @@ class WebViewSlackSearchBackend(SearchBackend):
             )
         telemetry["last_confirmed_stage"] = "SETTER_EXECUTED"
 
-        # 4b: Bounded Polling for Verified Query State Settle & onEnter Submit
-        # SUBMIT_REQUIRES_VERIFIED_QUERY_STATE = True
-        # FIXED_SETTLE_SLEEP_IS_SUBMIT_AUTHORITY = False
+        # 4b: Bounded Polling for Verified Query State Settle & Safe Search Submit
+        # Contract 3: GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH = false
         submit_start_mono = time.monotonic()
         submit_timeout_sec = 4.0
         submit_poll_interval_sec = 0.05
         submit_triggered = False
         last_submit_res: Any = None
         verified_query_state_before_submit = False
+
+        # Guaranteed safety telemetry invariants
+        telemetry["safe_search_action_selected"] = False
+        telemetry["generic_default_onenter_used"] = False
+        telemetry["default_suggestion_type"] = "NONE"
+        telemetry["selected_suggestion_type"] = "NONE"
+        telemetry["submit_method"] = "NONE"
+        telemetry["slackbot_action_invoked_by_pesu"] = False
+        telemetry["write_capable_action_invoked_by_pesu"] = False
+        telemetry["unsafe_non_search_action_invoked_by_pesu"] = False
+        telemetry["safe_candidates_count"] = 0
 
         while time.monotonic() - submit_start_mono < submit_timeout_sec:
             js_submit = f"({JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER})({json.dumps(validated_query)})"
@@ -1430,12 +1647,21 @@ class WebViewSlackSearchBackend(SearchBackend):
                     submit_triggered = True
                     verified_query_state_before_submit = True
                     break
-                # Transient re-rendering or precondition not yet settled: continue polling
+                # Transient re-rendering or suggestion list settling: continue polling
                 pass
             time.sleep(submit_poll_interval_sec)
 
         telemetry["verified_query_state_before_submit"] = verified_query_state_before_submit
         telemetry["onenter_invoked"] = submit_triggered
+
+        if isinstance(last_submit_res, dict):
+            r = last_submit_res.get("report", {})
+            telemetry["safe_search_action_selected"] = bool(r.get("search_submission_target_safe", False))
+            telemetry["generic_default_onenter_used"] = bool(r.get("generic_default_onenter_used", False))
+            telemetry["default_suggestion_type"] = r.get("default_suggestion_type", "NONE")
+            telemetry["selected_suggestion_type"] = r.get("selected_suggestion_type", "NONE")
+            telemetry["submit_method"] = r.get("submit_method", "NONE")
+            telemetry["safe_candidates_count"] = r.get("safe_candidates_count", 0)
 
         # Step 4.5: Read-Only Post-Submit Probe (Hard Requirement 2: Side-effect free)
         post_submit_probe: dict[str, Any] = {}
@@ -1451,8 +1677,25 @@ class WebViewSlackSearchBackend(SearchBackend):
 
         if not submit_triggered:
             telemetry["last_confirmed_stage"] = "SUBMIT_FAILED"
+            self.last_search_telemetry = dict(telemetry)
+            err_code_str = ""
+            if isinstance(last_submit_res, dict):
+                err_code_str = str(last_submit_res.get("error") or "")
+
+            failure_code = WebViewSearchFailureCode.SEARCH_SUBMIT_FAILED
+            if err_code_str == "NO_SAFE_SEARCH_SUGGESTION_FOUND":
+                failure_code = WebViewSearchFailureCode.NO_SAFE_SEARCH_SUGGESTION_FOUND
+            elif err_code_str == "AMBIGUOUS_MULTIPLE_SAFE_SEARCH_SUGGESTIONS":
+                failure_code = WebViewSearchFailureCode.AMBIGUOUS_MULTIPLE_SAFE_SEARCH_SUGGESTIONS
+            elif err_code_str == "SUGGESTION_IDENTITY_SHIFTED":
+                failure_code = WebViewSearchFailureCode.SUGGESTION_IDENTITY_SHIFTED
+            elif err_code_str == "SAFE_SEARCH_ACTIVATION_FAILED":
+                failure_code = WebViewSearchFailureCode.SAFE_SEARCH_ACTIVATION_FAILED
+            elif err_code_str == "UNSAFE_NON_SEARCH_SUGGESTION_SELECTED":
+                failure_code = WebViewSearchFailureCode.UNSAFE_NON_SEARCH_SUGGESTION_SELECTED
+
             raise WebViewSearchError(
-                WebViewSearchFailureCode.SEARCH_SUBMIT_FAILED,
+                failure_code,
                 f"Search query verified submit pipeline failed: {last_submit_res}",
                 details=telemetry,
             )
