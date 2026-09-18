@@ -14,8 +14,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 import re
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 import unicodedata
+
+if TYPE_CHECKING:
+    from pesu_agent.investigation.retrieval_coordinator import CandidateQueryHit
 
 from pesu_agent.investigation.models import (
     EvidenceItem,
@@ -89,6 +92,7 @@ class EvidenceSelector:
         query_summary: str = "종합 조사 질의",
         temporal_scope: Optional[ResolvedTemporalScope] = None,
         actor_scope: Optional[ResolvedActorScope] = None,
+        candidate_query_provenance: Optional[dict[str, list[CandidateQueryHit]]] = None,
     ) -> tuple[EvidencePackage, dict[str, int]]:
         """후보 증거군에서 중복을 제거하고 최적의 EvidencePackage를 생성합니다."""
         initial_candidate_count = len(candidates)
@@ -223,13 +227,55 @@ class EvidenceSelector:
                 # 시간 의도가 없는 질문은 모든 후보가 동일 계층 (시간 왜곡 방지)
                 temporal_tier = 0
 
-            # 정렬 튜플: (temporal_tier, -anchor_matches, -query_hit_count, original_idx)
+            # Candidate provenance from explicit mapping
+            cand_prov: set[int] = set()
+            if candidate_query_provenance and key in candidate_query_provenance:
+                cand_prov = {
+                    h.query_index if hasattr(h, "query_index") else h
+                    for h in candidate_query_provenance[key]
+                }
+
+            # 정렬 튜플: (temporal_tier, -anchor_matches, -query_hit_count, original_idx, item, cand_prov)
             ranked_candidates.append(
-                (temporal_tier, -matches, -item.query_hit_count, idx, item)
+                (temporal_tier, -matches, -item.query_hit_count, idx, item, cand_prov)
             )
 
-        ranked_candidates.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
-        sorted_items = [x[4] for x in ranked_candidates]
+        if not candidate_query_provenance:
+            # Standalone / Legacy caller compatibility: preserve exact original ordering
+            ranked_candidates.sort(key=lambda x: (x[0], x[1], x[2], x[3]))
+            sorted_items = [x[4] for x in ranked_candidates]
+        else:
+            # Equal-Quality Query-Starvation Remediation:
+            # 1. Group candidates into quality buckets ordered strictly by:
+            #    (temporal_tier, -anchor_matches, -query_hit_count)
+            # 2. Within each quality bucket, greedily pick the candidate whose provenance
+            #    is least represented in the selected package, breaking ties by arrival_idx.
+            quality_buckets: dict[tuple[int, int, int], list[tuple[int, EvidenceItem, set[int]]]] = {}
+            for t_tier, neg_matches, neg_hits, orig_idx, itm, prov in ranked_candidates:
+                q_key = (t_tier, neg_matches, neg_hits)
+                if q_key not in quality_buckets:
+                    quality_buckets[q_key] = []
+                quality_buckets[q_key].append((orig_idx, itm, prov))
+
+            sorted_items = []
+            query_representation: dict[int, int] = {}
+
+            for q_key in sorted(quality_buckets.keys()):
+                bucket = quality_buckets[q_key]
+                remaining = list(bucket)
+                while remaining:
+                    best = min(
+                        remaining,
+                        key=lambda c: (
+                            min((query_representation.get(q, 0) for q in c[2]), default=0) if c[2] else 0,
+                            c[0],  # deterministic arrival order
+                        ),
+                    )
+                    remaining.remove(best)
+                    b_idx, b_item, b_prov = best
+                    sorted_items.append(b_item)
+                    for q in b_prov:
+                        query_representation[q] = query_representation.get(q, 0) + 1
 
         # 3. 최대 개수(최대 5건) 및 글자 수 예산 제한 적용
         selected_items: list[EvidenceItem] = []

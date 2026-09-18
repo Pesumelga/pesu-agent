@@ -644,6 +644,7 @@ class ProductionInvestigationRetrievalCoordinator:
                 query_summary=question_text,
                 temporal_scope=resolved_temporal_scope,
                 actor_scope=resolved_actor_scope,
+                candidate_query_provenance=candidate_query_provenance,
             )
             eligible_candidates = [
                 it for it in prelim_pkg.evidence_items
@@ -891,6 +892,7 @@ class ProductionInvestigationRetrievalCoordinator:
             query_summary=question_text,
             temporal_scope=resolved_temporal_scope,
             actor_scope=resolved_actor_scope,
+            candidate_query_provenance=candidate_query_provenance,
         )
         evidence_package = evidence_package.model_copy(
             update={"thread_context_status": overall_thread_context_status}
