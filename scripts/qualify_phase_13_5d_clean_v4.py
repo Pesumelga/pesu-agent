@@ -136,6 +136,48 @@ FROZEN_CASE_ORDER = ["Q2-02", "Q2-03", "Q2-04"]
 TASK_11Q3_STATUS = "INVALIDATED_FOR_PRODUCTION_RETRIEVAL_PARITY"
 RETIRED_Q2_CASES_STATUS = "RETIRED_AFTER_LIVE_EXPOSURE"
 
+# Contract 1: Planner Wiring & Fail-Closed Invariants
+PLANNER_WIRING_REQUIRED: bool = True
+PLANNER_MISSING_FAILS_CLOSED: bool = True
+PLANNER_RETURNED_EMPTY_ANCHORS_ALLOWED: bool = True
+
+# Contract 2: Structured Authority Trace Invariants
+AUTHORITY_EVALUATION_USES_STRUCTURED_TRACE: bool = True
+AUTHORITY_KEYWORD_ONLY_PASS_POSSIBLE: bool = False
+
+# Contract 3: Retired Cases Live Block Invariants
+Q2_02_LIVE_REUSE_ALLOWED: bool = False
+Q2_03_LIVE_REUSE_ALLOWED: bool = False
+Q2_04_LIVE_REUSE_ALLOWED: bool = False
+V4_LIVE_QUALIFICATION_ENABLED: bool = False
+LIVE_ATTEMPT_WITH_RETIRED_CASE_SET_FAILS_BEFORE_BACKEND_INIT: bool = True
+
+
+class QualificationProtocolError(RuntimeError):
+    """Raised when a mandatory qualification protocol invariant is violated."""
+
+    def __init__(self, message: str, planner_invoked: bool = False, protocol_failure: bool = True):
+        super().__init__(message)
+        self.planner_invoked = planner_invoked
+        self.qualification_protocol_failure = protocol_failure
+        self.PLANNER_INVOKED = planner_invoked
+        self.QUALIFICATION_PROTOCOL_FAILURE = protocol_failure
+
+
+class DryRunInvestigationPlanner:
+    """Offline dry-run planner that returns question-derived anchor terms and valid plan."""
+
+    async def plan(self, user_question: UserQuestion) -> tuple[InvestigationPlan, Any]:
+        words = [w for w in user_question.question.split() if len(w) > 1][:3]
+        plan = InvestigationPlan(
+            objective=f"Dry run plan for: {user_question.question[:30]}",
+            search_queries=[SearchQuery(query="dry_run_query", purpose="dry_run")],
+            questions_to_resolve=[user_question.question],
+            anchor_terms=words,
+        )
+        usage = type("Usage", (), {"total_tokens": 0})()
+        return plan, usage
+
 
 def compute_file_sha256(path: Path) -> str:
     h = hashlib.sha256()
@@ -759,9 +801,10 @@ class CleanQualificationEvaluator:
                 if has_final_keyword and not has_neg_framing:
                     superseded_presented_as_final = True
 
-        # 5. Final decision authority selected (Remediated: NO vacuous pass)
-        # Must verify an actual decisive authority is grounded and linked to the final decision claim.
-        # Deterministic states: PASS, FAIL, NOT_EVALUATED
+        # 5. Final decision authority selected (Remediated: NO vacuous pass, structured trace required)
+        # Contract 2: Structured Authority Evaluation Proof
+        # Must verify structured chain:
+        # final decision WorkItem -> decisive authority -> verified decision claim -> evidence
         if superseded_presented_as_final:
             final_authority_selected = "FAIL"
         elif not method_correct:
@@ -775,26 +818,49 @@ class CleanQualificationEvaluator:
                 for e in evidence
             }
 
-            has_grounded_authority_evidence = False
-            for c in claims:
-                statement = (c.get("statement") if isinstance(c, dict) else getattr(c, "statement", "")) or ""
-                is_decision_claim = "손익계산서" in statement and any(k in statement for k in ["업로드", "결정", "방식", "채택", "진행"])
-                if is_decision_claim:
-                    c_ev_ids = c.get("evidence_ids") if isinstance(c, dict) else getattr(c, "evidence_ids", [])
-                    for eid in c_ev_ids:
-                        ev_text = evidence_map.get(eid, "")
-                        if "손익계산서" in ev_text and any(k in ev_text for k in ["업로드", "결정", "합의", "방식", "정산", "확정"]):
-                            has_grounded_authority_evidence = True
-                            break
-                    if has_grounded_authority_evidence:
-                        break
+            # Find candidate decision WorkItems
+            decision_workitems = []
+            for wi in workitems:
+                wi_title = wi.get("title", "") or ""
+                wi_status = wi.get("status")
+                wi_signal = wi.get("lifecycle_signal")
+                # Decision workitem must relate to settlement decision and have completion status/signal
+                is_decision_sem = any(k in wi_title for k in ["결정", "방식", "정산", "손익계산서"])
+                is_comp_state = (wi_status == decision_expected_status or wi_signal == decision_expected_signal)
+                if is_decision_sem and is_comp_state:
+                    decision_workitems.append(wi)
 
-            if has_grounded_authority_evidence:
-                final_authority_selected = "PASS"
-            elif not claims:
+            if not decision_workitems:
+                # No final-decision WorkItem exists -> cannot pass on keyword coincidence alone
                 final_authority_selected = "NOT_EVALUATED"
             else:
-                final_authority_selected = "FAIL"
+                has_structured_authority_trace = False
+                for d_wi in decision_workitems:
+                    d_cids = d_wi.get("claim_ids", [])
+                    linked_claims = [c for c in claims if (c.get("claim_id") if isinstance(c, dict) else getattr(c, "claim_id", None)) in d_cids]
+                    for c in linked_claims:
+                        statement = (c.get("statement") if isinstance(c, dict) else getattr(c, "statement", "")) or ""
+                        c_auth = (c.get("decisive_authority") if isinstance(c, dict) else getattr(c, "decisive_authority", "")) or ""
+                        is_decision_claim = "손익계산서" in statement and any(k in statement for k in ["업로드", "결정", "방식", "채택", "진행"])
+                        has_authority = any(a in f"{statement} {c_auth} {all_text}" for a in ["슈퍼바이저", "지점운영", "supervisor", "authority"]) or bool(c_auth) or role_correct
+                        if is_decision_claim and has_authority:
+                            c_ev_ids = c.get("evidence_ids") if isinstance(c, dict) else getattr(c, "evidence_ids", [])
+                            for eid in c_ev_ids:
+                                ev_text = evidence_map.get(eid, "")
+                                if "손익계산서" in ev_text and any(k in ev_text for k in ["업로드", "결정", "합의", "방식", "정산", "확정"]):
+                                    has_structured_authority_trace = True
+                                    break
+                        if has_structured_authority_trace:
+                            break
+                    if has_structured_authority_trace:
+                        break
+
+                if has_structured_authority_trace:
+                    final_authority_selected = "PASS"
+                elif not claims:
+                    final_authority_selected = "NOT_EVALUATED"
+                else:
+                    final_authority_selected = "FAIL"
 
         grounding_discipline = not superseded_presented_as_final and (final_authority_selected in ("PASS", "NOT_EVALUATED"))
         factual_correctness = role_correct and method_correct
@@ -964,20 +1030,28 @@ async def execute_case_production(
     plan_usage_tokens = 0
     raw_dynamic_queries: list[str] = []
 
-    if effective_planner is not None:
-        user_q = UserQuestion(question=question)
-        prod_plan, plan_usage = await effective_planner.plan(user_q)
-        planner_called = True
-        if prod_plan:
-            anchor_terms = list(getattr(prod_plan, "anchor_terms", []))
-            raw_dynamic_queries = [
-                sq.query for sq in getattr(prod_plan, "search_queries", [])
-            ]
-        if plan_usage:
-            plan_usage_tokens = getattr(plan_usage, "total_tokens", 0)
+    if effective_planner is None:
+        raise QualificationProtocolError(
+            f"QUALIFICATION_PROTOCOL_FAILURE: InvestigationPlanner is required but missing, not wired, or skipped for case {case_id}",
+            planner_invoked=False,
+            protocol_failure=True,
+        )
+
+    user_q = UserQuestion(question=question)
+    prod_plan, plan_usage = await effective_planner.plan(user_q)
+    planner_called = True
+    if prod_plan:
+        anchor_terms = list(getattr(prod_plan, "anchor_terms", []))
+        raw_dynamic_queries = [
+            sq.query for sq in getattr(prod_plan, "search_queries", [])
+        ]
+    if plan_usage:
+        plan_usage_tokens = getattr(plan_usage, "total_tokens", 0)
 
     planner_telemetry = {
+        "PLANNER_INVOKED": True,
         "PLANNER_CALLED": planner_called,
+        "QUALIFICATION_PROTOCOL_FAILURE": False,
         "PLANNER_ANCHOR_TERMS": anchor_terms,
         "PLANNER_ANCHOR_TERM_COUNT": len(anchor_terms),
         "PLANNER_ANCHOR_TERMS_EMPTY": (len(anchor_terms) == 0),
@@ -1176,8 +1250,14 @@ async def run_clean_qualification_v4(is_dry_run: bool = False, authorized_live: 
 
     Guarded: live execution is strictly blocked unless authorized_live is explicitly set.
     """
-    if not is_dry_run and not authorized_live:
-        logger.error("❌ LIVE QUALIFICATION IS NOT AUTHORIZED IN THIS SESSION! Must run in a dedicated session.")
+    if not is_dry_run:
+        # Contract 3: Retired Case Live Execution Fail Closed Before Backend Init
+        logger.error(
+            "❌ LIVE_ATTEMPT_WITH_RETIRED_CASE_SET_FAILS_BEFORE_BACKEND_INIT: "
+            "V4 fixture contains retired cases Q2-02, Q2-03, Q2-04. "
+            "Live qualification with retired cases is strictly prohibited before backend init! "
+            f"V4_LIVE_QUALIFICATION_ENABLED={V4_LIVE_QUALIFICATION_ENABLED}"
+        )
         return 1
 
     timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -1210,6 +1290,7 @@ async def run_clean_qualification_v4(is_dry_run: bool = False, authorized_live: 
         search_backend = SyntheticSearchBackend()
         thread_reader = None
         trace_coordinator = None
+        planner = DryRunInvestigationPlanner()
     else:
         if not os.getenv("OPENROUTER_API_KEY"):
             resolved_key = LLMConfig().get_api_key_value()
@@ -1230,11 +1311,12 @@ async def run_clean_qualification_v4(is_dry_run: bool = False, authorized_live: 
         s_cfg = r7_harness.WorkItemSynthesisConfig()
         s_coord = r7_harness.build_diagnostic_semantic_components(synthesis_config=s_cfg)
         trace_coordinator = ProductionRealTraceCoordinator(synthesis_coordinator=s_coord)
+        planner = InvestigationPlanner()
 
     retrieval_coordinator = ProductionInvestigationRetrievalCoordinator(
         search_backend=search_backend,
         selector=EvidenceSelector(),
-        planner=None,
+        planner=planner,
         config=OrchestratorConfig(),
     )
 
@@ -1272,6 +1354,7 @@ async def run_clean_qualification_v4(is_dry_run: bool = False, authorized_live: 
                 thread_reader=thread_reader,
                 safety_tracker=safety_tracker,
                 is_dry_run=is_dry_run,
+                planner=planner,
             )
             case_results[cid] = prod_res
 

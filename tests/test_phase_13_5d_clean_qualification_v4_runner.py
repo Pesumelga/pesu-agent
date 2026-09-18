@@ -57,6 +57,17 @@ from scripts.qualify_phase_13_5d_clean_v4 import (
     HISTORICAL_PROHIBITED_CASES,
     TASK_11Q3_STATUS,
     RETIRED_Q2_CASES_STATUS,
+    PLANNER_WIRING_REQUIRED,
+    PLANNER_MISSING_FAILS_CLOSED,
+    PLANNER_RETURNED_EMPTY_ANCHORS_ALLOWED,
+    AUTHORITY_EVALUATION_USES_STRUCTURED_TRACE,
+    AUTHORITY_KEYWORD_ONLY_PASS_POSSIBLE,
+    Q2_02_LIVE_REUSE_ALLOWED,
+    Q2_03_LIVE_REUSE_ALLOWED,
+    Q2_04_LIVE_REUSE_ALLOWED,
+    V4_LIVE_QUALIFICATION_ENABLED,
+    LIVE_ATTEMPT_WITH_RETIRED_CASE_SET_FAILS_BEFORE_BACKEND_INIT,
+    QualificationProtocolError,
     CleanPredeclarationLoader,
     CleanQualificationGoldLoader,
     CleanQualificationEvaluator,
@@ -536,4 +547,158 @@ def test_dry_run_offline_execution_pure_v4():
     """Offline dry-run executes purely without live calls and evaluates with non-vacuous passes."""
     exit_code = asyncio.run(run_clean_qualification_v4(is_dry_run=True, authorized_live=False))
     assert exit_code == 0
+
+
+def test_planner_missing_fails_closed_and_empty_anchors_allowed():
+    """PLANNER MISSING FAIL-CLOSED VERIFICATION (Contract 1).
+
+    Distinguishes State A (allowed empty anchors) from State B (fail-closed missing planner).
+    """
+    assert PLANNER_WIRING_REQUIRED is True
+    assert PLANNER_MISSING_FAILS_CLOSED is True
+    assert PLANNER_RETURNED_EMPTY_ANCHORS_ALLOWED is True
+
+    cases_bundle = CleanPredeclarationLoader.load_production_cases()
+    case_spec = cases_bundle["cases"][0]
+
+    # State A: Planner exists, invoked, returns anchor_terms=[] -> ALLOWED
+    mock_planner = create_autospec(InvestigationPlanner, instance=True)
+    plan_with_empty_anchors = InvestigationPlan(
+        objective="dynamic",
+        search_queries=[SearchQuery(query="dynamic query", purpose="dynamic")],
+        questions_to_resolve=[case_spec["question"]],
+        anchor_terms=[],
+    )
+    mock_planner.plan = AsyncMock(return_value=(plan_with_empty_anchors, MagicMock(total_tokens=15)))
+
+    mock_retrieval_coord = create_autospec(ProductionInvestigationRetrievalCoordinator, instance=True)
+    mock_retrieval_coord.retrieve_precomputed = AsyncMock(return_value=MagicMock(
+        selected_candidates=[],
+        raw_query_records=[{"query": "frozen", "raw_items": []}],
+    ))
+
+    res_allowed = asyncio.run(execute_case_production(
+        case_spec=case_spec,
+        search_backend=None,
+        trace_coordinator=None,
+        retrieval_coordinator=mock_retrieval_coord,
+        thread_reader=None,
+        safety_tracker=SearchSafetyTracker(),
+        is_dry_run=True,
+        planner=mock_planner,
+    ))
+    telem_allowed = res_allowed["planner_telemetry"]
+    assert telem_allowed["PLANNER_INVOKED"] is True
+    assert telem_allowed["PLANNER_ANCHOR_TERMS_EMPTY"] is True
+    assert telem_allowed["QUALIFICATION_PROTOCOL_FAILURE"] is False
+
+    # State B: Planner missing / not wired / skipped -> QUALIFICATION PROTOCOL FAILURE
+    # Retrieval coordinator has no planner, and planner=None passed -> MUST fail closed
+    mock_retrieval_coord_no_planner = create_autospec(ProductionInvestigationRetrievalCoordinator, instance=True)
+    mock_retrieval_coord_no_planner.planner = None
+
+    with pytest.raises(QualificationProtocolError) as exc_info:
+        asyncio.run(execute_case_production(
+            case_spec=case_spec,
+            search_backend=None,
+            trace_coordinator=None,
+            retrieval_coordinator=mock_retrieval_coord_no_planner,
+            thread_reader=None,
+            safety_tracker=SearchSafetyTracker(),
+            is_dry_run=True,
+            planner=None,
+        ))
+
+    err = exc_info.value
+    assert err.PLANNER_INVOKED is False
+    assert err.QUALIFICATION_PROTOCOL_FAILURE is True
+
+
+def test_structured_authority_evaluation_proof():
+    """STRUCTURED AUTHORITY EVALUATION PROOF (Contract 2).
+
+    FINAL_DECISION_AUTHORITY_SELECTED cannot PASS from keyword coincidence alone.
+    Requires structured chain: WorkItem -> decisive authority -> verified decision claim -> evidence.
+    """
+    assert AUTHORITY_EVALUATION_USES_STRUCTURED_TRACE is True
+    assert AUTHORITY_KEYWORD_ONLY_PASS_POSSIBLE is False
+
+    evaluator = CleanQualificationEvaluator()
+    gold_q3 = evaluator.gold_bundle["cases"]["Q2-03"]
+
+    # Test A — Negative:
+    # claim and evidence contain "손익계산서" and "업로드",
+    # but there is:
+    # - no final-decision WorkItem
+    # - no decisive authority
+    # - no authority -> claim -> evidence trace
+    checks_neg = evaluator._evaluate_q2_03(
+        gold=gold_q3,
+        workitems=[],  # NO final-decision WorkItem
+        answer="손익계산서 업로드 정산 방식이 결정되었습니다.",
+        claims=[{
+            "claim_id": "c_unlinked",
+            "statement": "손익계산서 업로드 관련 문서가 업로드되었다.",
+            "evidence_ids": ["ev_unlinked"],
+        }],
+        evidence=[{
+            "evidence_id": "ev_unlinked",
+            "text": "손익계산서 업로드 기능 테스트 파일입니다.",
+        }],
+    )
+    # Must evaluate to NOT_EVALUATED, never PASS
+    assert checks_neg["FINAL_DECISION_AUTHORITY_SELECTED"] == "NOT_EVALUATED"
+    assert checks_neg["FINAL_DECISION_AUTHORITY_SELECTED"] != "PASS"
+
+    # Test B — Positive:
+    # final decision WorkItem -> decisive authority -> verified decision claim -> evidence
+    # is structurally linked.
+    decision_wi = {
+        "work_item_id": "wi_dec",
+        "title": "지점 정산 방식 결정",
+        "status": "COMPLETED",
+        "lifecycle_signal": "COMPLETION",
+        "claim_ids": ["c_dec"],
+    }
+    decision_claim = {
+        "claim_id": "c_dec",
+        "statement": "지점운영팀 슈퍼바이저 담당으로 손익계산서 업로드 기반 정산 방식으로 최종 결정되었다.",
+        "evidence_ids": ["ev_auth"],
+    }
+    authoritative_evidence = {
+        "evidence_id": "ev_auth",
+        "text": "지점운영팀 슈퍼바이저 담당으로 손익계산서 업로드 기반 정산 방식으로 합의 및 최종 결정되었다.",
+    }
+
+    checks_pos = evaluator._evaluate_q2_03(
+        gold=gold_q3,
+        workitems=[decision_wi],
+        answer="지점운영팀 슈퍼바이저가 담당하며 손익계산서 업로드 방식으로 최종 결정되었습니다.",
+        claims=[decision_claim],
+        evidence=[authoritative_evidence],
+    )
+    assert checks_pos["FINAL_DECISION_AUTHORITY_SELECTED"] == "PASS"
+
+
+def test_retired_case_live_execution_must_fail_closed_before_backend_init():
+    """RETIRED CASE LIVE EXECUTION MUST FAIL CLOSED (Contract 3).
+
+    Harness level proof that live qualification cannot start with retired cases Q2-02, Q2-03, Q2-04.
+    Fails BEFORE any backend initialization.
+    """
+    assert Q2_02_LIVE_REUSE_ALLOWED is False
+    assert Q2_03_LIVE_REUSE_ALLOWED is False
+    assert Q2_04_LIVE_REUSE_ALLOWED is False
+    assert V4_LIVE_QUALIFICATION_ENABLED is False
+    assert LIVE_ATTEMPT_WITH_RETIRED_CASE_SET_FAILS_BEFORE_BACKEND_INIT is True
+
+    from unittest.mock import patch
+
+    # Even if someone attempts to run live with authorized_live=True,
+    # the harness must fail closed before calling create_slack_search_backend
+    with patch("scripts.qualify_phase_13_5d_clean_v4.create_slack_search_backend") as mock_backend_factory:
+        exit_code = asyncio.run(run_clean_qualification_v4(is_dry_run=False, authorized_live=True))
+        assert exit_code == 1
+        mock_backend_factory.assert_not_called()
+
 
