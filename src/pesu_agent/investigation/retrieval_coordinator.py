@@ -187,7 +187,8 @@ class ProductionInvestigationRetrievalCoordinator:
             replies = getattr(res, "replies", ())
             status = getattr(res, "status", ThreadContextStatus.UNAVAILABLE)
             reason = getattr(res, "failure_reason", None)
-            return ThreadReadResult(replies=tuple(replies), status=status, failure_reason=reason)
+            root = getattr(res, "root", None)
+            return ThreadReadResult(replies=tuple(replies), status=status, failure_reason=reason, root=root)
 
         if hasattr(self.search_backend, "read_thread_result"):
             res = self.search_backend.read_thread_result(candidate)
@@ -198,7 +199,8 @@ class ProductionInvestigationRetrievalCoordinator:
             replies = getattr(res, "replies", ())
             status = getattr(res, "status", ThreadContextStatus.UNAVAILABLE)
             reason = getattr(res, "failure_reason", None)
-            return ThreadReadResult(replies=tuple(replies), status=status, failure_reason=reason)
+            root = getattr(res, "root", None)
+            return ThreadReadResult(replies=tuple(replies), status=status, failure_reason=reason, root=root)
         elif hasattr(self.search_backend, "read_thread_context"):
             call_res = self.search_backend.read_thread_context(candidate)
             if asyncio.iscoroutine(call_res) or hasattr(call_res, "__await__"):
@@ -776,12 +778,37 @@ class ProductionInvestigationRetrievalCoordinator:
                         ]
                         final_replies = reindexed_replies
 
-                    for c in all_candidates:
-                        if get_canonical_evidence_key(c) == chosen_key:
-                            c.thread_replies = final_replies
-                            c.thread_context_status = final_status
-                    target_candidate.thread_replies = final_replies
-                    target_candidate.thread_context_status = final_status
+                    final_read_res = second_read_res if (second_read_res is not None) else first_read_res
+                    final_root = final_read_res.root if final_read_res else None
+
+                    if final_root is not None:
+                        for c in all_candidates:
+                            if get_canonical_evidence_key(c) == chosen_key:
+                                c.text = final_root.text
+                                if final_root.author and not c.author:
+                                    c.author = final_root.author
+                                if final_root.author_id and not c.author_id:
+                                    c.author_id = final_root.author_id
+                                if final_root.timestamp and not c.timestamp:
+                                    c.timestamp = final_root.timestamp
+                                c.thread_replies = final_replies
+                                c.thread_context_status = final_status
+                        target_candidate.text = final_root.text
+                        if final_root.author and not target_candidate.author:
+                            target_candidate.author = final_root.author
+                        if final_root.author_id and not target_candidate.author_id:
+                            target_candidate.author_id = final_root.author_id
+                        if final_root.timestamp and not target_candidate.timestamp:
+                            target_candidate.timestamp = final_root.timestamp
+                        target_candidate.thread_replies = final_replies
+                        target_candidate.thread_context_status = final_status
+                    else:
+                        for c in all_candidates:
+                            if get_canonical_evidence_key(c) == chosen_key:
+                                c.thread_replies = final_replies
+                                c.thread_context_status = final_status
+                        target_candidate.thread_replies = final_replies
+                        target_candidate.thread_context_status = final_status
                     overall_thread_context_status = final_status
                     thread_expansions_done = 1
 
@@ -823,6 +850,8 @@ class ProductionInvestigationRetrievalCoordinator:
                         "residency_checks": (1 if first_read_res is not None else 0) + (1 if second_read_res is not None else 0),
                         "final_replies_count": len(final_replies),
                         "final_status": final_status,
+                        "root_captured": final_root is not None,
+                        "root_body_characters": len(final_root.text) if final_root else 0,
                     }
                     self.last_thread_expansion_telemetry = expansion_telemetry
                     if inv_dir:

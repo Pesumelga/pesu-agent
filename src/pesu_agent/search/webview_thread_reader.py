@@ -54,6 +54,20 @@ class ThreadReadFailureReason(str, Enum):
 
 
 @dataclass(frozen=True)
+class ThreadRootItem:
+    """Canonical thread root message captured from mounted flexpane."""
+
+    text: str
+    permalink: str
+    channel_id: str
+    message_ts: str
+    thread_ts: Optional[str] = None
+    author: Optional[str] = None
+    author_id: Optional[str] = None
+    timestamp: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class ThreadReadResult:
     """Immutable outcome of a thread context reading operation."""
 
@@ -61,6 +75,12 @@ class ThreadReadResult:
     status: ThreadContextStatus
     failure_reason: Optional[ThreadReadFailureReason] = None
     resident_match_count: int = 0
+    root: Optional[ThreadRootItem] = None
+
+    @property
+    def parent(self) -> Optional[ThreadRootItem]:
+        """Convenience alias for canonical root/parent message."""
+        return self.root
 
 # Shared Search Selectors (Single Source of Truth)
 SEARCH_VIEW_SELECTOR: str = '[data-qa="search_view"]'
@@ -379,17 +399,24 @@ JS_EXTRACT_MOUNTED_THREAD_REPLIES = r"""
             // Optional author extraction: [data-qa="message_sender_name"]
             const senderNodes = Array.from(row.querySelectorAll('[data-qa="message_sender_name"]')).filter(e => e && e.isConnected);
             let author = null;
+            let authorId = null;
             if (senderNodes.length === 1) {
-                const s = (senderNodes[0].textContent || '').trim();
+                const sn = senderNodes[0];
+                const s = (sn.textContent || '').trim();
                 if (s.length > 0) {
                     author = s;
+                }
+                const aId = sn.getAttribute('data-message-sender') || null;
+                if (aId) {
+                    authorId = aId;
                 }
             }
 
             extractedReplies.push({
                 href: href,
                 text: bodyText,
-                author: author
+                author: author,
+                author_id: authorId
             });
             totalChars += bodyText.length;
 
@@ -770,8 +797,8 @@ class WebviewThreadReader:
 
             # 8. Python Canonical Validation & Strict Thread Identity Rule
             validated_replies: list[ThreadReplyItem] = []
+            matched_roots: list[ThreadRootItem] = []
             cumulative_chars = 0
-            root_rows_excluded = 0
             identity_mismatch_excluded = 0
 
             for raw_rep in raw_replies:
@@ -794,7 +821,19 @@ class WebviewThreadReader:
                 # Strict Identity Rule:
                 # ROOT: message_ts == target_root_ts AND (thread_ts is None OR thread_ts == target_root_ts)
                 if msg_ts_norm == norm_target_root_ts and (thr_ts_norm is None or thr_ts_norm == norm_target_root_ts):
-                    root_rows_excluded += 1
+                    body_text = (raw_rep.get("text") or "").strip()
+                    if body_text:
+                        root_item = ThreadRootItem(
+                            text=body_text,
+                            permalink=href,
+                            channel_id=target_channel_id,
+                            message_ts=msg_ident.message_ts,
+                            thread_ts=msg_ident.thread_ts or target_root_ts,
+                            author=raw_rep.get("author"),
+                            author_id=raw_rep.get("author_id"),
+                            timestamp=raw_rep.get("timestamp"),
+                        )
+                        matched_roots.append(root_item)
                     continue
 
                 # REPLY: message_ts != target_root_ts AND thread_ts is not None AND thread_ts == target_root_ts
@@ -834,6 +873,18 @@ class WebviewThreadReader:
                 if len(validated_replies) >= self.max_replies:
                     break
 
+            # Root cardinality validation (fail closed on 0 or >1)
+            canonical_root: Optional[ThreadRootItem] = None
+            if len(matched_roots) == 1:
+                canonical_root = matched_roots[0]
+            elif len(matched_roots) > 1:
+                logger.warning(f"Multiple ({len(matched_roots)}) roots matched target identity; failing closed.")
+                canonical_root = None
+            else:
+                canonical_root = None
+
+            root_rows_excluded = 0 if canonical_root is not None else len(matched_roots)
+
             # 9. Conservative Completeness Decision
             # UNQUALIFIED_COMPLETENESS_PATH_DISABLED = true
             # In current Web Slack, no live-qualified completeness proof exists + automated scroll = 0
@@ -862,6 +913,8 @@ class WebviewThreadReader:
                 "rows_skipped_no_timestamp": res_extract.get("rows_skipped_no_timestamp", 0),
                 "rows_skipped_ambiguous_timestamp": res_extract.get("rows_skipped_ambiguous_timestamp", 0),
                 "rows_skipped_identity_mismatch": identity_mismatch_excluded,
+                "root_captured": canonical_root is not None,
+                "root_rows_observed": len(matched_roots),
                 "root_rows_excluded": root_rows_excluded,
                 "actual_reply_rows_accepted": len(validated_replies),
                 "accepted_reply_count": len(validated_replies),
@@ -873,13 +926,14 @@ class WebviewThreadReader:
             })
             logger.info(
                 f"🧵 [THREAD_EXPANSION_COMPLETE] channel={target_channel_id} replies={len(validated_replies)} "
-                f"status={status.value}"
+                f"root_captured={canonical_root is not None} status={status.value}"
             )
             return ThreadReadResult(
                 replies=tuple(validated_replies),
                 status=status,
                 failure_reason=failure_reason,
                 resident_match_count=1,
+                root=canonical_root,
             )
 
         finally:
@@ -899,6 +953,7 @@ class WebviewThreadReader:
 __all__ = [
     "WebviewThreadReader",
     "ThreadReadResult",
+    "ThreadRootItem",
     "ThreadReadFailureReason",
     "is_eligible_thread_candidate",
     "classify_message_thread_role",

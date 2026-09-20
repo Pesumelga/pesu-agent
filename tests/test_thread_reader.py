@@ -95,6 +95,8 @@ from pesu_agent.search.webview_thread_reader import (
     THREAD_READER_URL_NAVIGATION_FALLBACK,
     UNQUALIFIED_COMPLETENESS_PATH_DISABLED,
     WebviewThreadReader,
+    ThreadReadResult,
+    ThreadReadFailureReason,
     classify_message_thread_role,
     is_eligible_thread_candidate,
     normalize_slack_ts,
@@ -1200,3 +1202,353 @@ def test_read_thread_context_compatibility_wrapper():
     assert len(replies) == 0
     assert status == ThreadContextStatus.NOT_ATTEMPTED
 
+
+# ---------------------------------------------------------------------------
+# 16. Task 11Q4-P2A: Canonical Thread Root Capture Invariants (Requirements A-K)
+# ---------------------------------------------------------------------------
+
+def test_p2a_req_a_root_currently_discarded_core_red():
+    """Requirement A: Thread root row is captured separately from replies rather than discarded."""
+    extract_res = {
+        "ok": True,
+        "replies": [
+            # Root row
+            {
+                "href": "https://app.slack.com/archives/C01/p1787000000000001?thread_ts=1787000000.000001",
+                "text": "루트 본문 전체 내용입니다.",
+                "author": "루트작성자",
+            },
+            # Reply row 1
+            {
+                "href": "https://app.slack.com/archives/C01/p1788000000000001?thread_ts=1787000000.000001",
+                "text": "첫번째 댓글",
+                "author": "댓글작성자1",
+            },
+            # Reply row 2
+            {
+                "href": "https://app.slack.com/archives/C01/p1788000000000002?thread_ts=1787000000.000001",
+                "text": "두번째 댓글",
+                "author": "댓글작성자2",
+            },
+        ],
+    }
+    host = create_mock_host(extract_result=extract_res)
+    reader = WebviewThreadReader(host=host)
+    cand = create_eligible_candidate(
+        msg_id="https://app.slack.com/archives/C01/p1787000000000001?thread_ts=1787000000.000001",
+        thr_id="1787000000.000001",
+    )
+
+    result = reader.read_thread_result(cand)
+    assert getattr(result, "root", None) is not None, "Root was discarded by parser!"
+    assert result.root.text == "루트 본문 전체 내용입니다."
+    assert result.root.author == "루트작성자"
+    assert result.root.message_ts == "1787000000.000001"
+    assert result.root.channel_id == "C01"
+    assert len(result.replies) == 2
+    assert [r.text for r in result.replies] == ["첫번째 댓글", "두번째 댓글"]
+
+
+def test_p2a_req_b_strict_root_identity():
+    """Requirement B: Row with matching text/author but wrong message_ts is NOT accepted as root."""
+    extract_res = {
+        "ok": True,
+        "replies": [
+            # Wrong message_ts
+            {
+                "href": "https://app.slack.com/archives/C01/p1787999999999999?thread_ts=1787000000.000001",
+                "text": "루트 본문 전체 내용입니다.",
+                "author": "루트작성자",
+            },
+            # Reply 1
+            {
+                "href": "https://app.slack.com/archives/C01/p1788000000000001?thread_ts=1787000000.000001",
+                "text": "첫번째 댓글",
+            },
+        ],
+    }
+    host = create_mock_host(extract_result=extract_res)
+    reader = WebviewThreadReader(host=host)
+    cand = create_eligible_candidate(
+        msg_id="https://app.slack.com/archives/C01/p1787000000000001?thread_ts=1787000000.000001",
+        thr_id="1787000000.000001",
+    )
+
+    result = reader.read_thread_result(cand)
+    assert getattr(result, "root", None) is None, "Row with wrong message_ts must not be accepted as root!"
+
+
+def test_p2a_req_c_zero_root_match_fails_closed():
+    """Requirement C: Zero root match fails closed (root unavailable / None)."""
+    extract_res = {
+        "ok": True,
+        "replies": [
+            {
+                "href": "https://app.slack.com/archives/C01/p1788000000000001?thread_ts=1787000000.000001",
+                "text": "첫번째 댓글",
+            },
+            {
+                "href": "https://app.slack.com/archives/C01/p1788000000000002?thread_ts=1787000000.000001",
+                "text": "두번째 댓글",
+            },
+        ],
+    }
+    host = create_mock_host(extract_result=extract_res)
+    reader = WebviewThreadReader(host=host)
+    cand = create_eligible_candidate(
+        msg_id="https://app.slack.com/archives/C01/p1787000000000001?thread_ts=1787000000.000001",
+        thr_id="1787000000.000001",
+    )
+
+    result = reader.read_thread_result(cand)
+    assert getattr(result, "root", None) is None
+    assert len(result.replies) == 2
+
+
+def test_p2a_req_d_multiple_root_matches_fails_closed():
+    """Requirement D: More than one row resolving to target root identity fails closed (root is None)."""
+    extract_res = {
+        "ok": True,
+        "replies": [
+            # Root duplicate 1
+            {
+                "href": "https://app.slack.com/archives/C01/p1787000000000001?thread_ts=1787000000.000001",
+                "text": "루트 복제본 1",
+            },
+            # Root duplicate 2
+            {
+                "href": "https://app.slack.com/archives/C01/p1787000000000001?thread_ts=1787000000.000001",
+                "text": "루트 복제본 2",
+            },
+            # Reply 1
+            {
+                "href": "https://app.slack.com/archives/C01/p1788000000000001?thread_ts=1787000000.000001",
+                "text": "첫번째 댓글",
+            },
+        ],
+    }
+    host = create_mock_host(extract_result=extract_res)
+    reader = WebviewThreadReader(host=host)
+    cand = create_eligible_candidate(
+        msg_id="https://app.slack.com/archives/C01/p1787000000000001?thread_ts=1787000000.000001",
+        thr_id="1787000000.000001",
+    )
+
+    result = reader.read_thread_result(cand)
+    assert getattr(result, "root", None) is None, "Multiple root matches must fail closed, not pick first!"
+    assert len(result.replies) == 1
+
+
+def test_p2a_req_e_root_body_preservation():
+    """Requirement E: Multi-paragraph / rich-text root body survives extraction cleanly."""
+    multi_paragraph = "첫 번째 문단\n두 번째 문단\n세 번째 문단"
+    extract_res = {
+        "ok": True,
+        "replies": [
+            {
+                "href": "https://app.slack.com/archives/C01/p1787000000000001?thread_ts=1787000000.000001",
+                "text": multi_paragraph,
+                "author": "루트작성자",
+            },
+            {
+                "href": "https://app.slack.com/archives/C01/p1788000000000001?thread_ts=1787000000.000001",
+                "text": "첫번째 댓글",
+            },
+        ],
+    }
+    host = create_mock_host(extract_result=extract_res)
+    reader = WebviewThreadReader(host=host)
+    cand = create_eligible_candidate(
+        msg_id="https://app.slack.com/archives/C01/p1787000000000001?thread_ts=1787000000.000001",
+        thr_id="1787000000.000001",
+    )
+
+    result = reader.read_thread_result(cand)
+    assert getattr(result, "root", None) is not None
+    assert result.root.text == multi_paragraph
+
+
+def test_p2a_req_f_root_and_reply_separation():
+    """Requirement F: Root does not appear in replies[], reply ordering and IDs remain unchanged."""
+    extract_res = {
+        "ok": True,
+        "replies": [
+            {
+                "href": "https://app.slack.com/archives/C01/p1787000000000001?thread_ts=1787000000.000001",
+                "text": "루트 본문",
+            },
+            {
+                "href": "https://app.slack.com/archives/C01/p1788000000000001?thread_ts=1787000000.000001",
+                "text": "댓글 1",
+            },
+            {
+                "href": "https://app.slack.com/archives/C01/p1788000000000002?thread_ts=1787000000.000001",
+                "text": "댓글 2",
+            },
+        ],
+    }
+    host = create_mock_host(extract_result=extract_res)
+    reader = WebviewThreadReader(host=host)
+    cand = create_eligible_candidate(
+        msg_id="https://app.slack.com/archives/C01/p1787000000000001?thread_ts=1787000000.000001",
+        thr_id="1787000000.000001",
+    )
+
+    result = reader.read_thread_result(cand)
+    assert getattr(result, "root", None) is not None
+    assert result.root.text not in [r.text for r in result.replies]
+    assert [r.reply_id for r in result.replies] == ["R1", "R2"]
+    assert [r.text for r in result.replies] == ["댓글 1", "댓글 2"]
+
+
+def test_p2a_req_g_h_i_retrieval_coordinator_canonical_identity_and_provenance():
+    """Requirements G, H, I: Hydration enriches SAME EvidenceItem, preserves canonical identity & provenance, 0 duplicate."""
+    from pesu_agent.investigation.retrieval_coordinator import (
+        ProductionInvestigationRetrievalCoordinator,
+    )
+    from pesu_agent.investigation.selector import get_canonical_evidence_key
+
+    async def _run():
+        item = EvidenceItem(
+            evidence_id="ev_01",
+            source="synthetic",
+            text="검색 스니펫 (짧은 본문)",
+            author="스니펫작성자",
+            message_identifier="https://app.slack.com/archives/C01/p1787000000000001?thread_ts=1787000000.000001",
+            permalink="https://app.slack.com/archives/C01/p1787000000000001?thread_ts=1787000000.000001",
+            thread_identifier="1787000000.000001",
+            has_thread=True,
+            thread_reply_count=1,
+        )
+        key_before = get_canonical_evidence_key(item)
+
+        search_backend = SyntheticSearchBackend(corpus=[item])
+
+        # Mock thread reader returning root + reply
+        from pesu_agent.search.webview_thread_reader import ThreadRootItem
+        root_item = ThreadRootItem(
+            text="루트 본문 전체 내용 (Hydrated full text)",
+            permalink="https://app.slack.com/archives/C01/p1787000000000001?thread_ts=1787000000.000001",
+            channel_id="C01",
+            message_ts="1787000000.000001",
+            thread_ts="1787000000.000001",
+            author="스니펫작성자",
+        )
+        reply_item = ThreadReplyItem(
+            reply_id="R1",
+            author="댓글작성자",
+            text="댓글 내용",
+            permalink="https://app.slack.com/archives/C01/p1788000000000001?thread_ts=1787000000.000001",
+            channel_id="C01",
+            message_ts="1788000000.000001",
+            thread_ts="1787000000.000001",
+        )
+        mock_result = ThreadReadResult(
+            replies=(reply_item,),
+            status=ThreadContextStatus.PARTIAL,
+            failure_reason=None,
+            resident_match_count=1,
+            root=root_item,
+        )
+
+        coord = ProductionInvestigationRetrievalCoordinator(search_backend=search_backend)
+        plan = InvestigationPlan(
+            objective="스니펫 확인",
+            search_queries=[SearchQuery(query="검색 스니펫", purpose="스니펫 확인")],
+            questions_to_resolve=["스니펫"],
+        )
+
+        res = await coord.retrieve_precomputed(
+            plan=plan,
+            thread_reader_fn=lambda c: mock_result,
+        )
+
+        # Requirement I: Exactly 1 evidence item for this canonical message (no duplicate)
+        assert len(res.evidence_package.evidence_items) == 1
+        hydrated_item = res.evidence_package.evidence_items[0]
+
+        # Requirement G: Canonical identity before == after
+        key_after = get_canonical_evidence_key(hydrated_item)
+        assert key_before == key_after
+        # Root body replaces search snippet
+        assert hydrated_item.text == "루트 본문 전체 내용 (Hydrated full text)"
+        assert "검색 스니펫" not in hydrated_item.text
+
+        # Requirement H: Query provenance preserved
+        assert key_before in res.candidate_query_provenance
+        assert len(res.candidate_query_provenance[key_before]) > 0
+
+    asyncio.run(_run())
+
+
+def test_p2a_req_j_existing_thread_failure_path_preserves_snippet():
+    """Requirement J: When thread reading fails, existing search snippet is retained."""
+    from pesu_agent.investigation.retrieval_coordinator import (
+        ProductionInvestigationRetrievalCoordinator,
+    )
+
+    async def _run():
+        item = EvidenceItem(
+            evidence_id="ev_01",
+            source="synthetic",
+            text="검색 스니펫 원본",
+            message_identifier="https://app.slack.com/archives/C01/p1787000000000001?thread_ts=1787000000.000001",
+            permalink="https://app.slack.com/archives/C01/p1787000000000001?thread_ts=1787000000.000001",
+            thread_identifier="1787000000.000001",
+            has_thread=True,
+            thread_reply_count=1,
+        )
+        search_backend = SyntheticSearchBackend(corpus=[item])
+
+        failed_result = ThreadReadResult(
+            replies=(),
+            status=ThreadContextStatus.UNAVAILABLE,
+            failure_reason=ThreadReadFailureReason.REPLY_BAR_UNAVAILABLE,
+            resident_match_count=1,
+            root=None,
+        )
+
+        coord = ProductionInvestigationRetrievalCoordinator(search_backend=search_backend)
+        plan = InvestigationPlan(
+            objective="검색 스니펫 확인",
+            search_queries=[SearchQuery(query="검색 스니펫 원본", purpose="스니펫 확인")],
+            questions_to_resolve=["스니펫"],
+        )
+
+        res = await coord.retrieve_precomputed(
+            plan=plan,
+            thread_reader_fn=lambda c: failed_result,
+        )
+
+        assert len(res.evidence_package.evidence_items) == 1
+        ev = res.evidence_package.evidence_items[0]
+        assert ev.text == "검색 스니펫 원본"
+        assert ev.thread_context_status == "UNAVAILABLE"
+
+    asyncio.run(_run())
+
+
+def test_p2a_req_k_safety_surface_regression():
+    """Requirement K: Assert zero new UI actions, zero keyboard shortcuts, zero URL navigation."""
+    all_js = (
+        JS_CLEANUP_THREAD_OP_STATE
+        + JS_INSPECT_RESIDENT_SEARCH_ROWS
+        + JS_CLICK_RESIDENT_ROW_REPLY_BAR
+        + JS_POLL_ROOT_DELTA
+        + JS_EXTRACT_MOUNTED_THREAD_REPLIES
+    )
+    # 0 keyboard input
+    assert ".blur()" not in all_js
+    assert ".focus()" not in all_js
+    assert "dispatchEvent" not in all_js
+    assert "KeyboardEvent" not in all_js
+    assert "InputEvent" not in all_js
+    assert "keydown" not in all_js
+    assert "keyup" not in all_js
+    assert "keypress" not in all_js
+
+    # 0 generic navigation
+    assert THREAD_READER_URL_NAVIGATION_FALLBACK is False
+
+    # 0 composer interaction
+    assert COMPOSER_ROW_CAN_BECOME_THREAD_REPLY is False
