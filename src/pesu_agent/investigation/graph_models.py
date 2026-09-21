@@ -45,6 +45,7 @@ import uuid
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from pesu_agent.investigation.models import (
+    ParentContextState,
     ResolvedActorScope,
     ResolvedTemporalScope,
     TemporalRelation,
@@ -394,6 +395,10 @@ class EvidenceNode(BaseModel):
     retrieval_role: EvidenceRetrievalRole = Field(
         default=EvidenceRetrievalRole.PRIMARY_SCOPE,
         description="Reason why evidence was retrieved (PRIMARY_SCOPE or CONTEXT_SCOPE)",
+    )
+    parent_context_state: ParentContextState = Field(
+        default=ParentContextState.SEARCH_SNIPPET,
+        description="Parent message context completeness state (SEARCH_SNIPPET, CANONICAL_PARENT, HYDRATION_FAILED)",
     )
 
 

@@ -189,6 +189,14 @@ class ThreadContextStatus(str, Enum):
     UNAVAILABLE = "UNAVAILABLE"
 
 
+class ParentContextState(str, Enum):
+    """Parent message body completeness state (orthogonal to ThreadContextStatus)."""
+
+    SEARCH_SNIPPET = "SEARCH_SNIPPET"
+    CANONICAL_PARENT = "CANONICAL_PARENT"
+    HYDRATION_FAILED = "HYDRATION_FAILED"
+
+
 class ThreadReplyItem(BaseModel):
     """스레드 내부 단일 댓글 항목 (Canonical Sub-citation 대상)."""
 
@@ -335,6 +343,10 @@ class EvidenceItem(BaseModel):
     thread_context_status: str = Field(
         default="NOT_ATTEMPTED",
         description="스레드 컨텍스트 확장 상태 (NOT_ATTEMPTED, COMPLETE, PARTIAL, UNAVAILABLE)",
+    )
+    parent_context_state: ParentContextState = Field(
+        default=ParentContextState.SEARCH_SNIPPET,
+        description="Parent message context completeness state (SEARCH_SNIPPET, CANONICAL_PARENT, HYDRATION_FAILED)",
     )
 
 

@@ -42,6 +42,7 @@ from pesu_agent.investigation.models import (
     EvidencePackage,
     InvestigationPlan,
     InvestigationStopReason,
+    ParentContextState,
     RetrievalCoverage,
     SearchQuery,
     ThreadContextStatus,
@@ -793,6 +794,7 @@ class ProductionInvestigationRetrievalCoordinator:
                                     c.timestamp = final_root.timestamp
                                 c.thread_replies = final_replies
                                 c.thread_context_status = final_status
+                                c.parent_context_state = ParentContextState.CANONICAL_PARENT
                         target_candidate.text = final_root.text
                         if final_root.author and not target_candidate.author:
                             target_candidate.author = final_root.author
@@ -802,13 +804,18 @@ class ProductionInvestigationRetrievalCoordinator:
                             target_candidate.timestamp = final_root.timestamp
                         target_candidate.thread_replies = final_replies
                         target_candidate.thread_context_status = final_status
+                        target_candidate.parent_context_state = ParentContextState.CANONICAL_PARENT
                     else:
                         for c in all_candidates:
                             if get_canonical_evidence_key(c) == chosen_key:
                                 c.thread_replies = final_replies
                                 c.thread_context_status = final_status
+                                if c.parent_context_state != ParentContextState.CANONICAL_PARENT:
+                                    c.parent_context_state = ParentContextState.HYDRATION_FAILED
                         target_candidate.thread_replies = final_replies
                         target_candidate.thread_context_status = final_status
+                        if target_candidate.parent_context_state != ParentContextState.CANONICAL_PARENT:
+                            target_candidate.parent_context_state = ParentContextState.HYDRATION_FAILED
                     overall_thread_context_status = final_status
                     thread_expansions_done = 1
 
@@ -852,6 +859,7 @@ class ProductionInvestigationRetrievalCoordinator:
                         "final_status": final_status,
                         "root_captured": final_root is not None,
                         "root_body_characters": len(final_root.text) if final_root else 0,
+                        "parent_context_state": target_candidate.parent_context_state.value if hasattr(target_candidate.parent_context_state, "value") else str(target_candidate.parent_context_state),
                     }
                     self.last_thread_expansion_telemetry = expansion_telemetry
                     if inv_dir:
@@ -862,7 +870,11 @@ class ProductionInvestigationRetrievalCoordinator:
                     for c in all_candidates:
                         if get_canonical_evidence_key(c) == chosen_key:
                             c.thread_context_status = ThreadContextStatus.UNAVAILABLE.value
+                            if c.parent_context_state != ParentContextState.CANONICAL_PARENT:
+                                c.parent_context_state = ParentContextState.HYDRATION_FAILED
                     target_candidate.thread_context_status = ThreadContextStatus.UNAVAILABLE.value
+                    if target_candidate.parent_context_state != ParentContextState.CANONICAL_PARENT:
+                        target_candidate.parent_context_state = ParentContextState.HYDRATION_FAILED
                     overall_thread_context_status = ThreadContextStatus.UNAVAILABLE.value
                     thread_expansions_done = 1
 

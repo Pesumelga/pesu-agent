@@ -50,6 +50,7 @@ from pesu_agent.investigation.graph_models import (
 )
 from pesu_agent.investigation.models import (
     EvidenceItem,
+    ParentContextState,
     ResolvedActorScope,
     ResolvedTemporalScope,
     SearchQuery,
@@ -239,6 +240,7 @@ class InvestigationSeedPoolBuilder:
                 retrieval_round=1,
                 source_query=str(first_query) if first_query else None,
                 retrieval_role=EvidenceRetrievalRole.PRIMARY_SCOPE,
+                parent_context_state=getattr(item, "parent_context_state", ParentContextState.SEARCH_SNIPPET),
             )
             seed_nodes.append(node)
 

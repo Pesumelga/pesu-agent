@@ -82,6 +82,7 @@ from pesu_agent.investigation.graph_models import (
     TemporalRetrievalPolicy,
 )
 from pesu_agent.investigation.models import (
+    ParentContextState,
     ResolvedActorScope,
     ResolvedTemporalScope,
 )
@@ -202,6 +203,7 @@ class AssessmentEvidenceItem(BaseModel):
     timestamp: Optional[str] = None
     retrieval_role: str = "PRIMARY_SCOPE"
     thread_root_id: Optional[str] = None
+    parent_context_state: ParentContextState = ParentContextState.SEARCH_SNIPPET
 
 
 class AssessmentPayload(BaseModel):
@@ -365,6 +367,7 @@ class AssessmentPayloadBuilder:
                 timestamp=node.timestamp,
                 retrieval_role=node.retrieval_role.value if hasattr(node.retrieval_role, "value") else str(node.retrieval_role),
                 thread_root_id=node.thread_root_id,
+                parent_context_state=node.parent_context_state,
             )
             selected_items.append(item)
             chars_used += len(snippet)
@@ -855,7 +858,17 @@ class OpenRouterEvidenceAssessor(InvestigationEvidenceAssessor):
         "4. No Unsupported Speculation / Fail-Closed on Chatter:\n"
         "   - If the evidence items contain only casual conversation, greetings, ambiguous chatter, jokes, rumors, or irrelevant discussion without verifiable factual substance, you MUST output an empty proposed_claims list.\n"
         "   - Do NOT guess or invent facts to satisfy the prompt.\n"
-        "5. Output Format:\n"
+        "5. Parent Context Completeness Grounding Rules:\n"
+        "   - Each evidence item specifies its Parent Context State: SEARCH_SNIPPET, CANONICAL_PARENT, or HYDRATION_FAILED.\n"
+        "   - SEARCH_SNIPPET & HYDRATION_FAILED:\n"
+        "     * The text is a search preview snippet and may be truncated or incomplete. (HYDRATION_FAILED indicates an attempt to fetch the canonical parent body failed, leaving only the snippet).\n"
+        "     * Visible text IS authentic evidence: claims directly and explicitly entailed by the visible text ARE allowed. Do NOT discard or ignore evidence simply because it is a snippet.\n"
+        "     * Incompleteness Caution: Do NOT infer information from text that may have been omitted. Do NOT treat absence of details in the snippet as negative proof.\n"
+        "     * Exhaustiveness / Completeness Prohibition: Do NOT infer that the snippet contains the entire policy or complete message. In particular, do NOT infer 'no exception', 'only', 'all', 'none', exhaustiveness, or completeness merely because no alternative appears in the snippet (unless that stronger proposition is explicitly stated in the visible text itself).\n"
+        "   - CANONICAL_PARENT:\n"
+        "     * The canonical parent/root textual body available from the correlated Slack message representation has been acquired.\n"
+        "     * Parent Text Body Only: CANONICAL_PARENT confirms only that this parent textual body was acquired. It does NOT prove completeness of attachments, files, canvases/posts, linked documents, external resources, thread replies, later messages, or later decisions, nor does it imply decisive authority.\n"
+        "6. Output Format:\n"
         "   - Output MUST strictly conform to the InvestigationAssessment schema."
     )
 
@@ -907,6 +920,9 @@ class OpenRouterEvidenceAssessor(InvestigationEvidenceAssessor):
             lines.append(f"  Author: {item.presentation_author or 'Unknown'}")
             lines.append(f"  Timestamp: {item.timestamp or 'None'}")
             lines.append(f"  Retrieval Role: {item.retrieval_role}")
+            lines.append(
+                f"  Parent Context State: {item.parent_context_state.value if hasattr(item.parent_context_state, 'value') else item.parent_context_state}"
+            )
             lines.append(
                 f"  Text:\n  <evidence_data id=\"{item.evidence_id}\">\n  {item.text}\n  </evidence_data>"
             )

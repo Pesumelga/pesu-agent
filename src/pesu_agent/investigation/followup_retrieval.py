@@ -59,6 +59,7 @@ from pesu_agent.investigation.graph_models import (
 from pesu_agent.investigation.models import (
     ActorScopeKind,
     EvidenceItem,
+    ParentContextState,
     SearchQuery,
     TemporalResolutionStatus,
     TemporalStrictness,
@@ -757,6 +758,7 @@ class FollowupRetrievalExecutor:
                 retrieval_round=action.round + 1,
                 source_query=dedupe_key,
                 retrieval_role=retrieval_role,
+                parent_context_state=getattr(item, "parent_context_state", ParentContextState.SEARCH_SNIPPET),
             )
             graph.add_evidence(node)
 
