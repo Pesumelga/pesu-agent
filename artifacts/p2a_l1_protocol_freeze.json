@@ -1,8 +1,8 @@
 {
-  "protocol_version": "P2A-L1-v1.1",
+  "protocol_version": "P2A-L1-v1.2",
   "task_id": "Phase 13.5D / Task 11 / P2A-L1",
-  "created_at_utc": "2026-09-21T01:35:00Z",
-  "git_commit_base": "032263e479e72c8d27c393f20b584a894d03ff10",
+  "created_at_utc": "2026-09-21T02:12:00Z",
+  "git_commit_base": "e9923745027c6a86d1d3eeffc913666bafcf7339",
   "objective": "Bounded live read-only validation of canonical thread root extraction from real Slack DOM",
   "strict_invariants": {
     "TASK_11_COMPLETE": false,
@@ -36,11 +36,16 @@
     "Q2_04_RESOLVED_BY_P2A": "NOT_PROVEN"
   },
   "dependency_hashes": {
-    "runner": "9b40edd2c35aff348018aa8cd6f14669f4e921c8acbeb5aba0c456c75692b2db",
+    "runner": "f7002e5af99df8a64a50acc4fc208bbd8fc318d3cf1d417958d490e776210e89",
     "webview_thread_reader": "01fecd9934227742329af0de782f0170c3cce2527f66d32f98f075bf268f0d87",
     "webview_slack_search": "0f23a7430fd77659e5e3559c9105f9ce5acddb2ef2a0260feabd66cb10b72c21",
     "retrieval_coordinator": "cda149c2ae0d2c1e9759aaf5df0a3577d561f719ee0224b62dcb6581f0228ef5",
-    "selector": "a439d7cbf09c9cfcc79187b25e3ae351af5858c468f19b8ab1d7974e43b02f0a"
+    "selector": "a439d7cbf09c9cfcc79187b25e3ae351af5858c468f19b8ab1d7974e43b02f0a",
+    "pesu_webview_host": "831cebf43320fe7ff4fcca84a439e0daa30e18b3d74519970d5d529389691ea0",
+    "slack_permalink_parser": "f46137cd074e6f9f98e3831e87a2504d056c93596bde8ef564fb87cf3738c5ab",
+    "write_audit": "5560ec12f85886b49c2bd40c3faa2b9271680e1a04abdd97e37e324d1fc6f09e",
+    "read_only_barrier": "c42afe7ea78ff9b1e2e9fd922d0249508ea4b15ce280e3529665acc95c72646c",
+    "slack_agent_window": "a82c01578068c85e4c2bf12070171c0ae67556bc334b99c845bb9519d3c6180f"
   },
   "target_identity": {
     "query": "26년 하반기 간담회",
@@ -98,6 +103,9 @@
     "duplicate_evidence_count": 0,
     "query_provenance_preserved": true,
     "code_or_protocol_mutated_after_first_live": false,
+    "SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED": true,
+    "SEARCH_SURFACE_QUERY_MATCHES_REQUESTED": true,
+    "root_extraction_result_source": "LIVE_DOM",
     "generic_default_onenter_used": false,
     "composer_focus": 0,
     "composer_text_input": 0,
@@ -105,7 +113,9 @@
     "slackbot_action_invoked": false,
     "write_capable_action_invoked": false,
     "unsafe_non_search_action_invoked": false,
+    "search_submissions": 1,
     "reply_bar_clicks": 1,
+    "pure_read_dom_extractions": 1,
     "new_ui_actions_added": 0,
     "new_click_targets_added": 0,
     "provider_calls": 0,

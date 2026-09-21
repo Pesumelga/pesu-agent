@@ -9,7 +9,10 @@ Validates on real Slack WebView DOM that:
 5. Hydration enriches the SAME canonical EvidenceItem (identity preserved, 0 duplicates).
 6. P1A query provenance is preserved.
 7. Zero provider calls, zero composer interactions, zero generic onEnter, zero new UI actions.
-8. Strict, machine-checkable final PASS gate matching the frozen contract.
+8. Strictly separated DRY_RUN vs LIVE execution gates.
+   - Dry-run NEVER declares live PASS or THREAD_ROOT_DATA_EXTRACTION_LIVE_VALIDATED = true.
+   - Live PASS requires live execution proof: SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED,
+     SEARCH_SURFACE_QUERY_MATCHES_REQUESTED, reply_bar_clicks == 1, root from LIVE_DOM.
 """
 
 from __future__ import annotations
@@ -85,6 +88,11 @@ DEPENDENCY_PATHS = {
     "webview_slack_search": SRC_DIR / "pesu_agent" / "search" / "webview_slack_search.py",
     "retrieval_coordinator": SRC_DIR / "pesu_agent" / "investigation" / "retrieval_coordinator.py",
     "selector": SRC_DIR / "pesu_agent" / "investigation" / "selector.py",
+    "pesu_webview_host": SRC_DIR / "pesu_agent" / "runtime" / "pesu_webview_host.py",
+    "slack_permalink_parser": SRC_DIR / "pesu_agent" / "parsers" / "slack_permalink_parser.py",
+    "write_audit": SRC_DIR / "pesu_agent" / "security" / "write_audit.py",
+    "read_only_barrier": SRC_DIR / "pesu_agent" / "security" / "read_only_barrier.py",
+    "slack_agent_window": SRC_DIR / "pesu_agent" / "lifecycle" / "slack_agent_window.py",
 }
 
 
@@ -132,6 +140,70 @@ def compute_all_dependency_hashes() -> dict[str, str]:
     return {name: get_file_sha256(p) for name, p in DEPENDENCY_PATHS.items()}
 
 
+def evaluate_dry_run_gate(report: dict[str, Any]) -> bool:
+    """Evaluates whether all static and preflight checks pass for dry-run."""
+    checks = report.get("checks", {})
+    return (
+        checks.get("frozen_protocol_respected") is True
+        and checks.get("frozen_hashes_matched") is True
+        and checks.get("static_target_identity_valid") is True
+        and checks.get("static_pass_criteria_valid") is True
+        and checks.get("code_or_protocol_mutated_after_first_live") is False
+    )
+
+
+def evaluate_live_gate(report: dict[str, Any]) -> bool:
+    """Evaluates strict machine-checkable criteria for LIVE execution PASS.
+
+    Rejects any missing telemetry, wrong execution mode, or synthetic injection.
+    """
+    if report.get("execution_mode") != "LIVE":
+        return False
+
+    if not report.get("live_execution_started") or not report.get("live_execution_completed"):
+        return False
+
+    checks = report.get("checks", {})
+    safety = report.get("safety_telemetry", {})
+    actions = report.get("live_action_inventory", {})
+
+    return (
+        checks.get("frozen_protocol_respected") is True
+        and checks.get("frozen_hashes_matched") is True
+        and checks.get("target_identity_exact_match") is True
+        and checks.get("pre_action_identity_check") == "PASS"
+        and checks.get("immediate_pre_activation_recheck") == "PASS"
+        and checks.get("reply_bar_guard_passed") is True
+        and checks.get("existing_qualified_reply_bar_interaction_only") is True
+        and checks.get("post_open_root_correlation") == "PASS"
+        and checks.get("canonical_root_captured") is True
+        and checks.get("root_identity_exact_match") is True
+        and checks.get("root_text_extracted") is True
+        and checks.get("root_and_replies_distinct") is True
+        and checks.get("evidence_item_identity_preserved") is True
+        and checks.get("duplicate_evidence_count") == 0
+        and checks.get("query_provenance_preserved") is True
+        and checks.get("code_or_protocol_mutated_after_first_live") is False
+        and checks.get("SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED") is True
+        and checks.get("SEARCH_SURFACE_QUERY_MATCHES_REQUESTED") is True
+        and checks.get("root_extraction_result_source") == "LIVE_DOM"
+        and safety.get("GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH") is False
+        and safety.get("SLACKBOT_ACTION_INVOKED_BY_PESU") is False
+        and safety.get("WRITE_CAPABLE_ACTION_INVOKED_BY_PESU") is False
+        and safety.get("UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU") is False
+        and safety.get("composer_focus") == 0
+        and safety.get("composer_text_input") == 0
+        and safety.get("composer_send") == 0
+        and actions.get("search_submissions") == 1
+        and actions.get("reply_bar_clicks") == 1
+        and actions.get("pure_read_dom_extractions", 0) >= 1
+        and actions.get("new_ui_actions_added") == 0
+        and actions.get("new_click_targets_added") == 0
+        and report.get("provider_calls") == 0
+        and report.get("retry_occurred") is False
+    )
+
+
 def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> dict[str, Any]:
     start_time = time.time()
     commit_sha = get_git_commit()
@@ -158,7 +230,9 @@ def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> di
 
     report: dict[str, Any] = {
         "task_id": "Phase 13.5D / Task 11 / P2A-L1",
+        "execution_mode": "DRY_RUN" if dry_run else "LIVE",
         "verdict": "FAIL_CLOSED",
+        "P2A_L1": "NOT_EXECUTED" if dry_run else "FAIL_CLOSED",
         "thread_root_data_extraction_live_validated": False,
         "execution_timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "git_commit": commit_sha,
@@ -182,9 +256,13 @@ def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> di
         },
         "provider_calls": 0,
         "retry_occurred": False,
+        "live_execution_started": False,
+        "live_execution_completed": False,
         "checks": {
             "frozen_protocol_respected": False,
             "frozen_hashes_matched": False,
+            "static_target_identity_valid": False,
+            "static_pass_criteria_valid": False,
             "target_identity_exact_match": False,
             "pre_action_identity_check": "NOT_RUN",
             "immediate_pre_activation_recheck": "NOT_RUN",
@@ -201,6 +279,9 @@ def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> di
             "duplicate_evidence_count": 0,
             "query_provenance_preserved": False,
             "code_or_protocol_mutated_after_first_live": False,
+            "SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED": False,
+            "SEARCH_SURFACE_QUERY_MATCHES_REQUESTED": False,
+            "root_extraction_result_source": "NOT_RUN",
         },
         "safety_telemetry": {
             "SLACKBOT_ACTION_INVOKED_BY_PESU": False,
@@ -238,79 +319,62 @@ def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> di
             logger.warning(f"⚠️ Failed to parse protocol freeze artifact: {e}")
             report["checks"]["frozen_hashes_matched"] = False
 
+    # -------------------------------------------------------------
+    # DRY-RUN EXECUTION PATH
+    # -------------------------------------------------------------
     if dry_run:
-        logger.info("🧪 [DRY_RUN] Simulating P2A-L1 bounded live qualification logic...")
+        logger.info("🧪 [DRY_RUN] Performing preflight static checks (ZERO live action)...")
         report["checks"]["frozen_protocol_respected"] = True
-        report["checks"]["target_identity_exact_match"] = True
-        report["checks"]["pre_action_identity_check"] = "PASS"
-        report["checks"]["immediate_pre_activation_recheck"] = "PASS"
-        report["checks"]["reply_bar_guard_passed"] = True
-        report["checks"]["existing_qualified_reply_bar_interaction_only"] = True
-        report["checks"]["post_open_root_correlation"] = "PASS"
-        report["checks"]["canonical_root_captured"] = True
-        report["checks"]["root_identity_exact_match"] = True
-        report["checks"]["root_text_extracted"] = True
-        report["checks"]["root_text_length"] = 120
-        report["checks"]["root_and_replies_distinct"] = True
-        report["checks"]["accepted_reply_count"] = 2
-        report["checks"]["evidence_item_identity_preserved"] = True
-        report["checks"]["duplicate_evidence_count"] = 0
-        report["checks"]["query_provenance_preserved"] = True
-        report["checks"]["code_or_protocol_mutated_after_first_live"] = False
-        report["live_action_inventory"]["reply_bar_clicks"] = 1
+        report["checks"]["static_target_identity_valid"] = (
+            bool(TARGET_QUERY) and bool(EXPECTED_CHANNEL_ID) and bool(EXPECTED_MESSAGE_TS) and bool(EXPECTED_ROOT_TS)
+        )
+        report["checks"]["static_pass_criteria_valid"] = True
 
-        # In dry run, check if all_passed satisfies strengthened gate
         post_hashes = compute_all_dependency_hashes()
         report["post_hashes"] = post_hashes
+        mutation = any(post_hashes.get(k) != v for k, v in pre_hashes.items())
+        report["checks"]["code_or_protocol_mutated_after_first_live"] = mutation
 
-        all_passed = (
-            report["checks"]["frozen_protocol_respected"] is True
-            and report["checks"]["target_identity_exact_match"] is True
-            and report["checks"]["pre_action_identity_check"] == "PASS"
-            and report["checks"]["immediate_pre_activation_recheck"] == "PASS"
-            and report["checks"]["reply_bar_guard_passed"] is True
-            and report["checks"]["existing_qualified_reply_bar_interaction_only"] is True
-            and report["checks"]["post_open_root_correlation"] == "PASS"
-            and report["checks"]["canonical_root_captured"] is True
-            and report["checks"]["root_identity_exact_match"] is True
-            and report["checks"]["root_text_extracted"] is True
-            and report["checks"]["root_and_replies_distinct"] is True
-            and report["checks"]["evidence_item_identity_preserved"] is True
-            and report["checks"]["duplicate_evidence_count"] == 0
-            and report["checks"]["query_provenance_preserved"] is True
-            and report["checks"]["code_or_protocol_mutated_after_first_live"] is False
-            and report["safety_telemetry"]["GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH"] is False
-            and report["safety_telemetry"]["SLACKBOT_ACTION_INVOKED_BY_PESU"] is False
-            and report["safety_telemetry"]["WRITE_CAPABLE_ACTION_INVOKED_BY_PESU"] is False
-            and report["safety_telemetry"]["UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU"] is False
-            and report["safety_telemetry"]["composer_focus"] == 0
-            and report["safety_telemetry"]["composer_text_input"] == 0
-            and report["safety_telemetry"]["composer_send"] == 0
-            and report["live_action_inventory"]["reply_bar_clicks"] == 1
-            and report["live_action_inventory"]["new_ui_actions_added"] == 0
-            and report["live_action_inventory"]["new_click_targets_added"] == 0
-            and report["provider_calls"] == 0
-            and report["retry_occurred"] is False
-        )
+        # In dry-run, actual live action counters remain 0
+        report["live_action_inventory"]["search_modal_open_calls"] = 0
+        report["live_action_inventory"]["search_submissions"] = 0
+        report["live_action_inventory"]["reply_bar_clicks"] = 0
+        report["live_action_inventory"]["pure_read_dom_extractions"] = 0
 
-        if all_passed:
-            report["verdict"] = "PASS"
-            report["thread_root_data_extraction_live_validated"] = True
-        else:
-            report["verdict"] = "FAIL_CLOSED"
-            report["thread_root_data_extraction_live_validated"] = False
+        # Simulated expected inventory for user visibility only
+        report["simulated_expected_action_inventory"] = {
+            "search_modal_open_calls": 1,
+            "search_submissions": 1,
+            "reply_bar_clicks": 1,
+            "pure_read_dom_extractions": 1,
+            "new_ui_actions_added": 0,
+            "new_click_targets_added": 0,
+        }
+
+        # Dry-run gate evaluation
+        dry_run_ok = evaluate_dry_run_gate(report)
+        report["verdict"] = "DRY_RUN_PASS" if dry_run_ok else "DRY_RUN_FAIL_CLOSED"
+        report["P2A_L1"] = "NOT_EXECUTED"
+        # INVARIANT: Dry-run MUST NEVER declare live pass!
+        report["thread_root_data_extraction_live_validated"] = False
 
         report["duration_seconds"] = round(time.time() - start_time, 2)
         return report
 
+    # -------------------------------------------------------------
+    # LIVE EXECUTION PATH
+    # -------------------------------------------------------------
     # If live run, frozen_hashes_matched is strictly mandatory
     if not frozen_hashes_valid:
         report["error"] = "PRE_EXECUTION_HASH_MISMATCH_WITH_PROTOCOL_FREEZE"
         report["verdict"] = "FAIL_CLOSED"
+        report["P2A_L1"] = "FAIL_CLOSED"
         report["duration_seconds"] = round(time.time() - start_time, 2)
         return report
 
-    # 2. Initialize dedicated WebView host and search backend
+    report["live_execution_started"] = True
+
+    # Initialize dedicated WebView host and search backend
     host = PesuWebViewHost(
         user_data_folder=DIRECT_SLACK_PROFILE_PATH,
         initial_url="https://app.slack.com/client",
@@ -344,6 +408,13 @@ def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> di
         report["safety_telemetry"]["UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU"] = bool(
             search_telemetry.get("unsafe_non_search_action_invoked", False)
         )
+
+        # Telemetry authority checks
+        report["checks"]["SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED"] = bool(
+            search_telemetry.get("safe_search_action_selected", False)
+        )
+        verified_before = bool(search_telemetry.get("verified_query_state_before_submit", False))
+        report["checks"]["SEARCH_SURFACE_QUERY_MATCHES_REQUESTED"] = verified_before
 
         if report["safety_telemetry"]["GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH"]:
             raise RuntimeError("GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH was detected during search!")
@@ -383,6 +454,7 @@ def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> di
             logger.error("❌ Target row is not resident in search results! Failing closed.")
             report["checks"]["pre_action_identity_check"] = "FAIL_NOT_RESIDENT"
             report["verdict"] = "FAIL_CLOSED"
+            report["P2A_L1"] = "FAIL_CLOSED"
             return report
 
         report["checks"]["pre_action_identity_check"] = "PASS"
@@ -421,6 +493,7 @@ def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> di
         canonical_root = thread_result.root
         if canonical_root is not None:
             report["checks"]["canonical_root_captured"] = True
+            report["checks"]["root_extraction_result_source"] = "LIVE_DOM"
             norm_root_msg_ts = normalize_slack_ts(canonical_root.message_ts)
             norm_expected_root_ts = normalize_slack_ts(EXPECTED_ROOT_TS)
             if (
@@ -442,7 +515,6 @@ def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> di
 
         # Hydration simulation & identity preservation
         if report["checks"]["canonical_root_captured"] and canonical_root:
-            # Replaces snippet with canonical root text
             target_evidence.text = canonical_root.text
             target_evidence.thread_replies = list(thread_result.replies)
             target_evidence.thread_context_status = thread_result.status.value
@@ -451,10 +523,8 @@ def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> di
             if key_before == key_after:
                 report["checks"]["evidence_item_identity_preserved"] = True
 
-            # Duplicate check
             report["checks"]["duplicate_evidence_count"] = 0
 
-            # Query provenance check
             prov_hit = CandidateQueryHit(query_index=0, search_query=SearchQuery(query=TARGET_QUERY))
             provenance_map = {key_before: [prov_hit]}
             if key_after in provenance_map and len(provenance_map[key_after]) > 0:
@@ -474,51 +544,24 @@ def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> di
 
         report["checks"]["code_or_protocol_mutated_after_first_live"] = mutation_detected
 
-        # Evaluate final strengthened verdict
-        all_passed = (
-            report["checks"]["frozen_protocol_respected"] is True
-            and report["checks"]["frozen_hashes_matched"] is True
-            and report["checks"]["target_identity_exact_match"] is True
-            and report["checks"]["pre_action_identity_check"] == "PASS"
-            and report["checks"]["immediate_pre_activation_recheck"] == "PASS"
-            and report["checks"]["reply_bar_guard_passed"] is True
-            and report["checks"]["existing_qualified_reply_bar_interaction_only"] is True
-            and report["checks"]["post_open_root_correlation"] == "PASS"
-            and report["checks"]["canonical_root_captured"] is True
-            and report["checks"]["root_identity_exact_match"] is True
-            and report["checks"]["root_text_extracted"] is True
-            and report["checks"]["root_and_replies_distinct"] is True
-            and report["checks"]["evidence_item_identity_preserved"] is True
-            and report["checks"]["duplicate_evidence_count"] == 0
-            and report["checks"]["query_provenance_preserved"] is True
-            and report["checks"]["code_or_protocol_mutated_after_first_live"] is False
-            and report["safety_telemetry"]["GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH"] is False
-            and report["safety_telemetry"]["SLACKBOT_ACTION_INVOKED_BY_PESU"] is False
-            and report["safety_telemetry"]["WRITE_CAPABLE_ACTION_INVOKED_BY_PESU"] is False
-            and report["safety_telemetry"]["UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU"] is False
-            and report["safety_telemetry"]["composer_focus"] == 0
-            and report["safety_telemetry"]["composer_text_input"] == 0
-            and report["safety_telemetry"]["composer_send"] == 0
-            and report["live_action_inventory"]["reply_bar_clicks"] == 1
-            and report["live_action_inventory"]["new_ui_actions_added"] == 0
-            and report["live_action_inventory"]["new_click_targets_added"] == 0
-            and report["provider_calls"] == 0
-            and report["retry_occurred"] is False
-        )
+        report["live_execution_completed"] = True
 
-        if all_passed:
-            report["verdict"] = "PASS"
-            report["thread_root_data_extraction_live_validated"] = True
+        # Evaluate final strengthened live gate
+        live_passed = evaluate_live_gate(report)
+        report["thread_root_data_extraction_live_validated"] = live_passed
+        report["P2A_L1"] = "PASS" if live_passed else "FAIL_CLOSED"
+        report["verdict"] = report["P2A_L1"]
+
+        if live_passed:
             logger.info("🎉 [QUALIFICATION_PASS] P2A-L1 Live Root Extraction Passed!")
         else:
-            report["verdict"] = "FAIL_CLOSED"
-            report["thread_root_data_extraction_live_validated"] = False
-            logger.warning(f"⚠️ [QUALIFICATION_FAIL_CLOSED] Checks failed: {report['checks']}")
+            logger.warning(f"⚠️ [QUALIFICATION_FAIL_CLOSED] Live gate failed: {report['checks']}")
 
     except Exception as ex:
         logger.error(f"❌ [EXCEPTION] Qualification raised: {ex}", exc_info=True)
         report["error"] = str(ex)
         report["verdict"] = "FAIL_CLOSED"
+        report["P2A_L1"] = "FAIL_CLOSED"
         report["thread_root_data_extraction_live_validated"] = False
     finally:
         report["duration_seconds"] = round(time.time() - start_time, 2)
@@ -546,6 +589,6 @@ if __name__ == "__main__":
     result = run_p2a_l1_qualification(dry_run=args.dry_run, timeout=args.timeout)
     print("\n=== P2A-L1 QUALIFICATION REPORT ===")
     print(json.dumps(result, indent=2, ensure_ascii=False))
-    if result["verdict"] != "PASS":
+    if result["verdict"] not in ("PASS", "DRY_RUN_PASS"):
         sys.exit(1)
     sys.exit(0)
