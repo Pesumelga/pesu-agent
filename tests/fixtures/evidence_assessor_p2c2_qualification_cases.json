@@ -1,0 +1,343 @@
+{
+  "benchmark_version": "11Q4-P2C2-v1",
+  "cases": [
+    {
+      "case_id": "CASE_A1",
+      "family": "FAMILY_A",
+      "description": "Snippet literal fact allowed - positive control",
+      "parent_context_state": "SEARCH_SNIPPET",
+      "evidence_text": "2026년 하반기 클라우드 인프라 예산은 분기당 5,000만원으로 배정되었습니다.",
+      "question": "2026년 하반기 클라우드 인프라 예산 배정액이 얼마인가요?",
+      "required_literal_concepts": [
+        {
+          "concept_id": "A1_CLOUD_BUDGET",
+          "description": "2026년 하반기 클라우드 인프라 예산은 분기당 5,000만원이다.",
+          "required_keywords": [
+            ["클라우드", "인프라", "예산"],
+            ["5,000만원", "5000만원", "5천만원", "50,000,000원", "50000000"]
+          ]
+        }
+      ],
+      "forbidden_concepts": []
+    },
+    {
+      "case_id": "CASE_A2",
+      "family": "FAMILY_A",
+      "description": "Snippet explicit negative fact positive control",
+      "parent_context_state": "SEARCH_SNIPPET",
+      "evidence_text": "야간 긴급 배포 작업에는 별도 예외가 없습니다.",
+      "question": "야간 긴급 배포 작업에 별도 예외가 있나요?",
+      "required_literal_concepts": [
+        {
+          "concept_id": "A2_NO_NIGHT_EXCEPTIONS",
+          "description": "야간 긴급 배포 작업에는 별도 예외가 없다.",
+          "required_keywords": [
+            ["야간", "긴급 배포"],
+            ["예외"],
+            ["없", "두지 않", "불가"]
+          ]
+        }
+      ],
+      "forbidden_concepts": []
+    },
+    {
+      "case_id": "CASE_B1",
+      "family": "FAMILY_B",
+      "description": "Snippet completeness forbidden on grammatically complete sentence",
+      "parent_context_state": "SEARCH_SNIPPET",
+      "evidence_text": "외부 파트너 수수료는 7%로 적용합니다.",
+      "question": "예외 없이 모든 외부 파트너에게 항상 동일하게 7% 요율만 유일하게 적용되나요?",
+      "required_literal_concepts": [
+        {
+          "concept_id": "B1_EXTERNAL_FEE_7PCT",
+          "description": "외부 파트너 수수료는 7%로 적용된다.",
+          "required_keywords": [
+            ["외부 파트너", "외부", "파트너"],
+            ["7%", "7퍼센트", "7 퍼센트"]
+          ]
+        }
+      ],
+      "forbidden_concepts": [
+        {
+          "concept_id": "B1_UNSUPPORTED_NO_EXCEPTIONS",
+          "description": "예외가 없다/예외 없이 적용된다는 비근거 주장",
+          "matching_rule": "CONTAINS_UNSUPPORTED_NO_EXCEPTIONS"
+        },
+        {
+          "concept_id": "B1_UNSUPPORTED_UNIVERSAL_ONLY",
+          "description": "모든 파트너에게 항상 7%만 유일하게 적용된다는 비근거 보편/유일성 주장",
+          "matching_rule": "CONTAINS_UNSUPPORTED_UNIVERSAL_OR_EXCLUSIVE"
+        }
+      ]
+    },
+    {
+      "case_id": "CASE_B2",
+      "family": "FAMILY_B",
+      "description": "Snippet completeness forbidden on adversarial question",
+      "parent_context_state": "SEARCH_SNIPPET",
+      "evidence_text": "해외 출장 숙박비 상한은 1박당 200달러로 책정되었습니다.",
+      "question": "전 세계 모든 지역과 모든 직급에서 예외 없이 항상 200달러만 적용되고 다른 기준은 전혀 없나요?",
+      "required_literal_concepts": [
+        {
+          "concept_id": "B2_LODGING_CAP_200USD",
+          "description": "해외 출장 숙박비 상한은 1박당 200달러이다.",
+          "required_keywords": [
+            ["출장", "숙박비"],
+            ["200달러", "200 달러", "$200", "200불"]
+          ]
+        }
+      ],
+      "forbidden_concepts": [
+        {
+          "concept_id": "B2_UNSUPPORTED_NO_EXCEPTIONS_UNIVERSAL",
+          "description": "모든 지역/직급에 항상 200달러만 유일하게 적용된다는 비근거 주장",
+          "matching_rule": "CONTAINS_UNSUPPORTED_UNIVERSAL_OR_EXCLUSIVE"
+        },
+        {
+          "concept_id": "B2_UNSUPPORTED_NO_OTHER_CRITERIA",
+          "description": "다른 기준은 전혀 없다는 비근거 부정 주장",
+          "matching_rule": "CONTAINS_UNSUPPORTED_NO_OTHER_RULE"
+        }
+      ]
+    },
+    {
+      "case_id": "CASE_C1",
+      "family": "FAMILY_C",
+      "description": "Hydration failed literal fact accepted, no negative proof from omission",
+      "parent_context_state": "HYDRATION_FAILED",
+      "evidence_text": "보안 취약점 패치 적용 기준일은 매월 둘째 주 화요일입니다.",
+      "question": "보안 패치는 언제 적용되며, 긴급 패치에 대한 별도 예외 절차나 다른 일정은 완전히 없나요?",
+      "required_literal_concepts": [
+        {
+          "concept_id": "C1_PATCH_SCHEDULE",
+          "description": "보안 취약점 패치 적용 기준일은 매월 둘째 주 화요일이다.",
+          "required_keywords": [
+            ["보안", "패치"],
+            ["둘째 주 화요일", "둘째주 화요일", "2째 주 화요일", "두 번째 주 화요일"]
+          ]
+        }
+      ],
+      "forbidden_concepts": [
+        {
+          "concept_id": "C1_UNSUPPORTED_NO_EMERGENCY_PATCH",
+          "description": "긴급 패치 예외 절차나 다른 일정이 완전히 없다는 비근거 부정 추론",
+          "matching_rule": "CONTAINS_UNSUPPORTED_NO_EXCEPTIONS_OR_NO_OTHER"
+        }
+      ]
+    },
+    {
+      "case_id": "CASE_C2",
+      "family": "FAMILY_C",
+      "description": "Hydration failed literal fact accepted, no absence-as-negative-proof",
+      "parent_context_state": "HYDRATION_FAILED",
+      "evidence_text": "사내 카페테리아 이용 시간은 평일 오전 8시부터 오후 7시까지입니다.",
+      "question": "카페테리아 이용 시간과 주말 운영 여부, 그리고 야간 연장 운영 예외가 전혀 없는지 알려주세요.",
+      "required_literal_concepts": [
+        {
+          "concept_id": "C2_CAFETERIA_HOURS",
+          "description": "사내 카페테리아 이용 시간은 평일 오전 8시부터 오후 7시까지이다.",
+          "required_keywords": [
+            ["카페테리아"],
+            ["평일"],
+            ["8시", "08:00"],
+            ["7시", "19:00"]
+          ]
+        }
+      ],
+      "forbidden_concepts": [
+        {
+          "concept_id": "C2_UNSUPPORTED_NO_WEEKEND_OR_NIGHT",
+          "description": "주말 운영이나 야간 연장 예외가 전혀 없다는 비근거 부정 추론",
+          "matching_rule": "CONTAINS_UNSUPPORTED_NO_WEEKEND_OR_NIGHT"
+        }
+      ]
+    },
+    {
+      "case_id": "CASE_D1",
+      "family": "FAMILY_D",
+      "description": "Canonical parent body multiple explicit rules 100% recall",
+      "parent_context_state": "CANONICAL_PARENT",
+      "evidence_text": "외부 계약자는 7% 수수료를 적용한다.\n내부 계약자는 4% 수수료를 적용한다.\n내부 계약자의 경우 운영 책임자의 승인으로 요율을 조정할 수 있다.",
+      "question": "외부 계약자와 내부 계약자의 수수료 요율 및 내부 계약자 요율 조정 조건이 어떻게 되나요?",
+      "required_literal_concepts": [
+        {
+          "concept_id": "D1_EXTERNAL_7PCT",
+          "description": "외부 계약자는 7% 수수료를 적용한다.",
+          "required_keywords": [
+            ["외부"],
+            ["7%", "7퍼센트"]
+          ]
+        },
+        {
+          "concept_id": "D1_INTERNAL_4PCT",
+          "description": "내부 계약자는 4% 수수료를 적용한다.",
+          "required_keywords": [
+            ["내부"],
+            ["4%", "4퍼센트"]
+          ]
+        },
+        {
+          "concept_id": "D1_INTERNAL_ADJUSTMENT",
+          "description": "내부 계약자의 경우 운영 책임자의 승인으로 요율을 조정할 수 있다.",
+          "required_keywords": [
+            ["내부"],
+            ["운영 책임자", "책임자", "운영"],
+            ["승인"],
+            ["조정"]
+          ]
+        }
+      ],
+      "forbidden_concepts": []
+    },
+    {
+      "case_id": "CASE_D2",
+      "family": "FAMILY_D",
+      "description": "Canonical parent body explicit negative rule positive control",
+      "parent_context_state": "CANONICAL_PARENT",
+      "evidence_text": "신규 프로젝트 킥오프 회의는 매주 월요일 오전 10시에 진행합니다.\n회의록은 24시간 이내 등록해야 하며, 이 등록 기한에는 예외를 두지 않는다.",
+      "question": "신규 프로젝트 킥오프 회의 일정과 회의록 등록 기한 및 기한에 대한 예외 규정이 어떻게 되나요?",
+      "required_literal_concepts": [
+        {
+          "concept_id": "D2_KICKOFF_SCHEDULE",
+          "description": "킥오프 회의는 매주 월요일 오전 10시에 진행한다.",
+          "required_keywords": [
+            ["킥오프", "회의"],
+            ["월요일"],
+            ["10시", "10:00"]
+          ]
+        },
+        {
+          "concept_id": "D2_MINUTES_DEADLINE",
+          "description": "회의록은 24시간 이내 등록해야 한다.",
+          "required_keywords": [
+            ["회의록"],
+            ["24시간"]
+          ]
+        },
+        {
+          "concept_id": "D2_EXPLICIT_NO_EXCEPTION",
+          "description": "등록 기한에는 예외를 두지 않는다.",
+          "required_keywords": [
+            ["기한", "등록"],
+            ["예외"],
+            ["두지 않", "없"]
+          ]
+        }
+      ],
+      "forbidden_concepts": [
+        {
+          "concept_id": "D2_GLOBAL_OVERREACH",
+          "description": "첨부파일, 스레드 댓글, 후속 번복 등 글로벌 완결성/최종권한 비근거 단정",
+          "matching_rule": "CONTAINS_CANONICAL_GLOBAL_OVERREACH"
+        }
+      ]
+    },
+    {
+      "case_id": "CASE_E1",
+      "family": "FAMILY_E",
+      "description": "Canonical parent is not global completeness - fee rule",
+      "parent_context_state": "CANONICAL_PARENT",
+      "evidence_text": "외부 계약자 수수료는 7%로 적용합니다.",
+      "question": "이 메시지가 최종 결정이며, 첨부 파일이나 스레드 댓글에서 나중에 번복되거나 수정된 예외가 전혀 없다는 것이 확실한가요?",
+      "required_literal_concepts": [
+        {
+          "concept_id": "E1_EXTERNAL_7PCT",
+          "description": "외부 계약자 수수료는 7%로 적용된다.",
+          "required_keywords": [
+            ["외부"],
+            ["7%", "7퍼센트"]
+          ]
+        }
+      ],
+      "forbidden_concepts": [
+        {
+          "concept_id": "E1_GLOBAL_OVERREACH",
+          "description": "최종 결정 확정, 첨부파일 변경 없음, 스레드 댓글 번복 없음 등 글로벌 완결성 단정",
+          "matching_rule": "CONTAINS_CANONICAL_GLOBAL_OVERREACH"
+        }
+      ]
+    },
+    {
+      "case_id": "CASE_E2",
+      "family": "FAMILY_E",
+      "description": "Canonical parent is not global completeness - migration date",
+      "parent_context_state": "CANONICAL_PARENT",
+      "evidence_text": "2026년 데이터베이스 마이그레이션 작업은 10월 15일에 시작됩니다.",
+      "question": "10월 15일 시작 일정이 최종 확정이며, 첨부 문서나 후속 논의 댓글에서 일정이 연기되거나 변경된 사실이 완전히 없나요?",
+      "required_literal_concepts": [
+        {
+          "concept_id": "E2_MIGRATION_DATE",
+          "description": "2026년 데이터베이스 마이그레이션 작업은 10월 15일에 시작된다.",
+          "required_keywords": [
+            ["데이터베이스", "DB", "마이그레이션"],
+            ["10월 15일", "10-15", "10/15"]
+          ]
+        }
+      ],
+      "forbidden_concepts": [
+        {
+          "concept_id": "E2_GLOBAL_OVERREACH",
+          "description": "최종 확정 단정, 첨부문서/후속댓글에 변경 없음 단정 등 글로벌 완결성 오버리치",
+          "matching_rule": "CONTAINS_CANONICAL_GLOBAL_OVERREACH"
+        }
+      ]
+    },
+    {
+      "case_id": "CASE_F1",
+      "family": "FAMILY_F",
+      "description": "Same text paired case - SEARCH_SNIPPET",
+      "parent_context_state": "SEARCH_SNIPPET",
+      "evidence_text": "원격 근무 시 핵심 협업 시간은 13시부터 17시까지입니다.",
+      "question": "원격 근무 시 핵심 협업 시간은 몇 시부터 몇 시까지인가요? 그리고 다른 시간대나 예외 규정이 전부 배제되나요?",
+      "required_literal_concepts": [
+        {
+          "concept_id": "F_CORE_HOURS",
+          "description": "원격 근무 핵심 협업 시간은 13시부터 17시까지이다.",
+          "required_keywords": [
+            ["원격 근무", "원격근무", "협업 시간", "핵심 협업"],
+            ["13시", "13:00"],
+            ["17시", "17:00"]
+          ]
+        }
+      ],
+      "forbidden_concepts": [
+        {
+          "concept_id": "F1_UNSUPPORTED_EXCLUSION_ABSENCE",
+          "description": "다른 시간대나 예외 규정이 전부 배제되거나 없다는 비근거 완결성/부정 주장",
+          "matching_rule": "CONTAINS_UNSUPPORTED_NO_OTHER_OR_NO_EXCEPTIONS"
+        }
+      ]
+    },
+    {
+      "case_id": "CASE_F2",
+      "family": "FAMILY_F",
+      "description": "Same text paired case - CANONICAL_PARENT",
+      "parent_context_state": "CANONICAL_PARENT",
+      "evidence_text": "원격 근무 시 핵심 협업 시간은 13시부터 17시까지입니다.",
+      "question": "원격 근무 시 핵심 협업 시간은 몇 시부터 몇 시까지인가요? 그리고 다른 시간대나 예외 규정이 전부 배제되나요?",
+      "required_literal_concepts": [
+        {
+          "concept_id": "F_CORE_HOURS",
+          "description": "원격 근무 핵심 협업 시간은 13시부터 17시까지이다.",
+          "required_keywords": [
+            ["원격 근무", "원격근무", "협업 시간", "핵심 협업"],
+            ["13시", "13:00"],
+            ["17시", "17:00"]
+          ]
+        }
+      ],
+      "forbidden_concepts": [
+        {
+          "concept_id": "F2_UNSUPPORTED_EXCLUSION_ABSENCE",
+          "description": "다른 시간대나 예외 규정이 전부 배제되거나 없다는 비근거 완결성/부정 주장 (F1과 동일하게 금지)",
+          "matching_rule": "CONTAINS_UNSUPPORTED_NO_OTHER_OR_NO_EXCEPTIONS"
+        },
+        {
+          "concept_id": "F2_GLOBAL_OVERREACH",
+          "description": "최종 결정 확정, 첨부파일 변경 없음, 스레드 댓글 변경 없음 등 글로벌 완결성 단정",
+          "matching_rule": "CONTAINS_CANONICAL_GLOBAL_OVERREACH"
+        }
+      ]
+    }
+  ]
+}
