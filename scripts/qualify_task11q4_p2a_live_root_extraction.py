@@ -474,27 +474,27 @@ def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> di
         },
         "live_action_inventory": {
             "search_activation_dispatches": 0,
-            "search_modal_observed": False,
-            "search_input_ready": False,
+            "search_modal_observed": "NOT_RUN",
+            "search_input_ready": "NOT_RUN",
             "search_submissions": 0,
             "reply_bar_clicks": 0,
             "pure_read_dom_extractions": 0,
             "new_ui_actions_added": 0,
             "new_click_targets_added": 0,
-            "search_modal_open_calls": 0,
+            "search_modal_open_calls": "NOT_RUN",
         },
         "search_telemetry": {
             "search_activation_dispatches": 0,
-            "modal_ever_observed": False,
-            "final_modal_count": 0,
-            "input_ready": False,
+            "modal_ever_observed": "NOT_RUN",
+            "final_modal_count": "NOT_RUN",
+            "input_ready": "NOT_RUN",
             "activation_to_first_modal_ms": None,
-            "readiness_poll_count": 0,
+            "readiness_poll_count": "NOT_RUN",
             "last_confirmed_stage": "NOT_RUN",
-            "failure_case_classification": "NONE",
-            "document_visibility_state": "unknown",
-            "document_hidden": False,
-            "document_has_focus": False,
+            "failure_case_classification": "NOT_RUN",
+            "document_visibility_state": "NOT_RUN",
+            "document_hidden": "NOT_RUN",
+            "document_has_focus": "NOT_RUN",
             "elapsed_ms": 0,
             "timeout_ms": 5000,
         },
@@ -582,14 +582,28 @@ def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> di
 
         # In dry-run, actual live action counters remain strictly 0
         report["live_action_inventory"]["search_activation_dispatches"] = 0
-        report["live_action_inventory"]["search_modal_observed"] = False
-        report["live_action_inventory"]["search_input_ready"] = False
         report["live_action_inventory"]["search_submissions"] = 0
         report["live_action_inventory"]["reply_bar_clicks"] = 0
         report["live_action_inventory"]["pure_read_dom_extractions"] = 0
-        report["live_action_inventory"]["search_modal_open_calls"] = 0
+        report["live_action_inventory"]["new_ui_actions_added"] = 0
+        report["live_action_inventory"]["new_click_targets_added"] = 0
 
-        report["search_telemetry"]["last_confirmed_stage"] = "DRY_RUN"
+        # Dry-run observation telemetry: state was never observed -> NOT_RUN
+        report["live_action_inventory"]["search_modal_observed"] = "NOT_RUN"
+        report["live_action_inventory"]["search_input_ready"] = "NOT_RUN"
+        report["live_action_inventory"]["search_modal_open_calls"] = "NOT_RUN"
+
+        report["search_telemetry"]["search_activation_dispatches"] = 0
+        report["search_telemetry"]["modal_ever_observed"] = "NOT_RUN"
+        report["search_telemetry"]["final_modal_count"] = "NOT_RUN"
+        report["search_telemetry"]["input_ready"] = "NOT_RUN"
+        report["search_telemetry"]["activation_to_first_modal_ms"] = None
+        report["search_telemetry"]["readiness_poll_count"] = "NOT_RUN"
+        report["search_telemetry"]["last_confirmed_stage"] = "NOT_RUN"
+        report["search_telemetry"]["failure_case_classification"] = "NOT_RUN"
+        report["search_telemetry"]["document_visibility_state"] = "NOT_RUN"
+        report["search_telemetry"]["document_hidden"] = "NOT_RUN"
+        report["search_telemetry"]["document_has_focus"] = "NOT_RUN"
 
         # Simulated expected inventory for user visibility only
         report["simulated_expected_action_inventory"] = {

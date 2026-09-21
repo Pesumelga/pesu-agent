@@ -266,25 +266,71 @@ def test_regression_5_attempt1_symptom_results_in_fail_closed():
 
 
 def test_regression_6_dry_run_actual_ui_actions_zero_and_never_declares_live_pass():
-    """Regression 6: Dry-run still keeps all actual UI action counters at 0 and cannot declare live validation PASS."""
+    """Regression 6: Dry-run keeps all actual UI action counters at 0, observation telemetry at NOT_RUN, and cannot declare live validation PASS."""
     result = run_p2a_l1_qualification(dry_run=True)
 
     assert result["verdict"] == "DRY_RUN_PASS"
     assert result["P2A_L1"] == "NOT_EXECUTED"
     assert result["thread_root_data_extraction_live_validated"] is False
 
+    # Actual action counters must remain strictly 0
     actions = result["live_action_inventory"]
     assert actions["search_activation_dispatches"] == 0
-    assert actions["search_modal_observed"] is False
-    assert actions["search_input_ready"] is False
     assert actions["search_submissions"] == 0
     assert actions["reply_bar_clicks"] == 0
     assert actions["pure_read_dom_extractions"] == 0
-    assert actions["search_modal_open_calls"] == 0
     assert actions["new_ui_actions_added"] == 0
     assert actions["new_click_targets_added"] == 0
 
+    # Observation telemetry in dry-run must be NOT_RUN (never observed)
+    assert actions["search_modal_observed"] == "NOT_RUN"
+    assert actions["search_input_ready"] == "NOT_RUN"
+    assert actions["search_modal_open_calls"] == "NOT_RUN"
+
+    st = result["search_telemetry"]
+    assert st["search_activation_dispatches"] == 0
+    assert st["modal_ever_observed"] == "NOT_RUN"
+    assert st["final_modal_count"] == "NOT_RUN"
+    assert st["input_ready"] == "NOT_RUN"
+    assert st["activation_to_first_modal_ms"] is None
+    assert st["readiness_poll_count"] == "NOT_RUN"
+    assert st["last_confirmed_stage"] == "NOT_RUN"
+    assert st["failure_case_classification"] == "NOT_RUN"
+
     assert evaluate_live_gate(result) is False
+
+
+def test_regression_10_distinct_semantics_not_run_unknown_false():
+    """Regression 10: Prove that NOT_RUN, UNKNOWN, and False are distinct and distinguishable in artifacts."""
+    # 1. NOT_RUN from dry-run
+    dry_run_result = run_p2a_l1_qualification(dry_run=True)
+    modal_dry_run = dry_run_result["live_action_inventory"]["search_modal_observed"]
+    assert modal_dry_run == "NOT_RUN"
+
+    # 2. UNKNOWN from live missing telemetry
+    backend_missing = MagicMock()
+    backend_missing.last_search_telemetry = {"activation_dispatch_count": 1}
+    report_missing = {"live_action_inventory": {}, "search_telemetry": {}, "safety_telemetry": {}, "checks": {}}
+    harvest_search_telemetry(backend_missing, None, report_missing)
+    modal_missing = report_missing["live_action_inventory"]["search_modal_observed"]
+    assert modal_missing == "UNKNOWN"
+
+    # 3. Explicitly observed False
+    backend_observed_false = MagicMock()
+    backend_observed_false.last_search_telemetry = {
+        "activation_dispatch_count": 1,
+        "modal_ever_observed": False,
+    }
+    report_observed_false = {"live_action_inventory": {}, "search_telemetry": {}, "safety_telemetry": {}, "checks": {}}
+    harvest_search_telemetry(backend_observed_false, None, report_observed_false)
+    modal_false = report_observed_false["live_action_inventory"]["search_modal_observed"]
+    assert modal_false is False
+
+    # 4. Strict distinctness proof
+    assert modal_dry_run != modal_missing
+    assert modal_missing != modal_false
+    assert modal_dry_run != modal_false
+    assert {modal_dry_run, modal_missing, modal_false} == {"NOT_RUN", "UNKNOWN", False}
 
 
 def test_regression_7_production_search_timeout_and_selectors_unchanged():
