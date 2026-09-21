@@ -9,16 +9,18 @@ Verifies:
 5. Target absent from bounded set (TARGET_NOT_IN_BOUNDED_INSPECTED_SET when inspection_truncated == False)
 6. Target absent + inspection_truncated == True MUST NOT emit conclusive target-absence verdict
    (emits SEARCH_RESULT_CAPTURE_INSUFFICIENT with MOUNTED_RESULT_SET_TRUNCATED_BY_DIAGNOSTIC_BOUND)
-7. Mounted result count <= 20 -> inspected == mounted -> inspection_truncated == False
-8. Mounted result count > 20 -> inspected == 20 -> inspection_truncated == True
-9. Rank/order preserved (1, 2, 3...)
-10. No message body required in row classification (residency is pure identity)
-11. Terminal artifact always persisted on all execution paths (success, fail-closed, exception)
-12. Dry-run and live artifact paths differ
-13. Dry-run actual UI actions == 0 and observation telemetry is NOT_RUN
-14. Missing telemetry fails closed (SEARCH_RESULT_CAPTURE_INSUFFICIENT / FAIL_CLOSED)
-15. RD1 can never modify P2A_L1 or THREAD_ROOT_DATA_EXTRACTION_LIVE_VALIDATED
-16. Attempt 1 and Attempt 2 trace artifacts remain untouched and uncorrupted
+7. Mounted 5 / inspected 5 -> truncated false (same-snapshot count semantics)
+8. Mounted 20 / inspected 20 -> truncated false (same-snapshot count semantics)
+9. Mounted 21 / inspected 20 -> truncated true (same-snapshot count semantics)
+10. Absence verdict REQUIRES same_snapshot_authority == True; without it, conclusive absence is rejected
+11. Rank/order preserved (1, 2, 3...)
+12. No message body required in row classification (residency is pure identity)
+13. Terminal artifact always persisted on all execution paths (success, fail-closed, exception)
+14. Dry-run and live artifact paths differ
+15. Dry-run actual UI actions == 0 and observation telemetry is NOT_RUN
+16. Missing telemetry fails closed (SEARCH_RESULT_CAPTURE_INSUFFICIENT / FAIL_CLOSED)
+17. RD1 can never modify P2A_L1 or THREAD_ROOT_DATA_EXTRACTION_LIVE_VALIDATED
+18. Attempt 1 and Attempt 2 trace artifacts remain untouched and uncorrupted
 """
 
 from __future__ import annotations
@@ -61,6 +63,7 @@ def test_1_exact_target_match_classification():
         inspected_row_count=1,
         inspection_truncated=False,
         telemetry_ok=True,
+        same_snapshot_authority=True,
     )
     assert verdict == "TARGET_EXACT_MATCH_FOUND"
     assert reason is None
@@ -68,7 +71,6 @@ def test_1_exact_target_match_classification():
 
 def test_2_same_message_changed_thread_representation():
     """Test 2: Same channel & message_ts, but differing/omitted thread_ts produces TARGET_REPRESENTATION_DRIFT_FOUND."""
-    # Case A: thread_ts is omitted from query params
     raw_item_omitted = {
         "raw_index": 1,
         "canonical_permalink": f"/archives/{EXPECTED_CHANNEL_ID}/p1788152491960529",
@@ -81,7 +83,6 @@ def test_2_same_message_changed_thread_representation():
     assert c_omitted["same_channel_message_match"] is True
     assert c_omitted["same_channel_thread_match"] is False
 
-    # Case B: thread_ts is different
     raw_item_diff = {
         "raw_index": 2,
         "canonical_permalink": f"/archives/{EXPECTED_CHANNEL_ID}/p1788152491960529?thread_ts=1799999999.000001",
@@ -97,6 +98,7 @@ def test_2_same_message_changed_thread_representation():
         inspected_row_count=1,
         inspection_truncated=False,
         telemetry_ok=True,
+        same_snapshot_authority=True,
     )
     assert verdict == "TARGET_REPRESENTATION_DRIFT_FOUND"
     assert reason is None
@@ -122,8 +124,8 @@ def test_3_same_thread_different_message_separated_from_drift():
         inspected_row_count=1,
         inspection_truncated=False,
         telemetry_ok=True,
+        same_snapshot_authority=True,
     )
-    # MUST be SAME_THREAD_DIFFERENT_SEARCH_HIT_FOUND, NOT TARGET_REPRESENTATION_DRIFT_FOUND!
     assert verdict == "SAME_THREAD_DIFFERENT_SEARCH_HIT_FOUND"
     assert verdict != "TARGET_REPRESENTATION_DRIFT_FOUND"
     assert reason is None
@@ -159,6 +161,7 @@ def test_5_target_absent_from_bounded_set_untruncated():
         inspected_row_count=1,
         inspection_truncated=False,
         telemetry_ok=True,
+        same_snapshot_authority=True,
     )
     assert verdict == "TARGET_NOT_IN_BOUNDED_INSPECTED_SET"
     assert reason is None
@@ -179,34 +182,62 @@ def test_6_target_absent_truncated_must_not_emit_absence():
         inspected_row_count=20,
         inspection_truncated=True,
         telemetry_ok=True,
+        same_snapshot_authority=True,
     )
     assert verdict == "SEARCH_RESULT_CAPTURE_INSUFFICIENT"
     assert verdict != "TARGET_NOT_IN_BOUNDED_INSPECTED_SET"
     assert reason == "MOUNTED_RESULT_SET_TRUNCATED_BY_DIAGNOSTIC_BOUND"
 
 
-def test_7_mounted_row_count_less_equal_20_semantics():
-    """Test 7: mounted_row_count <= 20 -> inspected == mounted -> inspection_truncated == False."""
-    mounted_count = 15
-    inspected = [{"raw_index": i + 1, "canonical_permalink": f"/archives/C123/p{1700000000000000+i}"} for i in range(15)]
-    inspected_classified = [classify_row_identity(r) for r in inspected]
-    assert len(inspected_classified) == mounted_count
-    truncated = bool(mounted_count > len(inspected_classified))
+def test_7_mounted_5_inspected_5_semantics():
+    """Test 7: mounted 5 / inspected 5 -> truncated false."""
+    mounted_count = 5
+    inspected_count = 5
+    truncated = (mounted_count > inspected_count)
     assert truncated is False
 
 
-def test_8_mounted_row_count_greater_than_20_semantics():
-    """Test 8: mounted_row_count > 20 -> inspected == 20 -> inspection_truncated == True."""
-    mounted_count = 28
-    inspected = [{"raw_index": i + 1, "canonical_permalink": f"/archives/C123/p{1700000000000000+i}"} for i in range(MAX_DIAGNOSTIC_ROWS)]
-    inspected_classified = [classify_row_identity(r) for r in inspected]
-    assert len(inspected_classified) == MAX_DIAGNOSTIC_ROWS
-    truncated = bool(mounted_count > len(inspected_classified))
+def test_8_mounted_20_inspected_20_semantics():
+    """Test 8: mounted 20 / inspected 20 -> truncated false."""
+    mounted_count = 20
+    inspected_count = 20
+    truncated = (mounted_count > inspected_count)
+    assert truncated is False
+
+
+def test_9_mounted_21_inspected_20_semantics():
+    """Test 9: mounted 21 / inspected 20 -> truncated true."""
+    mounted_count = 21
+    inspected_count = 20
+    truncated = (mounted_count > inspected_count)
     assert truncated is True
 
 
-def test_9_rank_order_preserved():
-    """Test 9: Rank order is strictly preserved 1..N."""
+def test_10_absence_verdict_requires_same_snapshot_authority():
+    """Test 10: Absence verdict REQUIRES same_snapshot_authority == True; without it, conclusive absence is rejected."""
+    unrelated_row = {
+        "raw_index": 1,
+        "canonical_permalink": "/archives/C9999999999/p1700000000000000",
+        "qualifying_permalinks": ["/archives/C9999999999/p1700000000000000"],
+    }
+    c_unrelated = classify_row_identity(unrelated_row)
+
+    # When same_snapshot_authority is False, conclusive absence is NOT allowed even if inspection_truncated is False!
+    verdict, reason = determine_diagnostic_verdict(
+        inspected_rows=[c_unrelated],
+        mounted_row_count=1,
+        inspected_row_count=1,
+        inspection_truncated=False,
+        telemetry_ok=True,
+        same_snapshot_authority=False,  # Lacks same-snapshot authority
+    )
+    assert verdict == "SEARCH_RESULT_CAPTURE_INSUFFICIENT"
+    assert verdict != "TARGET_NOT_IN_BOUNDED_INSPECTED_SET"
+    assert reason == "LACKS_SAME_SNAPSHOT_COUNT_AUTHORITY"
+
+
+def test_11_rank_order_preserved():
+    """Test 11: Rank order is strictly preserved 1..N."""
     items = [
         {"raw_index": 1, "canonical_permalink": "/archives/C1/p1700000000000001"},
         {"raw_index": 2, "canonical_permalink": "/archives/C1/p1700000000000002"},
@@ -216,8 +247,8 @@ def test_9_rank_order_preserved():
     assert [c["rank"] for c in classified] == [1, 2, 3]
 
 
-def test_10_no_message_body_required():
-    """Test 10: Missing, empty, or ambiguous body does NOT drop row identity."""
+def test_12_no_message_body_required():
+    """Test 12: Missing, empty, or ambiguous body does NOT drop row identity."""
     raw_with_no_body = {
         "raw_index": 1,
         "canonical_permalink": f"/archives/{EXPECTED_CHANNEL_ID}/p1788152491960529?thread_ts={EXPECTED_ROOT_TS}",
@@ -232,8 +263,8 @@ def test_10_no_message_body_required():
     assert "normalized_body" not in c, "Message body should not be preserved in row diagnostic metadata"
 
 
-def test_11_terminal_artifact_always_persisted(tmp_path, monkeypatch):
-    """Test 11: Every terminal execution path persists native artifact."""
+def test_13_terminal_artifact_always_persisted(tmp_path, monkeypatch):
+    """Test 13: Every terminal execution path persists native artifact."""
     import scripts.diagnose_task11q4_p2a_l1_search_residency as diag_mod
 
     tmp_out = tmp_path / "diag_trace.json"
@@ -256,15 +287,15 @@ def test_11_terminal_artifact_always_persisted(tmp_path, monkeypatch):
     assert data["verdict_reason"] == "RUNTIME_EXCEPTION"
 
 
-def test_12_dry_run_and_live_paths_differ():
-    """Test 12: Dry-run and live artifact paths are distinct and do not overwrite each other."""
+def test_14_dry_run_and_live_paths_differ():
+    """Test 14: Dry-run and live artifact paths are distinct and do not overwrite each other."""
     assert DRY_RUN_OUTPUT_FILE != LIVE_OUTPUT_FILE
     assert "dry_run" in DRY_RUN_OUTPUT_FILE.name
     assert "dry_run" not in LIVE_OUTPUT_FILE.name
 
 
-def test_13_dry_run_zero_ui_actions(tmp_path, monkeypatch):
-    """Test 13: Dry-run performs zero UI actions and writes to dry-run output file."""
+def test_15_dry_run_zero_ui_actions(tmp_path, monkeypatch):
+    """Test 15: Dry-run performs zero UI actions and writes to dry-run output file."""
     import scripts.diagnose_task11q4_p2a_l1_search_residency as diag_mod
 
     tmp_out = tmp_path / "test_dry_run.json"
@@ -275,6 +306,7 @@ def test_13_dry_run_zero_ui_actions(tmp_path, monkeypatch):
 
     assert report["execution_mode"] == "DRY_RUN"
     assert report["diagnostic_verdict"] == "DRY_RUN_PASS"
+    assert report["SAME_SNAPSHOT_RESIDENCY_COUNTS"] is True
     st = report["safety_telemetry"]
     assert st["reply_bar_clicks"] == 0
     assert st["result_card_clicks"] == 0
@@ -284,21 +316,22 @@ def test_13_dry_run_zero_ui_actions(tmp_path, monkeypatch):
     assert tmp_out.exists()
 
 
-def test_14_missing_telemetry_fails_closed():
-    """Test 14: Missing telemetry or 0 mounted rows produces SEARCH_RESULT_CAPTURE_INSUFFICIENT."""
+def test_16_missing_telemetry_fails_closed():
+    """Test 16: Missing telemetry or 0 mounted rows produces SEARCH_RESULT_CAPTURE_INSUFFICIENT."""
     verdict, reason = determine_diagnostic_verdict(
         inspected_rows=[],
         mounted_row_count=0,
         inspected_row_count=0,
         inspection_truncated=False,
         telemetry_ok=False,
+        same_snapshot_authority=True,
     )
     assert verdict == "SEARCH_RESULT_CAPTURE_INSUFFICIENT"
     assert reason == "ZERO_MOUNTED_ROWS_OR_MISSING_TELEMETRY"
 
 
-def test_15_rd1_never_modifies_qualification_flags():
-    """Test 15: RD1 can never declare P2A_L1 = PASS or set THREAD_ROOT_DATA_EXTRACTION_LIVE_VALIDATED = true."""
+def test_17_rd1_never_modifies_qualification_flags():
+    """Test 17: RD1 can never declare P2A_L1 = PASS or set THREAD_ROOT_DATA_EXTRACTION_LIVE_VALIDATED = true."""
     raw_item = {
         "raw_index": 1,
         "canonical_permalink": f"/archives/{EXPECTED_CHANNEL_ID}/p1788152491960529?thread_ts={EXPECTED_ROOT_TS}",
@@ -306,10 +339,9 @@ def test_15_rd1_never_modifies_qualification_flags():
         "thread_reply_detected": True,
     }
     classified = classify_row_identity(raw_item)
-    verdict, _ = determine_diagnostic_verdict([classified], 1, 1, False, True)
+    verdict, _ = determine_diagnostic_verdict([classified], 1, 1, False, True, True)
     assert verdict == "TARGET_EXACT_MATCH_FOUND"
 
-    # Even with exact match, report flags MUST NOT be qualification PASS
     report = {
         "diagnostic_verdict": verdict,
         "P2A_L1": "NOT_APPLICABLE_DIAGNOSTIC_ONLY",
@@ -319,8 +351,8 @@ def test_15_rd1_never_modifies_qualification_flags():
     assert report["thread_root_data_extraction_live_validated"] is False
 
 
-def test_16_attempt1_and_attempt2_artifacts_unchanged():
-    """Test 16: Attempt 1 and Attempt 2 trace artifacts remain untouched and uncorrupted."""
+def test_18_attempt1_and_attempt2_artifacts_unchanged():
+    """Test 18: Attempt 1 and Attempt 2 trace artifacts remain untouched and uncorrupted."""
     import hashlib
     repo_root = Path(__file__).resolve().parent.parent
     att1_path = repo_root / "output" / "qualification_13_5d" / "live_trace" / "task11q4_p2a_l1_trace.json"

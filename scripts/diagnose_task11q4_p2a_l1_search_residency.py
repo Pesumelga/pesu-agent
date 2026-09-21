@@ -10,6 +10,9 @@ Pure read-only observer diagnostic to determine search result residency for the 
 Invariants:
 - MAX_DIAGNOSTIC_ROWS = 20: RD1 inspects at most 20 currently mounted visible result rows
   and records whether the mounted set was truncated by that bound.
+- SAME_SNAPSHOT_RESIDENCY_COUNTS = true: mounted_row_count, inspected_row_count,
+  inspection_truncated, and inspected row identity metadata are extracted from the
+  EXACT SAME evaluate_js invocation on the same resultRoots DOM snapshot.
 - Pure read-only inspection of mounted DOM.
 - reply_bar_clicks = 0, result_card_clicks = 0, composer_interaction = 0,
   permalink_navigation = 0, keyboard_shortcuts = 0, CDP = 0, provider_calls = 0,
@@ -78,18 +81,67 @@ OUTPUT_DIR = REPO_ROOT / "output" / "qualification_13_5d" / "live_trace"
 LIVE_OUTPUT_FILE = OUTPUT_DIR / "task11q4_p2a_l1_rd1_search_residency.json"
 DRY_RUN_OUTPUT_FILE = OUTPUT_DIR / "task11q4_p2a_l1_rd1_search_residency_dry_run.json"
 
-JS_COUNT_MOUNTED_RESULT_ROOTS = r"""
-(() => {
+JS_RD1_EXTRACT_AND_COUNT_RESIDENCY = r"""
+((maxSampleCount) => {
     const searchViews = Array.from(document.querySelectorAll('[data-qa="search_view"]')).filter(el => el && el.isConnected);
-    if (searchViews.length !== 1) return 0;
+    if (searchViews.length !== 1) {
+        return {
+            ok: false,
+            error: 'SEARCH_VIEW_NOT_FOUND',
+            search_view_count: searchViews.length,
+            mounted_row_count: 0,
+            inspected_row_count: 0,
+            inspection_truncated: false,
+            items: []
+        };
+    }
     const searchView = searchViews[0];
-    const roots = Array.from(searchView.querySelectorAll('[data-qa="search_result"], [data-qa="search_message_result_item"], .c-search_result')).filter(el => {
+    const resultRoots = Array.from(searchView.querySelectorAll('[data-qa="search_result"], [data-qa="search_message_result_item"], .c-search_result')).filter(el => {
         if (!el || !el.isConnected) return false;
         const r = el.getBoundingClientRect();
         return (r.width > 0 && r.height > 0);
     });
-    return roots.length;
-})()
+
+    const mounted_row_count = resultRoots.length;
+    const inspectedRoots = resultRoots.slice(0, maxSampleCount);
+    const inspected_row_count = inspectedRoots.length;
+    const inspection_truncated = (mounted_row_count > inspected_row_count);
+
+    const items = [];
+    for (let idx = 0; idx < inspectedRoots.length; idx++) {
+        const root = inspectedRoots[idx];
+        const rep = {
+            raw_index: idx + 1,
+            qualifying_permalinks: [],
+            canonical_permalink: null,
+            thread_reply_detected: false,
+        };
+        const anchors = Array.from(root.querySelectorAll('a[href]'));
+        for (const a of anchors) {
+            const h = (a.getAttribute('href') || '').trim();
+            if (/\/archives\/[A-Z0-9]+\/p\d{16}/.test(h)) {
+                rep.qualifying_permalinks.push(h);
+                if (h.includes('thread_ts=')) {
+                    rep.thread_reply_detected = true;
+                }
+            }
+        }
+        if (rep.qualifying_permalinks.length > 0) {
+            rep.canonical_permalink = rep.qualifying_permalinks[0];
+        }
+        items.push(rep);
+    }
+
+    return {
+        ok: true,
+        same_snapshot_authority: true,
+        mounted_row_count: mounted_row_count,
+        inspection_bound: maxSampleCount,
+        inspected_row_count: inspected_row_count,
+        inspection_truncated: inspection_truncated,
+        items: items
+    };
+})
 """
 
 DEPENDENCY_PATHS = {
@@ -217,6 +269,7 @@ def determine_diagnostic_verdict(
     inspected_row_count: int,
     inspection_truncated: bool,
     telemetry_ok: bool,
+    same_snapshot_authority: bool = True,
 ) -> tuple[str, Optional[str]]:
     """Determines the overall diagnostic verdict using strict priority hierarchy."""
     if not telemetry_ok or mounted_row_count == 0:
@@ -233,6 +286,10 @@ def determine_diagnostic_verdict(
     # 3. Same thread, different search hit
     if any(r["target_classification"] == "SAME_CHANNEL_THREAD_DIFFERENT_MESSAGE" for r in inspected_rows):
         return "SAME_THREAD_DIFFERENT_SEARCH_HIT_FOUND", None
+
+    # Conclusive absence REQUIRES same_snapshot_authority == True
+    if not same_snapshot_authority:
+        return "SEARCH_RESULT_CAPTURE_INSUFFICIENT", "LACKS_SAME_SNAPSHOT_COUNT_AUTHORITY"
 
     # 4 & 5. Target absent from inspected rows
     if inspection_truncated:
@@ -251,6 +308,7 @@ def run_rd1_diagnostic(dry_run: bool = False, timeout: float = 30.0) -> dict[str
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "git_commit": get_git_commit(),
         "clean_diff": not check_uncommitted_diff(),
+        "SAME_SNAPSHOT_RESIDENCY_COUNTS": True,
         "inspection_bound": MAX_DIAGNOSTIC_ROWS,
         "bound_definition": "RD1 inspects at most 20 currently mounted visible result rows and records whether the mounted set was truncated by that bound.",
         "mounted_row_count": 0,
@@ -283,6 +341,7 @@ def run_rd1_diagnostic(dry_run: bool = False, timeout: float = 30.0) -> dict[str
             report["mounted_row_count"] = 0
             report["inspected_row_count"] = 0
             report["inspection_truncated"] = False
+            report["SAME_SNAPSHOT_RESIDENCY_COUNTS"] = True
             report["diagnostic_verdict"] = "DRY_RUN_PASS"
             return report
 
@@ -320,20 +379,29 @@ def run_rd1_diagnostic(dry_run: bool = False, timeout: float = 30.0) -> dict[str
             "last_confirmed_stage": telemetry.get("last_confirmed_stage", "UNKNOWN"),
         }
 
-        # Query authoritative mounted count from DOM
-        mounted_count = 0
-        try:
-            res_mounted = backend._window.evaluate_js(JS_COUNT_MOUNTED_RESULT_ROOTS)
-            if isinstance(res_mounted, (int, float)):
-                mounted_count = int(res_mounted)
-        except Exception as e:
-            logger.warning(f"Failed to query mounted count via JS: {e}")
-            mounted_count = int(telemetry.get("raw_items_count", 0))
+        # Single atomic evaluation for authoritative SAME-SNAPSHOT residency extraction
+        logger.info("🔬 [RD1_SAME_SNAPSHOT] Evaluating atomic same-snapshot residency JS...")
+        js_rd1 = f"({JS_RD1_EXTRACT_AND_COUNT_RESIDENCY})({MAX_DIAGNOSTIC_ROWS})"
+        res_rd1 = backend._window.evaluate_js(js_rd1)
 
+        same_snapshot_ok = False
+        mounted_count = 0
+        inspected_count = 0
+        truncated = False
+        raw_items = []
+
+        if isinstance(res_rd1, dict) and res_rd1.get("ok"):
+            same_snapshot_ok = bool(res_rd1.get("same_snapshot_authority", False))
+            mounted_count = int(res_rd1.get("mounted_row_count", 0))
+            inspected_count = int(res_rd1.get("inspected_row_count", 0))
+            truncated = bool(res_rd1.get("inspection_truncated", False))
+            raw_items = res_rd1.get("items", [])
+        else:
+            logger.error(f"Atomic same-snapshot JS extraction failed: {res_rd1}")
+
+        report["SAME_SNAPSHOT_RESIDENCY_COUNTS"] = same_snapshot_ok
         report["mounted_row_count"] = mounted_count
 
-        # Extract evaluated raw items
-        raw_items = telemetry.get("raw_items_evaluated", [])
         inspected_rows = []
         for itm in raw_items[:MAX_DIAGNOSTIC_ROWS]:
             classified = classify_row_identity(itm)
@@ -341,21 +409,23 @@ def run_rd1_diagnostic(dry_run: bool = False, timeout: float = 30.0) -> dict[str
 
         report["inspected_rows"] = inspected_rows
         report["inspected_row_count"] = len(inspected_rows)
-        report["inspection_truncated"] = bool(mounted_count > len(inspected_rows))
+        report["inspection_truncated"] = truncated
 
         telemetry_ok = bool(
             telemetry.get("modal_ever_observed")
             and telemetry.get("safe_search_action_explicitly_selected")
             and telemetry.get("query_state_verified_before_submit")
             and search_exception is None
+            and same_snapshot_ok
         )
 
         verdict, reason = determine_diagnostic_verdict(
             inspected_rows=inspected_rows,
             mounted_row_count=mounted_count,
             inspected_row_count=len(inspected_rows),
-            inspection_truncated=report["inspection_truncated"],
+            inspection_truncated=truncated,
             telemetry_ok=telemetry_ok,
+            same_snapshot_authority=same_snapshot_ok,
         )
         report["diagnostic_verdict"] = verdict
         report["verdict_reason"] = reason
