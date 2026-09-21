@@ -1,0 +1,146 @@
+{
+  "protocol_version": "P2A-L1-v2.0-Attempt2",
+  "task_id": "Phase 13.5D / Task 11 / P2A-L1 / Attempt 2",
+  "created_at_utc": "2026-09-21T05:11:00Z",
+  "git_commit_base": "b02d3f75c30f26dfb34de0208a9d0ba8fdd56019",
+  "objective": "Bounded live read-only validation of canonical thread root extraction from real Slack DOM (Attempt 2 with authoritative failure/success telemetry)",
+  "attempt_1_reference": {
+    "frozen_head": "b02d3f75c30f26dfb34de0208a9d0ba8fdd56019",
+    "trace_file": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_trace.json",
+    "trace_sha256": "F6F17E06F94808BAC15DEA32748526A1D146DAC69EF0A75CC8A4467C5C8FD28E",
+    "verdict": "FAIL_CLOSED",
+    "proven_failure_symptom": "SEARCH_MODAL_NOT_OBSERVED_AFTER_ACTIVATION_DISPATCH_WITHIN_5S",
+    "proven_harness_defect": "FAILURE_PATH_ACTION_TELEMETRY_INCOMPLETE",
+    "root_cause": "INCONCLUSIVE"
+  },
+  "production_parity_invariants": {
+    "PRODUCTION_SEARCH_CODE_CHANGED": false,
+    "PRODUCTION_SEARCH_TIMEOUT_CHANGED": false,
+    "PRODUCTION_SEARCH_SELECTORS_CHANGED": false,
+    "SEARCH_ACTIVATION_BEHAVIOR_CHANGED": false,
+    "PRE_SEARCH_SETTLE_DELAY_ADDED": false,
+    "RETRY_BEHAVIOR_CHANGED": false,
+    "SEARCH_INPUT_READINESS_TIMEOUT_SECONDS": 5.0
+  },
+  "strict_invariants": {
+    "TASK_11_COMPLETE": false,
+    "TASK_11_QUALIFICATION_PASS": false,
+    "TASK_12_STARTED": false,
+    "PRODUCTION_CUTOVER": false,
+    "MAX_LIVE_EXECUTIONS": 1,
+    "MAX_SLACK_SEARCH_OPERATIONS": 1,
+    "MAX_REPLY_BAR_CLICKS": 1,
+    "NEW_UI_ACTIONS_ALLOWED": 0,
+    "NEW_CLICK_TARGETS_ALLOWED": 0,
+    "PROVIDER_CALLS_ALLOWED": 0,
+    "COMPOSER_INTERACTIONS_ALLOWED": 0,
+    "KEYBOARD_EVENTS_ALLOWED": 0,
+    "CDP_CONNECTION_ALLOWED": false,
+    "WRITE_ACTIONS_ALLOWED": false,
+    "CASUAL_RETRY_ALLOWED": false
+  },
+  "prohibited_cases": [
+    "CASE_A",
+    "CASE_B",
+    "CASE_C",
+    "Q2-01",
+    "Q2-02",
+    "Q2-03",
+    "Q2-04"
+  ],
+  "q2_04_status": {
+    "Q2_04_PARENT_BODY_LOCATION": "UNKNOWN",
+    "Q2_04_RATE_LOCATION": "UNKNOWN",
+    "Q2_04_RESOLVED_BY_P2A": "NOT_PROVEN"
+  },
+  "dependency_hashes": {
+    "runner": "c35367181912bef83754af1d21a4e63fba2eba8b155cec1e3b8ea5a9a1a243bb",
+    "webview_thread_reader": "01fecd9934227742329af0de782f0170c3cce2527f66d32f98f075bf268f0d87",
+    "webview_slack_search": "0f23a7430fd77659e5e3559c9105f9ce5acddb2ef2a0260feabd66cb10b72c21",
+    "retrieval_coordinator": "cda149c2ae0d2c1e9759aaf5df0a3577d561f719ee0224b62dcb6581f0228ef5",
+    "selector": "a439d7cbf09c9cfcc79187b25e3ae351af5858c468f19b8ab1d7974e43b02f0a",
+    "pesu_webview_host": "831cebf43320fe7ff4fcca84a439e0daa30e18b3d74519970d5d529389691ea0",
+    "slack_permalink_parser": "f46137cd074e6f9f98e3831e87a2504d056c93596bde8ef564fb87cf3738c5ab",
+    "write_audit": "5560ec12f85886b49c2bd40c3faa2b9271680e1a04abdd97e37e324d1fc6f09e",
+    "read_only_barrier": "c42afe7ea78ff9b1e2e9fd922d0249508ea4b15ce280e3529665acc95c72646c",
+    "slack_agent_window": "a82c01578068c85e4c2bf12070171c0ae67556bc334b99c845bb9519d3c6180f"
+  },
+  "target_identity": {
+    "query": "26년 하반기 간담회",
+    "channel_id": "C09HL5XCTNJ",
+    "message_ts": "1788152491.960529",
+    "expected_root_ts": "1787709893.004509",
+    "thread_bearing_evidence": "resident row in data-qa=\"search_view\" containing div[data-qa=\"reply_bar\"] with count >= 1 and reply_bar_view_thread present",
+    "expected_canonical_key": "https://app.slack.com/archives/C09HL5XCTNJ/p1788152491960529?thread_ts=1787709893.004509",
+    "expected_query_provenance": "query_index: 0"
+  },
+  "ui_action_inventory": [
+    {
+      "step": 1,
+      "action": "Search activation dispatch",
+      "method": "JS_ACTIVATE_SEARCH",
+      "target": "Top navigation search button",
+      "type": "Single synthetic mousedown event dispatch"
+    },
+    {
+      "step": 2,
+      "action": "Search submission",
+      "method": "JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER",
+      "target": "Safe keyword search suggestion",
+      "type": "Existing qualified safe suggestion onEnter"
+    },
+    {
+      "step": 3,
+      "action": "Thread flexpane open",
+      "method": "JS_CLICK_RESIDENT_ROW_REPLY_BAR",
+      "target": "Resident row div[data-qa=\"reply_bar\"]",
+      "type": "Existing qualified reply_bar click (bounded to exactly 1)"
+    },
+    {
+      "step": 4,
+      "action": "DOM extraction",
+      "method": "JS_EXTRACT_MOUNTED_THREAD_REPLIES",
+      "target": "clickCorrelatedRoot",
+      "type": "Pure read-only JavaScript evaluation (0 clicks)"
+    }
+  ],
+  "pass_criteria": {
+    "frozen_protocol_respected": true,
+    "frozen_hashes_matched": true,
+    "target_identity_exact_match": true,
+    "pre_action_identity_check": "PASS",
+    "immediate_pre_activation_recheck": "PASS",
+    "reply_bar_guard_passed": true,
+    "existing_qualified_reply_bar_interaction_only": true,
+    "post_open_root_correlation": "PASS",
+    "canonical_root_captured": true,
+    "root_identity_exact_match": true,
+    "canonical_root_body_extracted": true,
+    "root_and_replies_remain_distinct": true,
+    "canonical_evidence_identity_preserved": true,
+    "duplicate_evidence_count": 0,
+    "query_provenance_preserved": true,
+    "code_or_protocol_mutated_after_first_live": false,
+    "SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED": true,
+    "QUERY_STATE_VERIFIED_BEFORE_SUBMIT": true,
+    "SEARCH_SURFACE_QUERY_MATCHES_REQUESTED": true,
+    "root_extraction_result_source": "LIVE_DOM",
+    "generic_default_onenter_used": false,
+    "composer_focus": 0,
+    "composer_text_input": 0,
+    "composer_send": 0,
+    "slackbot_action_invoked": false,
+    "write_capable_action_invoked": false,
+    "unsafe_non_search_action_invoked": false,
+    "search_activation_dispatches": 1,
+    "search_modal_observed": true,
+    "search_input_ready": true,
+    "search_submissions": 1,
+    "reply_bar_clicks": 1,
+    "pure_read_dom_extractions": 1,
+    "new_ui_actions_added": 0,
+    "new_click_targets_added": 0,
+    "provider_calls": 0,
+    "retry_occurred": false
+  }
+}
