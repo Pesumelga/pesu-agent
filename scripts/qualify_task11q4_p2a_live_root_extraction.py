@@ -816,11 +816,14 @@ def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> di
         except Exception as destroy_err:
             logger.warning(f"Error destroying host: {destroy_err}")
 
-    # Write output trace artifact
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, ensure_ascii=False)
-    logger.info(f"📄 Saved qualification trace to {OUTPUT_FILE}")
+        # Write output trace artifact (guaranteed on all terminal paths: success, FAIL_NOT_RESIDENT, exception)
+        try:
+            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
+            logger.info(f"📄 Saved qualification trace to {OUTPUT_FILE}")
+        except Exception as write_err:
+            logger.error(f"Failed to write qualification trace: {write_err}")
 
     return report
 

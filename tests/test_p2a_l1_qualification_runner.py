@@ -265,8 +265,13 @@ def test_regression_5_attempt1_symptom_results_in_fail_closed():
     assert evaluate_live_gate(report) is False
 
 
-def test_regression_6_dry_run_actual_ui_actions_zero_and_never_declares_live_pass():
+def test_regression_6_dry_run_actual_ui_actions_zero_and_never_declares_live_pass(monkeypatch):
     """Regression 6: Dry-run keeps all actual UI action counters at 0, observation telemetry at NOT_RUN, and cannot declare live validation PASS."""
+    import scripts.qualify_task11q4_p2a_live_root_extraction as runner_mod
+    if runner_mod.PROTOCOL_FREEZE_PATH.exists():
+        freeze_data = json.loads(runner_mod.PROTOCOL_FREEZE_PATH.read_text(encoding="utf-8"))
+        monkeypatch.setattr(runner_mod, "compute_all_dependency_hashes", lambda: freeze_data.get("dependency_hashes", {}))
+        monkeypatch.setattr(runner_mod, "get_git_commit", lambda: freeze_data.get("frozen_commit", "c0cdbec54b44cdc6a1e6467ef52b17d3279e402f"))
     result = run_p2a_l1_qualification(dry_run=True)
 
     assert result["verdict"] == "DRY_RUN_PASS"
@@ -410,3 +415,51 @@ def test_regression_9_reply_bar_failure_telemetry_audit():
     live_report = _get_valid_baseline_live_report()
     live_report["live_action_inventory"]["reply_bar_clicks"] = "UNKNOWN"
     assert evaluate_live_gate(live_report) is False
+
+
+def test_regression_10_fail_not_resident_persists_trace(tmp_path, monkeypatch):
+    """Regression 10: FAIL_NOT_RESIDENT early return MUST persist trace artifact."""
+    import scripts.qualify_task11q4_p2a_live_root_extraction as runner_mod
+
+    tmp_out = tmp_path / "test_trace.json"
+    monkeypatch.setattr(runner_mod, "OUTPUT_FILE", tmp_out)
+    monkeypatch.setattr(runner_mod, "OUTPUT_DIR", tmp_path)
+
+    monkeypatch.setattr(runner_mod, "get_git_commit", lambda: "c0cdbec54b44cdc6a1e6467ef52b17d3279e402f")
+    monkeypatch.setattr(runner_mod, "check_uncommitted_diff", lambda: False)
+
+    mock_host = MagicMock()
+    mock_backend = MagicMock()
+    mock_backend.start_runtime = MagicMock()
+    mock_backend.search_messages = MagicMock(return_value=[])  # Empty -> FAIL_NOT_RESIDENT
+    mock_backend.last_search_telemetry = {
+        "activation_dispatch_count": 1,
+        "modal_ever_observed": True,
+        "input_ever_observed": True,
+        "final_input_count": 1,
+        "last_confirmed_stage": "SUBMIT_EXECUTED",
+        "safe_search_action_explicitly_selected": True,
+        "query_state_verified_before_submit": True,
+        "forensic_transition": {"SEARCH_SURFACE_QUERY_MATCHES_REQUESTED": True},
+    }
+
+    monkeypatch.setattr(runner_mod, "PesuWebViewHost", lambda **kwargs: mock_host)
+    monkeypatch.setattr(runner_mod, "WebViewSlackSearchBackend", lambda **kwargs: mock_backend)
+
+    # Bypass frozen hashes mismatch check for this unit test
+    orig_compute = runner_mod.compute_all_dependency_hashes
+    # We patch compute_all_dependency_hashes to match whatever is in PROTOCOL_FREEZE_PATH
+    if runner_mod.PROTOCOL_FREEZE_PATH.exists():
+        freeze_data = json.loads(runner_mod.PROTOCOL_FREEZE_PATH.read_text(encoding="utf-8"))
+        frozen_hashes = freeze_data.get("dependency_hashes", {})
+        monkeypatch.setattr(runner_mod, "compute_all_dependency_hashes", lambda: frozen_hashes)
+        monkeypatch.setattr(runner_mod, "get_git_commit", lambda: freeze_data.get("frozen_commit", "c0cdbec54b44cdc6a1e6467ef52b17d3279e402f"))
+
+    report = runner_mod.run_p2a_l1_qualification(dry_run=False)
+
+    assert report["checks"]["pre_action_identity_check"] == "FAIL_NOT_RESIDENT"
+    assert report["verdict"] == "FAIL_CLOSED"
+    assert tmp_out.exists(), "Trace file was not persisted on FAIL_NOT_RESIDENT!"
+    data = json.loads(tmp_out.read_text(encoding="utf-8"))
+    assert data["checks"]["pre_action_identity_check"] == "FAIL_NOT_RESIDENT"
+    assert data["verdict"] == "FAIL_CLOSED"
