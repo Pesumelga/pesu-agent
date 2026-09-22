@@ -8,8 +8,8 @@ Invariants verified:
 5. Count 1 + missing children -> fail
 6. Count 1 + invisible -> fail
 7. Count 1 + composer-contained -> fail
-8. Count 1 + hit-test/occlusion fail -> fail
-9. All exact production guards PASS -> affordance PASS
+8. Count 1 + all production guards PASS -> production affordance PASS
+9. Hit-test is supplemental and does not block production affordance
 10. Root row -> target-policy fail
 11. Non-C channel -> target-policy fail
 12. Ambiguous row identity -> row ineligible
@@ -21,7 +21,7 @@ Invariants verified:
 18. Production src diff empty
 19. Provider calls zero
 20. Attempt 4 / RB2 runtime/search parity
-21. Authoritative search telemetry parity
+21. Authoritative search telemetry parity with RB2
 22. Exception ordering (search exception raised before safety gate)
 23. Top-5 bound exact (maxRows = 5)
 24. Single atomic JS snapshot execution
@@ -30,8 +30,16 @@ Invariants verified:
 27. Protocol semantic identity mismatch blocks pre-WebView
 28. Runtime closure audit enforces 0 untracked dependencies
 29. Sensitive content exclusion (no message body, outerHTML, or raw permalinks)
+30. Search telemetry harvester exact parity with RB2
+31. Missing telemetry fails closed as UNKNOWN with TELEMETRY_MISSING
+32. Activation dispatch count mapping
+33. Hidden connected row does not consume top5 rank
+34. Rendered row order is preserved
+35. Top-5 bound applies after rendered row filter
+36. Source-exact contract regression with JS_CLICK_RESIDENT_ROW_REPLY_BAR
 """
 
+import ast
 import copy
 import hashlib
 import json
@@ -52,7 +60,7 @@ from pesu_agent.search.webview_thread_reader import JS_CLICK_RESIDENT_ROW_REPLY_
 
 
 # ---------------------------------------------------------------------------
-# 1. Exact Production Pre-Click Guard Source Audit
+# 1. Exact Production Pre-Click Guard Source Audit & Source-Exact Comparison
 # ---------------------------------------------------------------------------
 
 def test_production_pre_click_guard_literals_audited():
@@ -62,6 +70,14 @@ def test_production_pre_click_guard_literals_audited():
     assert "REPLY_BAR_REQUIRED_CHILDREN_MISSING" in JS_CLICK_RESIDENT_ROW_REPLY_BAR
     assert "REPLY_BAR_NOT_VISIBLE" in JS_CLICK_RESIDENT_ROW_REPLY_BAR
     assert "REPLY_BAR_INSIDE_COMPOSER" in JS_CLICK_RESIDENT_ROW_REPLY_BAR
+
+
+def test_production_source_pre_click_contract_comparison():
+    """Requirement 36: Verify TR1 dynamic pre-click contract verification passes."""
+    assert tr1.verify_production_pre_click_guard_contract() is True
+    # Provenance proof: hit-test is NOT in production source
+    assert "elementFromPoint" not in JS_CLICK_RESIDENT_ROW_REPLY_BAR
+    assert "REPLY_BAR_HIT_TEST_FAILED" not in JS_CLICK_RESIDENT_ROW_REPLY_BAR
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +93,8 @@ def test_production_affordance_and_policy_separation():
         "production_click_affordance": {
             "affordance_passed": False,
             "production_guards_pass": False,
+        },
+        "supplemental_tr1_safety": {
             "hit_test_passed": False,
         },
         "target_qualification_policy": {
@@ -85,6 +103,7 @@ def test_production_affordance_and_policy_separation():
         }
     }
     assert "production_click_affordance" in row
+    assert "supplemental_tr1_safety" in row
     assert "target_qualification_policy" in row
     assert "p2a_live_target_eligible" in row
 
@@ -99,7 +118,7 @@ def _evaluate_mock_dom_row(
     has_view_thread_el: bool,
     is_visible: bool,
     outside_composer: bool,
-    hit_test_passed: bool,
+    hit_test_passed: bool = True,
     channel_id: str = "C042WS25QAX",
     message_ts: str = "1718079276.126469",
     thread_ts: str = "1718058683.912369",
@@ -114,30 +133,29 @@ def _evaluate_mock_dom_row(
     if not reply_bar_count_valid:
         prod_guards_pass = False
         prod_reason = "REPLY_BAR_COUNT_INVALID"
-        hit_pass = False
-        hit_reason = "NOT_EVALUATED_PREVIOUS_GUARD_FAILED"
     elif not required_children:
         prod_guards_pass = False
         prod_reason = "REPLY_BAR_REQUIRED_CHILDREN_MISSING"
-        hit_pass = False
-        hit_reason = "NOT_EVALUATED_PREVIOUS_GUARD_FAILED"
     elif not is_visible:
         prod_guards_pass = False
         prod_reason = "REPLY_BAR_NOT_VISIBLE"
-        hit_pass = False
-        hit_reason = "NOT_EVALUATED_PREVIOUS_GUARD_FAILED"
     elif not outside_composer:
         prod_guards_pass = False
         prod_reason = "REPLY_BAR_INSIDE_COMPOSER"
-        hit_pass = False
-        hit_reason = "NOT_EVALUATED_PREVIOUS_GUARD_FAILED"
     else:
         prod_guards_pass = True
         prod_reason = None
+
+    # Production affordance is strictly based on production source guards
+    affordance_passed = prod_guards_pass
+
+    # Supplemental safety check
+    if prod_guards_pass and reply_bar_count == 1:
         hit_pass = hit_test_passed
         hit_reason = None if hit_test_passed else "REPLY_BAR_HIT_TEST_FAILED"
-
-    affordance_passed = bool(prod_guards_pass and hit_pass)
+    else:
+        hit_pass = False
+        hit_reason = "NOT_EVALUATED_PREVIOUS_GUARD_FAILED"
 
     identity_unambiguous = (unique_identity_count == 1)
     channel_valid = bool(channel_id and channel_id.startswith("C"))
@@ -170,9 +188,11 @@ def _evaluate_mock_dom_row(
             "outside_composer": outside_composer,
             "production_guards_pass": prod_guards_pass,
             "production_failure_reason": prod_reason,
+            "affordance_passed": affordance_passed,
+        },
+        "supplemental_tr1_safety": {
             "hit_test_passed": hit_pass,
             "hit_failure_reason": hit_reason,
-            "affordance_passed": affordance_passed,
         },
         "target_qualification_policy": {
             "rank": rank,
@@ -195,7 +215,6 @@ def test_reply_bar_count_zero_affordance_fails():
         has_view_thread_el=False,
         is_visible=False,
         outside_composer=True,
-        hit_test_passed=False,
     )
     assert res["production_click_affordance"]["affordance_passed"] is False
     assert res["production_click_affordance"]["production_failure_reason"] == "REPLY_BAR_COUNT_INVALID"
@@ -210,7 +229,6 @@ def test_reply_bar_count_multiple_affordance_fails():
         has_view_thread_el=True,
         is_visible=True,
         outside_composer=True,
-        hit_test_passed=True,
     )
     assert res["production_click_affordance"]["affordance_passed"] is False
     assert res["production_click_affordance"]["production_failure_reason"] == "REPLY_BAR_COUNT_INVALID"
@@ -225,7 +243,6 @@ def test_count_one_missing_children_fails():
         has_view_thread_el=True,
         is_visible=True,
         outside_composer=True,
-        hit_test_passed=True,
     )
     assert res["production_click_affordance"]["affordance_passed"] is False
     assert res["production_click_affordance"]["production_failure_reason"] == "REPLY_BAR_REQUIRED_CHILDREN_MISSING"
@@ -240,7 +257,6 @@ def test_count_one_invisible_fails():
         has_view_thread_el=True,
         is_visible=False,
         outside_composer=True,
-        hit_test_passed=True,
     )
     assert res["production_click_affordance"]["affordance_passed"] is False
     assert res["production_click_affordance"]["production_failure_reason"] == "REPLY_BAR_NOT_VISIBLE"
@@ -255,15 +271,29 @@ def test_count_one_composer_contained_fails():
         has_view_thread_el=True,
         is_visible=True,
         outside_composer=False,
-        hit_test_passed=True,
     )
     assert res["production_click_affordance"]["affordance_passed"] is False
     assert res["production_click_affordance"]["production_failure_reason"] == "REPLY_BAR_INSIDE_COMPOSER"
     assert res["p2a_live_target_eligible"] is False
 
 
-def test_count_one_hit_test_occluded_fails():
-    """Requirement 8: Count 1 + hit-test/occlusion fail -> fail."""
+def test_all_exact_production_guards_pass():
+    """Requirement 8: All exact production guards PASS -> affordance PASS."""
+    res = _evaluate_mock_dom_row(
+        reply_bar_count=1,
+        has_count_el=True,
+        has_view_thread_el=True,
+        is_visible=True,
+        outside_composer=True,
+    )
+    assert res["production_click_affordance"]["production_guards_pass"] is True
+    assert res["production_click_affordance"]["affordance_passed"] is True
+    assert res["target_qualification_policy"]["policy_passed"] is True
+    assert res["p2a_live_target_eligible"] is True
+
+
+def test_hit_test_is_supplemental_does_not_fail_production_affordance():
+    """Requirement 9: Hit-test failure does not fail production_click_affordance."""
     res = _evaluate_mock_dom_row(
         reply_bar_count=1,
         has_count_el=True,
@@ -272,28 +302,10 @@ def test_count_one_hit_test_occluded_fails():
         outside_composer=True,
         hit_test_passed=False,
     )
-    assert res["production_click_affordance"]["production_guards_pass"] is True
-    assert res["production_click_affordance"]["hit_test_passed"] is False
-    assert res["production_click_affordance"]["hit_failure_reason"] == "REPLY_BAR_HIT_TEST_FAILED"
-    assert res["production_click_affordance"]["affordance_passed"] is False
-    assert res["p2a_live_target_eligible"] is False
-
-
-def test_all_exact_production_guards_pass():
-    """Requirement 9: All exact production guards PASS -> affordance PASS."""
-    res = _evaluate_mock_dom_row(
-        reply_bar_count=1,
-        has_count_el=True,
-        has_view_thread_el=True,
-        is_visible=True,
-        outside_composer=True,
-        hit_test_passed=True,
-    )
-    assert res["production_click_affordance"]["production_guards_pass"] is True
-    assert res["production_click_affordance"]["hit_test_passed"] is True
+    # Production affordance is based strictly on production guards
     assert res["production_click_affordance"]["affordance_passed"] is True
-    assert res["target_qualification_policy"]["policy_passed"] is True
-    assert res["p2a_live_target_eligible"] is True
+    assert res["supplemental_tr1_safety"]["hit_test_passed"] is False
+    assert res["supplemental_tr1_safety"]["hit_failure_reason"] == "REPLY_BAR_HIT_TEST_FAILED"
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +320,6 @@ def test_root_row_target_policy_fails():
         has_view_thread_el=True,
         is_visible=True,
         outside_composer=True,
-        hit_test_passed=True,
         message_ts="1718058683.912369",
         thread_ts="1718058683.912369",
     )
@@ -326,7 +337,6 @@ def test_non_c_channel_target_policy_fails():
         has_view_thread_el=True,
         is_visible=True,
         outside_composer=True,
-        hit_test_passed=True,
         channel_id="D042WS25QAX",
     )
     assert res["production_click_affordance"]["affordance_passed"] is True
@@ -343,7 +353,6 @@ def test_ambiguous_row_identity_ineligible():
         has_view_thread_el=True,
         is_visible=True,
         outside_composer=True,
-        hit_test_passed=True,
         unique_identity_count=2,
     )
     assert res["target_qualification_policy"]["policy_passed"] is False
@@ -353,9 +362,9 @@ def test_ambiguous_row_identity_ineligible():
 
 def test_multiple_eligible_rows_lowest_rank_selected():
     """Requirement 13: Multiple eligible rows -> lowest rank selected."""
-    row2 = _evaluate_mock_dom_row(1, True, True, True, True, True, rank=2)
-    row4 = _evaluate_mock_dom_row(1, True, True, True, True, True, rank=4)
-    row5 = _evaluate_mock_dom_row(1, True, True, True, True, True, rank=5)
+    row2 = _evaluate_mock_dom_row(1, True, True, True, True, rank=2)
+    row4 = _evaluate_mock_dom_row(1, True, True, True, True, rank=4)
+    row5 = _evaluate_mock_dom_row(1, True, True, True, True, rank=5)
 
     selected, verdict = tr1.select_best_candidate([row4, row2, row5])
     assert verdict == "ELIGIBLE_TARGET_FOUND"
@@ -365,8 +374,8 @@ def test_multiple_eligible_rows_lowest_rank_selected():
 
 def test_no_eligible_top5_returns_verdict():
     """Requirement 14: No eligible top5 -> NO_PRODUCTION_CLICK_ELIGIBLE_TARGET_IN_TOP5."""
-    row1 = _evaluate_mock_dom_row(0, False, False, False, True, False, rank=1)
-    row2 = _evaluate_mock_dom_row(0, False, False, False, True, False, rank=2)
+    row1 = _evaluate_mock_dom_row(0, False, False, False, True, rank=1)
+    row2 = _evaluate_mock_dom_row(0, False, False, False, True, rank=2)
     selected, verdict = tr1.select_best_candidate([row1, row2])
     assert verdict == "NO_PRODUCTION_CLICK_ELIGIBLE_TARGET_IN_TOP5"
     assert selected is None
@@ -410,7 +419,6 @@ def test_zero_click_callsites_in_tr1():
     with open(tr1.PRIMARY_DEPENDENCY_PATHS["tr1_runner"], "r", encoding="utf-8") as f:
         content = f.read()
 
-    # Verify no .click() calls exist outside comments / docstrings
     for line in content.splitlines():
         stripped = line.strip()
         if stripped.startswith("#") or stripped.startswith('"""') or stripped.startswith("*"):
@@ -450,7 +458,7 @@ def test_attempt4_rb2_search_authority_parity():
 
     class MockBackend:
         last_search_telemetry = {
-            "search_activation_dispatches": 1,
+            "activation_dispatch_count": 1,
             "modal_ever_observed": True,
             "final_modal_count": 1,
             "input_ever_observed": True,
@@ -486,7 +494,7 @@ def test_search_exception_ordering_preserved():
 
     class MockSearchException(Exception):
         details = {
-            "search_activation_dispatches": 1,
+            "activation_dispatch_count": 1,
             "modal_ever_observed": True,
             "last_confirmed_stage": "FAILED",
         }
@@ -560,3 +568,102 @@ def test_sensitive_content_exclusion():
     assert tr1.JS_INSPECT_TOP5_TARGET_AFFORDANCE.find("innerHTML") == -1
     assert tr1.JS_INSPECT_TOP5_TARGET_AFFORDANCE.find("innerText") == -1
     assert tr1.JS_INSPECT_TOP5_TARGET_AFFORDANCE.find("textContent") == -1
+
+
+# ---------------------------------------------------------------------------
+# 30-32. Search Harvester Parity with RB2 & Activation Dispatch Count Mapping
+# ---------------------------------------------------------------------------
+
+def test_tr1_search_harvester_exact_parity_with_rb2():
+    """Requirement 30: Verify AST / semantic parity between TR1 and RB2 search telemetry harvesters."""
+    rb2_file = REPO_ROOT / "scripts" / "diagnose_task11q4_p2a_l1_reply_bar_structure_rb2.py"
+    tr1_file = REPO_ROOT / "scripts" / "diagnose_task11q4_p2a_l1_target_affordance_tr1.py"
+
+    rb2_src = rb2_file.read_text(encoding="utf-8")
+    tr1_src = tr1_file.read_text(encoding="utf-8")
+
+    def extract_func_ast(src: str, func_name: str) -> str:
+        tree = ast.parse(src)
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                # Strip docstring for pure executable body comparison
+                body = node.body[1:] if (isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant)) else node.body
+                node_copy = ast.FunctionDef(
+                    name=node.name,
+                    args=node.args,
+                    body=body,
+                    decorator_list=node.decorator_list,
+                    returns=node.returns
+                )
+                return ast.dump(node_copy)
+        raise ValueError(f"Function {func_name} not found")
+
+    assert extract_func_ast(tr1_src, "harvest_search_telemetry") == extract_func_ast(rb2_src, "harvest_search_telemetry")
+    assert extract_func_ast(tr1_src, "evaluate_search_safety_and_query_authority") == extract_func_ast(rb2_src, "evaluate_search_safety_and_query_authority")
+    assert extract_func_ast(tr1_src, "is_supplemental_safe") == extract_func_ast(rb2_src, "is_supplemental_safe")
+
+
+def test_tr1_missing_telemetry_fails_closed_as_unknown():
+    """Requirement 31: Missing telemetry sets all core checks to UNKNOWN and failure_case_classification = TELEMETRY_MISSING."""
+    report = {
+        "live_action_inventory": {},
+        "search_telemetry": {},
+        "safety_telemetry": {},
+        "checks": {},
+    }
+    tr1.harvest_search_telemetry(None, None, report)
+
+    assert report["search_telemetry"]["failure_case_classification"] == "TELEMETRY_MISSING"
+    assert report["search_telemetry"]["search_activation_dispatches"] == "UNKNOWN"
+    assert report["search_telemetry"]["modal_ever_observed"] == "UNKNOWN"
+    assert report["search_telemetry"]["input_ready"] == "UNKNOWN"
+    assert report["search_telemetry"]["last_confirmed_stage"] == "UNKNOWN"
+    assert report["live_action_inventory"]["search_submissions"] == "UNKNOWN"
+    assert report["checks"]["SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED"] == "UNKNOWN"
+    assert report["checks"]["QUERY_STATE_VERIFIED_BEFORE_SUBMIT"] == "UNKNOWN"
+    assert report["checks"]["SEARCH_SURFACE_QUERY_MATCHES_REQUESTED"] == "UNKNOWN"
+
+
+def test_tr1_activation_dispatch_count_mapping():
+    """Requirement 32: Both activation_dispatch_count and activation_dispatched map properly."""
+    # Case A: activation_dispatch_count
+    rep1 = {"live_action_inventory": {}, "search_telemetry": {}, "safety_telemetry": {}, "checks": {}}
+    class BackendA:
+        last_search_telemetry = {"activation_dispatch_count": 2}
+    tr1.harvest_search_telemetry(BackendA(), None, rep1)
+    assert rep1["search_telemetry"]["search_activation_dispatches"] == 2
+
+    # Case B: activation_dispatched bool
+    rep2 = {"live_action_inventory": {}, "search_telemetry": {}, "safety_telemetry": {}, "checks": {}}
+    class BackendB:
+        last_search_telemetry = {"activation_dispatched": True}
+    tr1.harvest_search_telemetry(BackendB(), None, rep2)
+    assert rep2["search_telemetry"]["search_activation_dispatches"] == 1
+
+
+# ---------------------------------------------------------------------------
+# 33-35. Rendered Row & Top-5 Bound Parity with RB2
+# ---------------------------------------------------------------------------
+
+def test_hidden_connected_row_does_not_consume_top5_rank():
+    """Requirement 33: Hidden connected rows (zero geometry) are excluded in JS snapshot filter."""
+    js = tr1.JS_INSPECT_TOP5_TARGET_AFFORDANCE
+    assert "r.width > 0 && r.height > 0" in js
+    assert "getBoundingClientRect" in js
+
+
+def test_rendered_row_order_is_preserved():
+    """Requirement 34: Rendered row ordering is preserved in JS snapshot."""
+    js = tr1.JS_INSPECT_TOP5_TARGET_AFFORDANCE
+    assert "const candidateRows = allRows.slice(0, maxRows);" in js
+    assert "const rank = idx + 1;" in js
+
+
+def test_top5_bound_applies_after_rendered_row_filter():
+    """Requirement 35: Slicing to maxRows occurs after filtering for rendered geometry."""
+    js = tr1.JS_INSPECT_TOP5_TARGET_AFFORDANCE
+    filter_pos = js.find("return (r.width > 0 && r.height > 0);")
+    slice_pos = js.find("allRows.slice(0, maxRows)")
+    assert filter_pos != -1
+    assert slice_pos != -1
+    assert filter_pos < slice_pos

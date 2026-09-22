@@ -4,7 +4,7 @@ ONE_SEARCH_ZERO_CLICK_READ_ONLY_DIAGNOSTIC
 
 Evaluates candidate P2A thread-reply targets from resident top-5 search rows
 for the qualified query '26년 하반기 간담회' against exact production DOM interaction
-contracts (WebviewThreadReader pre-click guards + hit-test/occlusion check).
+contracts (WebviewThreadReader pre-click guards + optional supplemental occlusion check).
 
 Strict Invariants:
 - PRODUCTION_CODE_CHANGED = false
@@ -22,7 +22,7 @@ Strict Invariants:
 - TR1_SEARCH_TELEMETRY_AUTHORITY_PARITY_WITH_ATTEMPT4 = true
 - TR1_SEARCH_EXCEPTION_ORDER_PARITY_WITH_ATTEMPT4 = true
 - TR1_SEARCH_SAFETY_GATE_PARITY_WITH_ATTEMPT4 = true
-- TR1_PRODUCTION_PRE_CLICK_GUARD_CONTRACT_COMPLETE = true
+- TR1_PRODUCTION_PRE_CLICK_GUARD_CONTRACT_COMPLETE = dynamically verified
 - UNTRACKED_RUNTIME_DEPENDENCIES = 0
 """
 
@@ -61,7 +61,10 @@ from pesu_agent.search.webview_slack_search import (
     WebViewRuntimeConfig,
     WebViewSlackSearchBackend,
 )
-from pesu_agent.search.webview_thread_reader import normalize_slack_ts
+from pesu_agent.search.webview_thread_reader import (
+    JS_CLICK_RESIDENT_ROW_REPLY_BAR,
+    normalize_slack_ts,
+)
 
 if sys.platform == "win32":
     try:
@@ -110,7 +113,7 @@ DRY_RUN_OUTPUT_FILE = OUTPUT_DIR / "task11q4_p2a_l1_tr1_target_affordance_dry_ru
 SEARCH_VIEW_SELECTOR: str = '[data-qa="search_view"]'
 SEARCH_RESULT_ROW_SELECTORS: str = '[data-qa="search_result"], [data-qa="search_message_result_item"], .c-search_result'
 
-# Atomic JS Snapshot Script: Evaluates top-5 candidate rows for production click affordance and TR1 target policy
+# Atomic JS Snapshot Script: Evaluates top-5 rendered candidate rows for production click affordance and TR1 target policy
 # Sensitive-content excluded: zero user message text, zero outer HTML, zero raw permalinks from any row.
 JS_INSPECT_TOP5_TARGET_AFFORDANCE = r"""
 ((searchViewSel, searchRowSel, maxRows) => {
@@ -127,10 +130,12 @@ JS_INSPECT_TOP5_TARGET_AFFORDANCE = r"""
         }
 
         const searchView = searchViews[0];
+        // Enforce RB2 parity: only rendered/visible rows (r.width > 0 && r.height > 0) consume top-5 ranks
         const allRows = Array.from(searchView.querySelectorAll(searchRowSel)).filter(el => {
             if (!el || !el.isConnected) return false;
             if (el.closest('[data-qa="search_filter"], [data-qa="search_header"], [data-qa="search_input"]')) return false;
-            return true;
+            const r = el.getBoundingClientRect();
+            return (r.width > 0 && r.height > 0);
         });
 
         const mounted_row_count = allRows.length;
@@ -185,7 +190,7 @@ JS_INSPECT_TOP5_TARGET_AFFORDANCE = r"""
 
             const rowInComposer = Boolean(row.closest('[data-qa="message_input"], .c-message_input, textarea, [role="textbox"], [contenteditable="true"]'));
 
-            // 2. Exact Production Pre-Click Guard Evaluation (WebviewThreadReader parity)
+            // 2. Exact Production Pre-Click Guard Evaluation (WebviewThreadReader source-exact parity)
             // A. Reply Bar Cardinality Guard
             const replyBars = Array.from(row.querySelectorAll('div[data-qa="reply_bar"]')).filter(el => el && el.isConnected);
             const replyBarCount = replyBars.length;
@@ -196,10 +201,6 @@ JS_INSPECT_TOP5_TARGET_AFFORDANCE = r"""
             let outsideComposer = false;
             let prodGuardsPass = false;
             let prodFailureReason = null;
-            let hitTestPassed = false;
-            let hitFailureReason = null;
-            let hitElementDataQa = null;
-            let hitElementTagName = null;
 
             if (replyBarCountValid) {
                 const replyBar = replyBars[0];
@@ -231,36 +232,42 @@ JS_INSPECT_TOP5_TARGET_AFFORDANCE = r"""
                     prodGuardsPass = true;
                     prodFailureReason = null;
                 }
-
-                // E. Hit-test / Occlusion Guard (Center-Point Hit Test)
-                if (prodGuardsPass) {
-                    const cx = Math.floor(rect.left + rect.width / 2);
-                    const cy = Math.floor(rect.top + rect.height / 2);
-                    const hitEl = document.elementFromPoint(cx, cy);
-
-                    if (hitEl && (hitEl === replyBar || replyBar.contains(hitEl))) {
-                        hitTestPassed = true;
-                        hitFailureReason = null;
-                    } else {
-                        hitTestPassed = false;
-                        hitFailureReason = "REPLY_BAR_HIT_TEST_FAILED";
-                    }
-                    hitElementDataQa = hitEl ? hitEl.getAttribute('data-qa') : null;
-                    hitElementTagName = hitEl ? hitEl.tagName.toLowerCase() : null;
-                } else {
-                    hitTestPassed = false;
-                    hitFailureReason = "NOT_EVALUATED_PREVIOUS_GUARD_FAILED";
-                }
             } else {
                 prodGuardsPass = false;
                 prodFailureReason = "REPLY_BAR_COUNT_INVALID";
+            }
+
+            // Production click affordance is determined STRICTLY by production guards
+            const productionClickAffordancePassed = prodGuardsPass;
+
+            // 3. Supplemental TR1 Occlusion Safety Check (Distinct from production affordance)
+            let hitTestPassed = false;
+            let hitFailureReason = null;
+            let hitElementDataQa = null;
+            let hitElementTagName = null;
+
+            if (prodGuardsPass && replyBarCount === 1) {
+                const replyBar = replyBars[0];
+                const rect = replyBar.getBoundingClientRect();
+                const cx = Math.floor(rect.left + rect.width / 2);
+                const cy = Math.floor(rect.top + rect.height / 2);
+                const hitEl = document.elementFromPoint(cx, cy);
+
+                if (hitEl && (hitEl === replyBar || replyBar.contains(hitEl))) {
+                    hitTestPassed = true;
+                    hitFailureReason = null;
+                } else {
+                    hitTestPassed = false;
+                    hitFailureReason = "REPLY_BAR_HIT_TEST_FAILED";
+                }
+                hitElementDataQa = hitEl ? hitEl.getAttribute('data-qa') : null;
+                hitElementTagName = hitEl ? hitEl.tagName.toLowerCase() : null;
+            } else {
                 hitTestPassed = false;
                 hitFailureReason = "NOT_EVALUATED_PREVIOUS_GUARD_FAILED";
             }
 
-            const productionClickAffordancePassed = Boolean(prodGuardsPass && hitTestPassed);
-
-            // 3. TR1 Target Qualification Policy
+            // 4. TR1 Target Qualification Policy
             const identityUnambiguous = (uniqueCount === 1);
             const channelValid = Boolean(primaryIdentity && primaryIdentity.channel_id && primaryIdentity.channel_id.startsWith('C'));
             const isThreadReply = Boolean(
@@ -290,7 +297,7 @@ JS_INSPECT_TOP5_TARGET_AFFORDANCE = r"""
                 targetPolicyFailureReason = null;
             }
 
-            // 4. Combined Eligibility
+            // 5. Combined Eligibility (Production Affordance + Target Policy)
             const p2aLiveTargetEligible = Boolean(productionClickAffordancePassed && targetPolicyPassed);
 
             rows.push({
@@ -310,11 +317,13 @@ JS_INSPECT_TOP5_TARGET_AFFORDANCE = r"""
                     outside_composer: outsideComposer,
                     production_guards_pass: prodGuardsPass,
                     production_failure_reason: prodFailureReason,
+                    affordance_passed: productionClickAffordancePassed
+                },
+                supplemental_tr1_safety: {
                     hit_test_passed: hitTestPassed,
                     hit_failure_reason: hitFailureReason,
                     hit_element_data_qa: hitElementDataQa,
-                    hit_element_tag_name: hitElementTagName,
-                    affordance_passed: productionClickAffordancePassed
+                    hit_element_tag_name: hitElementTagName
                 },
                 target_qualification_policy: {
                     rank: rank,
@@ -358,6 +367,39 @@ PRIMARY_DEPENDENCY_PATHS = {
 }
 
 DEPENDENCY_PATHS = PRIMARY_DEPENDENCY_PATHS
+
+
+def verify_production_pre_click_guard_contract() -> bool:
+    """Verifies that the pre-click guard contract in TR1 exactly matches the production source in WebviewThreadReader."""
+    required_snippets = [
+        'targetRow.querySelectorAll(\'div[data-qa="reply_bar"]\')',
+        'replyBarCount !== 1',
+        '"REPLY_BAR_COUNT_INVALID"',
+        'replyBar.querySelector(\'[data-qa="reply_bar_count"]\')',
+        'replyBar.querySelector(\'[data-qa="reply_bar_view_thread"]\')',
+        '"REPLY_BAR_REQUIRED_CHILDREN_MISSING"',
+        'replyBar.getBoundingClientRect()',
+        'rect.width > 0 && rect.height > 0',
+        '"REPLY_BAR_NOT_VISIBLE"',
+        'replyBar.closest(\'[contenteditable="true"]\')',
+        'replyBar.closest(\'[data-qa="message_input"], .c-message_input, textarea, [role="textbox"]\')',
+        '"REPLY_BAR_INSIDE_COMPOSER"',
+    ]
+
+    for s in required_snippets:
+        if s not in JS_CLICK_RESIDENT_ROW_REPLY_BAR:
+            logger.error(f"❌ Production pre-click guard snippet missing from JS_CLICK_RESIDENT_ROW_REPLY_BAR: {s}")
+            return False
+
+    # Also verify that hit-test is NOT in production source
+    if "elementFromPoint" in JS_CLICK_RESIDENT_ROW_REPLY_BAR:
+        logger.error("❌ Unexpected elementFromPoint found in production JS_CLICK_RESIDENT_ROW_REPLY_BAR")
+        return False
+    if "REPLY_BAR_HIT_TEST_FAILED" in JS_CLICK_RESIDENT_ROW_REPLY_BAR:
+        logger.error("❌ Unexpected REPLY_BAR_HIT_TEST_FAILED found in production JS_CLICK_RESIDENT_ROW_REPLY_BAR")
+        return False
+
+    return True
 
 
 def get_git_commit() -> str:
@@ -465,6 +507,14 @@ def harvest_search_telemetry(
     search_exception: Optional[Exception],
     report: dict[str, Any],
 ) -> None:
+    """Harvests backend.last_search_telemetry whether search_messages succeeds, fails, or raises.
+
+    Exact RB2/Attempt 4 parity:
+    - Primary: backend.last_search_telemetry
+    - Fallback: search_exception.details
+    - Strictly forbids backend.last_telemetry as search authority.
+    - Explicit fail-closed semantic state if telemetry is missing.
+    """
     telemetry = getattr(backend, "last_search_telemetry", None)
     if not isinstance(telemetry, dict) or not telemetry:
         if search_exception is not None and hasattr(search_exception, "details"):
@@ -478,18 +528,35 @@ def harvest_search_telemetry(
     checks = report.setdefault("checks", {})
 
     if not isinstance(telemetry, dict) or not telemetry:
+        logger.error("❌ backend.last_search_telemetry is missing or empty! Failing closed.")
+        actions["search_activation_dispatches"] = "UNKNOWN"
+        actions["search_modal_observed"] = "UNKNOWN"
+        actions["search_input_ready"] = "UNKNOWN"
+        actions["search_submissions"] = "UNKNOWN"
+        actions["search_modal_open_calls"] = "UNKNOWN"
+        st["search_activation_dispatches"] = "UNKNOWN"
+        st["modal_ever_observed"] = "UNKNOWN"
+        st["input_ready"] = "UNKNOWN"
+        st["last_confirmed_stage"] = "UNKNOWN"
+        st["failure_case_classification"] = "TELEMETRY_MISSING"
+        checks["SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED"] = "UNKNOWN"
+        checks["QUERY_STATE_VERIFIED_BEFORE_SUBMIT"] = "UNKNOWN"
+        checks["SEARCH_SURFACE_QUERY_MATCHES_REQUESTED"] = "UNKNOWN"
         return
 
-    # 1. Activation dispatch
-    if "search_activation_dispatches" in telemetry:
-        act_disp = int(telemetry["search_activation_dispatches"])
-        actions["search_activation_dispatches"] = act_disp
-        st["search_activation_dispatches"] = act_disp
+    # 1. Activation dispatches (Exact RB2/Attempt 4 parity)
+    if "activation_dispatch_count" in telemetry:
+        actions["search_activation_dispatches"] = int(telemetry["activation_dispatch_count"])
+        st["search_activation_dispatches"] = int(telemetry["activation_dispatch_count"])
+    elif "activation_dispatched" in telemetry:
+        act_cnt = 1 if bool(telemetry["activation_dispatched"]) else 0
+        actions["search_activation_dispatches"] = act_cnt
+        st["search_activation_dispatches"] = act_cnt
     else:
         actions["search_activation_dispatches"] = "UNKNOWN"
         st["search_activation_dispatches"] = "UNKNOWN"
 
-    # 2. Modal observation
+    # 2. Modal observation (True/False/UNKNOWN)
     if "modal_ever_observed" in telemetry:
         modal_obs = bool(telemetry["modal_ever_observed"])
         actions["search_modal_observed"] = modal_obs
@@ -511,7 +578,7 @@ def harvest_search_telemetry(
     st["elapsed_ms"] = telemetry.get("elapsed_ms", 0)
     st["timeout_ms"] = telemetry.get("timeout_ms", 5000)
 
-    # 3. Input readiness
+    # 3. Input readiness (True/False/UNKNOWN)
     if (
         "input_ever_observed" in telemetry
         and "final_input_count" in telemetry
@@ -537,7 +604,7 @@ def harvest_search_telemetry(
         actions["search_input_ready"] = "UNKNOWN"
         st["input_ready"] = "UNKNOWN"
 
-    # 4. Search submissions
+    # 4. Search submissions (True/False/UNKNOWN)
     if "onenter_invoked" in telemetry:
         sub_invoked = 1 if bool(telemetry["onenter_invoked"]) else 0
         actions["search_submissions"] = sub_invoked
@@ -629,20 +696,39 @@ def harvest_search_telemetry(
     safety["composer_send"] = _clean_supp(telemetry.get("composer_send"))
 
 
+def is_supplemental_safe(val: Any) -> bool:
+    """Returns True if supplemental composer telemetry observation is safe.
+
+    Exact RB2 parity:
+    - missing / UNKNOWN / None / NOT_RUN -> True
+    - 0 / False -> True
+    - explicit True / non-zero -> False (triggers FAIL_CLOSED)
+    """
+    if val in (0, None, "UNKNOWN", False, "NOT_RUN"):
+        return True
+    return False
+
+
 def evaluate_search_safety_and_query_authority(report: dict[str, Any]) -> tuple[bool, str]:
-    safety = report.get("safety_telemetry", {})
+    """Evaluates authoritative search safety and query authority before trusting results.
+
+    Exact RB2/Attempt 4 parity.
+    """
     checks = report.get("checks", {})
+    safety = report.get("safety_telemetry", {})
     actions = report.get("live_action_inventory", {})
 
-    def is_supplemental_safe(val: Any) -> bool:
-        if val is None or val == "UNKNOWN":
-            return True
-        if isinstance(val, bool):
-            return not val
-        if isinstance(val, (int, float)):
-            return val == 0
-        return False
+    # Explicit safety violations
+    if safety.get("GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH") is True:
+        return False, "EXPLICIT_SAFETY_VIOLATION_GENERIC_DEFAULT_ONENTER"
+    if safety.get("SLACKBOT_ACTION_INVOKED_BY_PESU") is True:
+        return False, "EXPLICIT_SAFETY_VIOLATION_SLACKBOT"
+    if safety.get("WRITE_CAPABLE_ACTION_INVOKED_BY_PESU") is True:
+        return False, "EXPLICIT_SAFETY_VIOLATION_WRITE_CAPABLE"
+    if safety.get("UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU") is True:
+        return False, "EXPLICIT_SAFETY_VIOLATION_UNSAFE_NON_SEARCH"
 
+    # Supplemental composer safety violations
     comp_f = safety.get("composer_focus")
     comp_i = safety.get("composer_text_input")
     comp_s = safety.get("composer_send")
@@ -653,6 +739,7 @@ def evaluate_search_safety_and_query_authority(report: dict[str, Any]) -> tuple[
     if not is_supplemental_safe(comp_s):
         return False, "EXPLICIT_SAFETY_VIOLATION_COMPOSER_SEND"
 
+    # Required core safety
     if checks.get("SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED") is not True:
         return False, "SAFE_SEARCH_ACTION_NOT_EXPLICITLY_SELECTED"
     if checks.get("QUERY_STATE_VERIFIED_BEFORE_SUBMIT") is not True:
@@ -668,6 +755,7 @@ def evaluate_search_safety_and_query_authority(report: dict[str, Any]) -> tuple[
     if actions.get("search_submissions") != 1:
         return False, "SEARCH_SUBMISSIONS_COUNT_INVALID"
 
+    # Post-search surface query match
     if checks.get("SEARCH_SURFACE_QUERY_MATCHES_REQUESTED") is not True:
         return False, "SEARCH_SURFACE_QUERY_MISMATCH"
 
@@ -778,7 +866,7 @@ def run_tr1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict[
             "TR1_SEARCH_TELEMETRY_AUTHORITY_PARITY_WITH_ATTEMPT4": True,
             "TR1_SEARCH_EXCEPTION_ORDER_PARITY_WITH_ATTEMPT4": True,
             "TR1_SEARCH_SAFETY_GATE_PARITY_WITH_ATTEMPT4": True,
-            "TR1_PRODUCTION_PRE_CLICK_GUARD_CONTRACT_COMPLETE": True,
+            "TR1_PRODUCTION_PRE_CLICK_GUARD_CONTRACT_COMPLETE": False,
             "UNTRACKED_RUNTIME_DEPENDENCIES": 0,
             "ACTION_CONTRACTS_SATISFIED": True,
             "SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED": "UNKNOWN",
@@ -805,6 +893,16 @@ def run_tr1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict[
         report["diagnostic_verdict"] = "LIVE_ARTIFACT_ALREADY_EXISTS"
         return report
 
+    # 1. Dynamic Production Pre-Click Guard Contract Verification
+    guard_contract_ok = verify_production_pre_click_guard_contract()
+    report["checks"]["TR1_PRODUCTION_PRE_CLICK_GUARD_CONTRACT_COMPLETE"] = guard_contract_ok
+    if not guard_contract_ok:
+        report["error"] = "PRODUCTION_PRE_CLICK_GUARD_CONTRACT_MISMATCH"
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "PREFLIGHT_GUARD_CONTRACT_MISMATCH"
+        return report
+
+    # 2. Protocol Preflight Gate
     if not PROTOCOL_FREEZE_PATH.exists():
         err_msg = f"PROTOCOL_FREEZE_NOT_FOUND: {PROTOCOL_FREEZE_PATH}"
         logger.error(f"❌ {err_msg}")
