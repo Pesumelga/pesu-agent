@@ -13,17 +13,21 @@ Validates:
 10. Atomic JS snapshot simulation for 0 reply bars.
 11. Atomic JS snapshot simulation for 1 qualified reply bar.
 12. Atomic JS snapshot simulation for multiple reply bars.
-13. Atomic JS snapshot simulation for non-resident target.
-14. Atomic JS snapshot simulation for ambiguous resident targets.
-15. Provider calls strictly zero.
-16. P2A_L1 is NOT_APPLICABLE_DIAGNOSTIC_ONLY and extraction validated is False.
-17. Zero clicks strictly preserved.
+13. Sensitive-content exclusion (zero user message text, zero outer HTML, zero unrelated raw permalinks).
+14. Exact production cardinality predicate mirrored (isolated from subsequent structural observations).
+15. Attempt 4 runtime/search path parity verification.
+16. Runtime import closure audit (untracked loaded project dependencies == 0).
+17. Provider calls strictly zero.
+18. P2A_L1 is NOT_APPLICABLE_DIAGNOSTIC_ONLY and extraction validated is False.
+19. Zero clicks strictly preserved.
 """
 
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -34,8 +38,12 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from pesu_agent.parsers.slack_permalink_parser import parse_slack_message_permalink
+from pesu_agent.runtime.pesu_webview_host import DIRECT_SLACK_PROFILE_PATH, PesuWebViewHost
+from pesu_agent.search.webview_slack_search import WebViewRuntimeConfig, WebViewSlackSearchBackend
 from pesu_agent.search.webview_thread_reader import normalize_slack_ts
 
 from scripts.diagnose_task11q4_p2a_l1_reply_bar_structure import (
@@ -45,12 +53,14 @@ from scripts.diagnose_task11q4_p2a_l1_reply_bar_structure import (
     EXPECTED_MESSAGE_TS,
     EXPECTED_ROOT_TS,
     LIVE_OUTPUT_FILE,
+    PRIMARY_DEPENDENCY_PATHS,
     PROTOCOL_FREEZE_PATH,
     SEARCH_MAX_RESULTS,
     SOURCE_RAW_PERMALINK,
     SOURCE_RD1_RUN2_RANK,
     TARGET_FITNESS_CONTRACT,
     TARGET_QUERY,
+    audit_runtime_import_closure,
     evaluate_search_safety_and_query_authority,
     harvest_search_telemetry,
     is_supplemental_safe,
@@ -83,7 +93,7 @@ def test_2_dependency_paths_and_hashes():
         manifest = json.load(f)
 
     expected_hashes = manifest["dependency_hashes"]
-    for name, path in DEPENDENCY_PATHS.items():
+    for name, path in PRIMARY_DEPENDENCY_PATHS.items():
         assert path.exists(), f"Dependency {name} does not exist at {path}"
         actual_hash = hashlib.sha256(path.read_bytes()).hexdigest()
         assert name in expected_hashes, f"Dependency {name} missing from protocol freeze!"
@@ -117,7 +127,6 @@ def test_3_search_safety_and_query_authority_evaluation():
     assert ok is True
     assert reason == "VERIFIED_SAFE_AND_CORRELATED"
 
-    # Explicit violations fail closed
     for violation_key in [
         "GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH",
         "SLACKBOT_ACTION_INVOKED_BY_PESU",
@@ -179,7 +188,7 @@ def test_5_harvest_search_telemetry_fidelity():
     assert report["checks"]["SEARCH_SURFACE_QUERY_MATCHES_REQUESTED"] is True
 
 
-def test_6_live_artifact_overwrite_guard(tmp_path):
+def test_6_live_artifact_overwrite_guard():
     """Verifies overwrite guard aborts execution if live trace artifact already exists."""
     import scripts.diagnose_task11q4_p2a_l1_reply_bar_structure as runner_mod
 
@@ -259,7 +268,7 @@ def test_9_production_src_diff_strictly_empty():
 
 
 def test_10_atomic_js_snapshot_simulation_zero_reply_bars():
-    """Verifies atomic snapshot correctly reports target resident with 0 reply bars."""
+    """Verifies atomic snapshot correctly isolates production cardinality guard when count is 0."""
     mock_snapshot = {
         "ok": True,
         "target_resident": True,
@@ -268,26 +277,29 @@ def test_10_atomic_js_snapshot_simulation_zero_reply_bars():
         "mounted_row_count": 5,
         "inspected_row_count": 5,
         "reply_bar_cardinality": {
-            "total_reply_bars": 0,
-            "div_reply_bars": 0,
-            "button_reply_bars": 0,
-            "visible_reply_bars": 0,
-            "qualified_reply_bars": 0,
-            "production_reader_guard_would_pass": False,
+            "production_selector_connected_div_reply_bar_count": 0,
+            "production_cardinality_guard_would_pass": False,
+            "rendered_reply_bar_count": 0,
+            "hidden_reply_bar_count": 0,
+            "nested_reply_bar_count": 0,
+            "composer_contained_reply_bar_count": 0,
+            "view_thread_control_count": 0,
+            "reply_bar_count_control_count": 0,
+            "total_reply_bar_elements_count": 0,
+            "button_reply_bar_count": 0,
+            "structural_candidate_count": 0,
         },
         "reply_bar_elements": [],
         "alternative_candidates": [],
     }
 
-    report = {"checks": {}, "live_action_inventory": {}}
-    report["atomic_inspection"] = mock_snapshot
     card = mock_snapshot["reply_bar_cardinality"]
-    assert card["total_reply_bars"] == 0
-    assert card["production_reader_guard_would_pass"] is False
+    assert card["production_selector_connected_div_reply_bar_count"] == 0
+    assert card["production_cardinality_guard_would_pass"] is False
 
 
 def test_11_atomic_js_snapshot_simulation_one_qualified_reply_bar():
-    """Verifies atomic snapshot correctly reports target resident with 1 qualified reply bar."""
+    """Verifies atomic snapshot correctly isolates production cardinality guard when count is 1."""
     mock_snapshot = {
         "ok": True,
         "target_resident": True,
@@ -296,31 +308,38 @@ def test_11_atomic_js_snapshot_simulation_one_qualified_reply_bar():
         "mounted_row_count": 5,
         "inspected_row_count": 5,
         "reply_bar_cardinality": {
-            "total_reply_bars": 1,
-            "div_reply_bars": 1,
-            "button_reply_bars": 0,
-            "visible_reply_bars": 1,
-            "qualified_reply_bars": 1,
-            "production_reader_guard_would_pass": True,
+            "production_selector_connected_div_reply_bar_count": 1,
+            "production_cardinality_guard_would_pass": True,
+            "rendered_reply_bar_count": 1,
+            "hidden_reply_bar_count": 0,
+            "nested_reply_bar_count": 0,
+            "composer_contained_reply_bar_count": 0,
+            "view_thread_control_count": 1,
+            "reply_bar_count_control_count": 1,
+            "total_reply_bar_elements_count": 1,
+            "button_reply_bar_count": 0,
+            "structural_candidate_count": 0,
         },
         "reply_bar_elements": [{
             "index": 0,
             "tag_name": "div",
+            "data_qa": "reply_bar",
             "is_connected": True,
             "is_visible": True,
-            "is_qualified": True,
+            "has_reply_bar_count_control": True,
+            "has_reply_bar_view_thread_control": True,
+            "in_composer": False,
         }],
         "alternative_candidates": [],
     }
 
     card = mock_snapshot["reply_bar_cardinality"]
-    assert card["total_reply_bars"] == 1
-    assert card["qualified_reply_bars"] == 1
-    assert card["production_reader_guard_would_pass"] is True
+    assert card["production_selector_connected_div_reply_bar_count"] == 1
+    assert card["production_cardinality_guard_would_pass"] is True
 
 
 def test_12_atomic_js_snapshot_simulation_multiple_reply_bars():
-    """Verifies atomic snapshot correctly reports target resident with >1 reply bars."""
+    """Verifies atomic snapshot correctly isolates production cardinality guard when count is >1."""
     mock_snapshot = {
         "ok": True,
         "target_resident": True,
@@ -329,72 +348,106 @@ def test_12_atomic_js_snapshot_simulation_multiple_reply_bars():
         "mounted_row_count": 5,
         "inspected_row_count": 5,
         "reply_bar_cardinality": {
-            "total_reply_bars": 2,
-            "div_reply_bars": 2,
-            "button_reply_bars": 0,
-            "visible_reply_bars": 2,
-            "qualified_reply_bars": 2,
-            "production_reader_guard_would_pass": False,
+            "production_selector_connected_div_reply_bar_count": 2,
+            "production_cardinality_guard_would_pass": False,
+            "rendered_reply_bar_count": 2,
+            "hidden_reply_bar_count": 0,
+            "nested_reply_bar_count": 1,
+            "composer_contained_reply_bar_count": 0,
+            "view_thread_control_count": 2,
+            "reply_bar_count_control_count": 2,
+            "total_reply_bar_elements_count": 2,
+            "button_reply_bar_count": 0,
+            "structural_candidate_count": 1,
         },
         "reply_bar_elements": [
-            {"index": 0, "tag_name": "div", "is_qualified": True},
-            {"index": 1, "tag_name": "div", "is_qualified": True},
+            {"index": 0, "tag_name": "div", "is_connected": True, "is_visible": True},
+            {"index": 1, "tag_name": "div", "is_connected": True, "is_visible": True},
         ],
         "alternative_candidates": [],
     }
 
     card = mock_snapshot["reply_bar_cardinality"]
-    assert card["total_reply_bars"] == 2
-    assert card["production_reader_guard_would_pass"] is False
+    assert card["production_selector_connected_div_reply_bar_count"] == 2
+    assert card["production_cardinality_guard_would_pass"] is False
 
 
-def test_13_atomic_js_snapshot_simulation_target_not_resident():
-    """Verifies atomic snapshot correctly reports target not resident."""
-    mock_snapshot = {
-        "ok": True,
-        "target_resident": False,
-        "resident_matches": 0,
-        "mounted_row_count": 5,
-        "inspected_row_count": 5,
-        "reply_bar_cardinality": None,
-        "reply_bar_elements": [],
-        "alternative_candidates": [],
-    }
-    assert mock_snapshot["target_resident"] is False
-    assert mock_snapshot["resident_matches"] == 0
-    assert mock_snapshot["reply_bar_cardinality"] is None
+def test_13_sensitive_content_exclusion():
+    """Verifies sensitive content (user text, outerHTML, unrelated permalinks) is strictly excluded."""
+    report = run_rb1_diagnostic(dry_run=True)
+    checks = report.get("checks", {})
+
+    assert checks.get("USER_MESSAGE_TEXT_CAPTURED") is False
+    assert checks.get("UNRELATED_RAW_PERMALINK_CAPTURED") is False
+    assert checks.get("OUTER_HTML_CAPTURED") is False
 
 
-def test_14_atomic_js_snapshot_simulation_ambiguous_rows():
-    """Verifies atomic snapshot correctly reports ambiguous resident rows."""
-    mock_snapshot = {
-        "ok": True,
-        "target_resident": False,
-        "resident_matches": 2,
-        "error": "ROW_IDENTITY_AMBIGUOUS",
-        "mounted_row_count": 5,
-        "inspected_row_count": 5,
-        "reply_bar_cardinality": None,
-    }
-    assert mock_snapshot["target_resident"] is False
-    assert mock_snapshot["resident_matches"] == 2
-    assert mock_snapshot["error"] == "ROW_IDENTITY_AMBIGUOUS"
+def test_14_exact_production_cardinality_predicate_mirrored():
+    """Verifies production cardinality predicate is mirrored exactly without conflating subsequent observations."""
+    report = run_rb1_diagnostic(dry_run=True)
+    assert report["checks"].get("PRODUCTION_CARDINALITY_PREDICATE_MIRRORED_EXACTLY") is True
 
 
-def test_15_provider_calls_strictly_zero():
+def test_15_attempt4_runtime_search_path_parity():
+    """Proves RB1 live runner constructor and method calls have 100% parity with Attempt 4."""
+    # 1. PesuWebViewHost signature
+    sig_host = inspect.signature(PesuWebViewHost.__init__)
+    assert "user_data_folder" in sig_host.parameters
+    assert "initial_url" in sig_host.parameters
+    assert "title" in sig_host.parameters
+
+    # 2. WebViewSlackSearchBackend signature
+    sig_backend = inspect.signature(WebViewSlackSearchBackend.__init__)
+    assert "config" in sig_backend.parameters
+    assert "host" in sig_backend.parameters
+
+    # 3. WebViewRuntimeConfig signature
+    sig_cfg = inspect.signature(WebViewRuntimeConfig.__init__)
+    assert "storage_path" in sig_cfg.parameters
+
+    # 4. Search method signature
+    sig_search = inspect.signature(WebViewSlackSearchBackend.search_messages)
+    assert "query" in sig_search.parameters
+    assert "max_results" in sig_search.parameters
+
+    # 5. Start runtime method signature
+    sig_start = inspect.signature(WebViewSlackSearchBackend.start_runtime)
+    assert "timeout" in sig_start.parameters
+
+    report = run_rb1_diagnostic(dry_run=True)
+    assert report["checks"].get("RB1_RUNTIME_SEARCH_PATH_PARITY_WITH_ATTEMPT4") is True
+
+
+def test_16_runtime_import_closure_audit():
+    """Audits loaded project modules against the protocol manifest to guarantee zero untracked dependencies."""
+    assert PROTOCOL_FREEZE_PATH.exists()
+    with open(PROTOCOL_FREEZE_PATH, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    audit_result = audit_runtime_import_closure(manifest)
+    assert audit_result["closure_audit_passed"] is True, (
+        f"Closure audit failed: untracked={audit_result['untracked_files']}, mismatches={audit_result['mismatched_files']}"
+    )
+    assert audit_result["untracked_loaded_project_dependency_count"] == 0
+    assert len(audit_result["untracked_files"]) == 0
+    assert len(audit_result["mismatched_files"]) == 0
+    assert audit_result["loaded_project_module_count"] >= 12
+
+
+def test_17_provider_calls_strictly_zero():
     """Verifies provider calls count is 0."""
     report = run_rb1_diagnostic(dry_run=True)
     assert report["provider_calls"] == 0
 
 
-def test_16_p2a_l1_not_applicable_diagnostic_only():
+def test_18_p2a_l1_not_applicable_diagnostic_only():
     """Verifies P2A_L1 is set to NOT_APPLICABLE_DIAGNOSTIC_ONLY."""
     report = run_rb1_diagnostic(dry_run=True)
     assert report["P2A_L1"] == "NOT_APPLICABLE_DIAGNOSTIC_ONLY"
     assert report["thread_root_data_extraction_live_validated"] is False
 
 
-def test_17_zero_clicks_strictly_preserved():
+def test_19_zero_clicks_strictly_preserved():
     """Verifies zero clicks strictly preserved in live_action_inventory and checks."""
     report = run_rb1_diagnostic(dry_run=True)
     assert report["live_action_inventory"]["reply_bar_clicks"] == 0

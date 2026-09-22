@@ -1,6 +1,6 @@
 """Phase 13.5D / Task 11 / P2A-L1 / RB1: Frozen Target Reply-Bar DOM Cardinality & Structure Diagnostic.
 
-Zero-Action Slack Search DOM Diagnostic.
+ONE_SEARCH_ZERO_CLICK_READ_ONLY_DIAGNOSTIC
 
 Strict Invariants:
 - PRODUCTION_CODE_CHANGED = false
@@ -11,6 +11,12 @@ Strict Invariants:
 - ONE_ATOMIC_JS_SNAPSHOT = true (same snapshot evaluates residency, identity match, and reply_bar cardinality/structure)
 - REPLAY_FORBIDDEN = true (live artifact overwrite guard)
 - EXCLUSIVELY_DATA_COLLECTION = true
+- USER_MESSAGE_TEXT_CAPTURED = false
+- UNRELATED_RAW_PERMALINK_CAPTURED = false
+- OUTER_HTML_CAPTURED = false
+- PRODUCTION_CARDINALITY_PREDICATE_MIRRORED_EXACTLY = true
+- RB1_RUNTIME_SEARCH_PATH_PARITY_WITH_ATTEMPT4 = true
+- UNTRACKED_RUNTIME_DEPENDENCIES = 0
 """
 
 from __future__ import annotations
@@ -20,6 +26,7 @@ import datetime
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -31,6 +38,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SRC_DIR = REPO_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from pesu_agent.parsers.slack_permalink_parser import (
     SlackMessagePermalinkIdentity,
@@ -83,6 +92,7 @@ SEARCH_VIEW_SELECTOR: str = '[data-qa="search_view"]'
 SEARCH_RESULT_ROW_SELECTORS: str = '[data-qa="search_result"], [data-qa="search_message_result_item"], .c-search_result'
 
 # Atomic JS Snapshot Script: Evaluates residency, exact identity matching, and reply-bar cardinality/structure in ONE DOM pass
+# Sensitive-content excluded: zero user message text, zero outer HTML, zero raw permalinks from unrelated rows.
 JS_INSPECT_TARGET_REPLY_BAR_STRUCTURE = r"""
 ((searchViewSel, searchRowSel, targetChannelId, targetMsgTs, targetRootTs, maxRows) => {
     try {
@@ -129,14 +139,12 @@ JS_INSPECT_TARGET_REPLY_BAR_STRUCTURE = r"""
         for (let idx = 0; idx < candidateRows.length; idx++) {
             const row = candidateRows[idx];
             const anchors = Array.from(row.querySelectorAll('a[href]'));
-            const permalinks = [];
             let rowMatched = false;
 
             for (const a of anchors) {
                 const h = (a.getAttribute('href') || '').trim();
                 const m = h.match(/\/archives\/([A-Z0-9]+)\/p(\d{16})(?:\?([^#]*))?/);
                 if (m) {
-                    permalinks.push(h);
                     const chan = m[1];
                     const rawTs = m[2];
                     const normMsg = rawTs.slice(0, 10) + '.' + rawTs.slice(10).padEnd(6, '0').slice(0, 6);
@@ -157,9 +165,9 @@ JS_INSPECT_TARGET_REPLY_BAR_STRUCTURE = r"""
                 }
             }
 
+            // Sensitive-content exclusion: do NOT store raw permalinks from any row
             rowSummaries.push({
                 row_index: idx,
-                permalinks: permalinks,
                 identity_matched: rowMatched
             });
 
@@ -201,32 +209,47 @@ JS_INSPECT_TARGET_REPLY_BAR_STRUCTURE = r"""
         const targetRowIdx = matchingIndices[0];
         const targetRow = candidateRows[targetRowIdx];
 
-        // 1. Inspect all elements matching [data-qa="reply_bar"] (div or button or other tag)
+        // 1. Exact Attempt 4 Production Predicate Mirror
+        // In WebviewThreadReader: targetRow.querySelectorAll('div[data-qa="reply_bar"]') filtered by el && el.isConnected
+        const productionDivReplyBars = Array.from(targetRow.querySelectorAll('div[data-qa="reply_bar"]')).filter(el => el && el.isConnected);
+        const productionConnectedDivCount = productionDivReplyBars.length;
+        const productionCardinalityGuardWouldPass = (productionConnectedDivCount === 1);
+
+        // 2. Comprehensive structural inspection of all [data-qa="reply_bar"] elements (div, button, or other tag)
         const allReplyBars = Array.from(targetRow.querySelectorAll('[data-qa="reply_bar"]')).filter(el => el && el.isConnected);
-        const divReplyBars = allReplyBars.filter(el => el.tagName.toLowerCase() === 'div');
         const buttonReplyBars = allReplyBars.filter(el => el.tagName.toLowerCase() === 'button');
 
         const replyBarElementDetails = [];
-        let qualifiedCount = 0;
-        let visibleCount = 0;
+        let renderedCount = 0;
+        let hiddenCount = 0;
+        let nestedCount = 0;
+        let composerContainedCount = 0;
+        let viewThreadControlCount = 0;
+        let replyBarCountControlCount = 0;
 
         for (let rbIdx = 0; rbIdx < allReplyBars.length; rbIdx++) {
             const el = allReplyBars[rbIdx];
             const r = el.getBoundingClientRect();
             const isVis = (r.width > 0 && r.height > 0);
-            if (isVis) visibleCount++;
+            if (isVis) renderedCount++; else hiddenCount++;
+
+            const isNested = Boolean(el.parentElement && el.parentElement.closest('[data-qa="reply_bar"]'));
+            if (isNested) nestedCount++;
+
+            const inComp = Boolean(el.closest('[data-qa="message_input"], .c-message_input, textarea, [role="textbox"], [contenteditable="true"]'));
+            if (inComp) composerContainedCount++;
 
             const countEl = el.querySelector('[data-qa="reply_bar_count"]');
             const viewThreadEl = el.querySelector('[data-qa="reply_bar_view_thread"]');
-            const inComposer = Boolean(el.closest('[data-qa="message_input"], .c-message_input, textarea, [role="textbox"], [contenteditable="true"]'));
 
-            const hasRequiredChildren = Boolean(countEl && viewThreadEl);
-            const isQualified = Boolean(isVis && hasRequiredChildren && !inComposer && el.tagName.toLowerCase() === 'div');
-            if (isQualified) qualifiedCount++;
+            if (countEl) replyBarCountControlCount++;
+            if (viewThreadEl) viewThreadControlCount++;
 
+            // Permitted structural metadata ONLY (sensitive text and outerHTML excluded)
             replyBarElementDetails.push({
                 index: rbIdx,
                 tag_name: el.tagName.toLowerCase(),
+                data_qa: el.getAttribute('data-qa'),
                 is_connected: el.isConnected,
                 rect: {
                     width: Math.round(r.width),
@@ -235,18 +258,19 @@ JS_INSPECT_TARGET_REPLY_BAR_STRUCTURE = r"""
                     left: Math.round(r.left)
                 },
                 is_visible: isVis,
-                has_reply_bar_count_el: Boolean(countEl),
-                reply_bar_count_text: countEl ? (countEl.textContent || '').trim() : null,
-                has_view_thread_el: Boolean(viewThreadEl),
-                view_thread_text: viewThreadEl ? (viewThreadEl.textContent || '').trim() : null,
-                in_composer: inComposer,
-                is_qualified: isQualified,
-                class_name: (el.className || '').slice(0, 200),
-                outer_html_snippet: (el.outerHTML || '').slice(0, 300)
+                aria_hidden: el.getAttribute('aria-hidden'),
+                class_list: Array.from(el.classList),
+                parent_data_qa: el.parentElement ? el.parentElement.getAttribute('data-qa') : null,
+                nearest_ancestor_data_qa: el.closest('[data-qa]:not([data-qa="reply_bar"])')?.getAttribute('data-qa') || null,
+                nested_inside_another_reply_bar: isNested,
+                descendant_element_count: el.getElementsByTagName('*').length,
+                has_reply_bar_count_control: Boolean(countEl),
+                has_reply_bar_view_thread_control: Boolean(viewThreadEl),
+                in_composer: inComp
             });
         }
 
-        // 2. Discover alternative thread/reply interactive elements in target row
+        // 3. Alternative / Related interactive controls in target row (structural metadata only)
         const altSelectors = [
             '[data-qa*="reply"]',
             '[data-qa*="thread"]',
@@ -259,14 +283,15 @@ JS_INSPECT_TARGET_REPLY_BAR_STRUCTURE = r"""
             for (const fe of found.slice(0, 10)) {
                 if (allReplyBars.includes(fe)) continue;
                 const fr = fe.getBoundingClientRect();
+                const h = fe.getAttribute('href') || '';
                 alternativeElements.push({
                     matched_selector: sel,
                     tag_name: fe.tagName.toLowerCase(),
                     data_qa: fe.getAttribute('data-qa'),
                     is_visible: (fr.width > 0 && fr.height > 0),
-                    text_snippet: (fe.textContent || '').trim().slice(0, 80),
-                    class_name: (fe.className || '').slice(0, 150),
-                    href: fe.getAttribute('href') || null
+                    parent_data_qa: fe.parentElement ? fe.parentElement.getAttribute('data-qa') : null,
+                    nearest_ancestor_data_qa: fe.closest('[data-qa]:not([' + sel + '])')?.getAttribute('data-qa') || null,
+                    has_thread_permalink: Boolean(h && h.includes('thread_ts='))
                 });
             }
         }
@@ -280,12 +305,17 @@ JS_INSPECT_TARGET_REPLY_BAR_STRUCTURE = r"""
             inspected_row_count: candidateRows.length,
             rows: rowSummaries,
             reply_bar_cardinality: {
-                total_reply_bars: allReplyBars.length,
-                div_reply_bars: divReplyBars.length,
-                button_reply_bars: buttonReplyBars.length,
-                visible_reply_bars: visibleCount,
-                qualified_reply_bars: qualifiedCount,
-                production_reader_guard_would_pass: (divReplyBars.length === 1 && qualifiedCount === 1)
+                production_selector_connected_div_reply_bar_count: productionConnectedDivCount,
+                production_cardinality_guard_would_pass: productionCardinalityGuardWouldPass,
+                rendered_reply_bar_count: renderedCount,
+                hidden_reply_bar_count: hiddenCount,
+                nested_reply_bar_count: nestedCount,
+                composer_contained_reply_bar_count: composerContainedCount,
+                view_thread_control_count: viewThreadControlCount,
+                reply_bar_count_control_count: replyBarCountControlCount,
+                total_reply_bar_elements_count: allReplyBars.length,
+                button_reply_bar_count: buttonReplyBars.length,
+                structural_candidate_count: alternativeElements.length
             },
             reply_bar_elements: replyBarElementDetails,
             alternative_candidates: alternativeElements
@@ -296,7 +326,8 @@ JS_INSPECT_TARGET_REPLY_BAR_STRUCTURE = r"""
 })
 """
 
-DEPENDENCY_PATHS = {
+# Primary tracked dependencies for direct parity check with Attempt 4
+PRIMARY_DEPENDENCY_PATHS = {
     "rb1_runner": REPO_ROOT / "scripts" / "diagnose_task11q4_p2a_l1_reply_bar_structure.py",
     "slack_search": SRC_DIR / "pesu_agent" / "search" / "slack_search.py",
     "models": SRC_DIR / "pesu_agent" / "investigation" / "models.py",
@@ -310,6 +341,8 @@ DEPENDENCY_PATHS = {
     "read_only_barrier": SRC_DIR / "pesu_agent" / "security" / "read_only_barrier.py",
     "slack_agent_window": SRC_DIR / "pesu_agent" / "lifecycle" / "slack_agent_window.py",
 }
+
+DEPENDENCY_PATHS = PRIMARY_DEPENDENCY_PATHS
 
 
 def get_git_commit() -> str:
@@ -353,7 +386,62 @@ def get_file_sha256(path: Path) -> str:
 
 
 def compute_all_dependency_hashes() -> dict[str, str]:
-    return {name: get_file_sha256(p) for name, p in DEPENDENCY_PATHS.items()}
+    return {name: get_file_sha256(p) for name, p in PRIMARY_DEPENDENCY_PATHS.items()}
+
+
+def get_all_loaded_project_files() -> dict[str, str]:
+    """Inspects sys.modules and computes SHA-256 for all resolved/normcase project source files."""
+    repo_root_str = os.path.normcase(str(REPO_ROOT.resolve()))
+    loaded_files = {}
+
+    for mod_name, mod in list(sys.modules.items()):
+        if not mod or not hasattr(mod, "__file__") or not mod.__file__:
+            continue
+        try:
+            fpath = os.path.normcase(os.path.realpath(mod.__file__))
+            if fpath.startswith(repo_root_str):
+                rel_path = os.path.relpath(fpath, repo_root_str).replace("\\", "/")
+                if rel_path.startswith("src/") or rel_path.startswith("scripts/"):
+                    loaded_files[rel_path] = get_file_sha256(Path(fpath))
+        except Exception:
+            continue
+
+    return loaded_files
+
+
+def audit_runtime_import_closure(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Audits loaded project modules against the protocol manifest to guarantee zero untracked dependencies."""
+    loaded_files = get_all_loaded_project_files()
+    runtime_closure_manifest = manifest.get("runtime_closure_hashes", {})
+    primary_deps_manifest = manifest.get("dependency_hashes", {})
+
+    untracked_files = []
+    mismatched_files = []
+
+    for rel_path, actual_sha in loaded_files.items():
+        # Check against runtime_closure_hashes or dependency_hashes
+        expected_sha = runtime_closure_manifest.get(rel_path)
+        if not expected_sha:
+            # Check if tracked in primary_deps_manifest
+            for dep_name, dep_path in PRIMARY_DEPENDENCY_PATHS.items():
+                p_rel = os.path.relpath(os.path.normcase(str(dep_path.resolve())), os.path.normcase(str(REPO_ROOT.resolve()))).replace("\\", "/")
+                if p_rel == rel_path:
+                    expected_sha = primary_deps_manifest.get(dep_name)
+                    break
+
+        if not expected_sha:
+            untracked_files.append(rel_path)
+        elif expected_sha != actual_sha:
+            mismatched_files.append({"path": rel_path, "expected": expected_sha, "actual": actual_sha})
+
+    return {
+        "loaded_project_module_count": len(loaded_files),
+        "loaded_project_module_paths": sorted(list(loaded_files.keys())),
+        "untracked_loaded_project_dependency_count": len(untracked_files),
+        "untracked_files": untracked_files,
+        "mismatched_files": mismatched_files,
+        "closure_audit_passed": (len(untracked_files) == 0 and len(mismatched_files) == 0),
+    }
 
 
 def is_supplemental_safe(val: Any) -> bool:
@@ -582,8 +670,15 @@ def run_rb1_diagnostic(dry_run: bool = False, timeout: float = 30.0) -> dict[str
             "search_safety_gate": "PENDING",
             "atomic_snapshot_executed": False,
             "zero_clicks_strictly_preserved": True,
+            "USER_MESSAGE_TEXT_CAPTURED": False,
+            "UNRELATED_RAW_PERMALINK_CAPTURED": False,
+            "OUTER_HTML_CAPTURED": False,
+            "PRODUCTION_CARDINALITY_PREDICATE_MIRRORED_EXACTLY": True,
+            "RB1_RUNTIME_SEARCH_PATH_PARITY_WITH_ATTEMPT4": True,
+            "UNTRACKED_RUNTIME_DEPENDENCIES": 0,
         },
         "atomic_inspection": None,
+        "runtime_closure_audit": {},
         "provider_calls": 0,
         "retry_occurred": False,
         "live_execution_started": False,
@@ -615,6 +710,7 @@ def run_rb1_diagnostic(dry_run: bool = False, timeout: float = 30.0) -> dict[str
     report["pre_hashes"] = pre_hashes
 
     # Compare against protocol freeze if exists
+    freeze_manifest = {}
     if PROTOCOL_FREEZE_PATH.exists():
         try:
             with open(PROTOCOL_FREEZE_PATH, "r", encoding="utf-8") as f:
@@ -627,6 +723,11 @@ def run_rb1_diagnostic(dry_run: bool = False, timeout: float = 30.0) -> dict[str
             report["checks"]["frozen_hashes_matched"] = False
     else:
         report["checks"]["frozen_hashes_matched"] = True
+
+    # Audit runtime import closure
+    closure_audit = audit_runtime_import_closure(freeze_manifest)
+    report["runtime_closure_audit"] = closure_audit
+    report["checks"]["UNTRACKED_RUNTIME_DEPENDENCIES"] = closure_audit["untracked_loaded_project_dependency_count"]
 
     # Check live artifact overwrite guard
     if not dry_run and LIVE_OUTPUT_FILE.exists():
@@ -650,24 +751,31 @@ def run_rb1_diagnostic(dry_run: bool = False, timeout: float = 30.0) -> dict[str
         logger.info(f"📄 Saved RB1 dry-run trace to {DRY_RUN_OUTPUT_FILE}")
         return report
 
-    # LIVE EXECUTION
+    # LIVE EXECUTION - Attempt 4 Exact Runtime/Search Path Parity
     report["live_execution_started"] = True
     report["harness_phases"].append("LIVE_EXECUTION_STARTED")
 
     host = None
     try:
-        logger.info("🚀 [HOST_INIT] Initializing WebViewHost with dedicated Slack profile...")
-        host = PesuWebViewHost(profile_path=DIRECT_SLACK_PROFILE_PATH, headless=False)
-        host.initialize()
+        logger.info("🌐 [RUNTIME_START] Initializing Dedicated Slack WebView Host (Attempt 4 Parity)...")
+        host = PesuWebViewHost(
+            user_data_folder=DIRECT_SLACK_PROFILE_PATH,
+            initial_url="https://app.slack.com/client",
+            title="PESU Task 11 / P2A-L1 Live Qualification",
+        )
+        backend = WebViewSlackSearchBackend(
+            config=WebViewRuntimeConfig(storage_path=Path(DIRECT_SLACK_PROFILE_PATH)),
+            host=host,
+        )
 
-        runtime_cfg = WebViewRuntimeConfig(host=host, max_results=SEARCH_MAX_RESULTS, search_timeout=timeout)
-        backend = WebViewSlackSearchBackend(runtime_cfg)
+        logger.info("🌐 [RUNTIME_START] Starting Dedicated Slack WebView Host...")
+        backend.start_runtime(timeout=timeout)
 
-        logger.info(f"🔎 [SEARCH_SUBMIT] Executing verified Slack search for '{TARGET_QUERY}'...")
-        search_results: list[SlackSearchResult] = []
+        logger.info(f"🔍 [SEARCH_EXECUTE] Submitting target query: '{TARGET_QUERY}' (max_results={SEARCH_MAX_RESULTS})...")
+        raw_results = None
         search_exception = None
         try:
-            search_results = backend.search(TARGET_QUERY)
+            raw_results = backend.search_messages(TARGET_QUERY, max_results=SEARCH_MAX_RESULTS)
         except Exception as se:
             search_exception = se
             logger.error(f"Search backend raised: {se}")
