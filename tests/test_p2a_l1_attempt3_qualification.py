@@ -534,3 +534,250 @@ def test_23_production_src_diff_empty():
         check=True,
     )
     assert res.stdout.strip() == "", f"Production src/ diff is not empty!\n{res.stdout}"
+
+
+def test_24_submit_executed_maps_to_input_ready_true():
+    """Correction 1: SUBMIT_EXECUTED in production backend represents successful post-input stage.
+    Verify:
+    - input_ever_observed = True
+    - final_input_count > 0
+    - last_confirmed_stage = 'SUBMIT_EXECUTED'
+    -> search_input_ready == True
+    - evaluate_live_gate() evaluates to True for compliant live report.
+    """
+    class MockBackend:
+        last_search_telemetry = {
+            "activation_dispatched": True,
+            "modal_ever_observed": True,
+            "input_ever_observed": True,
+            "final_input_count": 1,
+            "last_confirmed_stage": "SUBMIT_EXECUTED",
+            "onenter_invoked": True,
+            "safe_search_action_selected": True,
+            "verified_query_state_before_submit": True,
+            "search_surface_query_matches_requested": True,
+            "generic_default_onenter_used": False,
+            "slackbot_action_invoked": False,
+            "write_capable_action_invoked": False,
+            "unsafe_non_search_action_invoked": False,
+        }
+
+    report = {
+        "checks": {},
+        "safety_telemetry": {},
+        "live_action_inventory": {},
+        "search_telemetry": {},
+    }
+    harvest_search_telemetry(MockBackend(), None, report)
+
+    assert report["live_action_inventory"]["search_input_ready"] is True
+    assert report["search_telemetry"]["input_ready"] is True
+
+    # Also verify that a fully compliant synthetic report with SUBMIT_EXECUTED passes evaluate_live_gate
+    synthetic_report = {
+        "execution_mode": "LIVE",
+        "verdict": "PASS",
+        "P2A_L1": "QUALIFIED_LIVE",
+        "thread_root_data_extraction_live_validated": True,
+        "live_execution_started": True,
+        "live_execution_completed": True,
+        "checks": {
+            "frozen_protocol_respected": True,
+            "frozen_hashes_matched": True,
+            "target_identity_exact_match": True,
+            "target_fitness_contract_valid": True,
+            "pre_action_identity_check": "PASS",
+            "immediate_pre_activation_recheck": "PASS",
+            "reply_bar_guard_passed": True,
+            "existing_qualified_reply_bar_interaction_only": True,
+            "post_open_root_correlation": "PASS",
+            "canonical_root_captured": True,
+            "root_identity_exact_match": True,
+            "root_text_extracted": True,
+            "root_and_replies_distinct": True,
+            "evidence_item_identity_preserved": True,
+            "duplicate_evidence_count": 0,
+            "query_provenance_preserved": True,
+            "code_or_protocol_mutated_after_first_live": False,
+            "SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED": True,
+            "QUERY_STATE_VERIFIED_BEFORE_SUBMIT": True,
+            "SEARCH_SURFACE_QUERY_MATCHES_REQUESTED": True,
+            "root_extraction_result_source": "LIVE_DOM",
+        },
+        "safety_telemetry": {
+            "GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH": False,
+            "SLACKBOT_ACTION_INVOKED_BY_PESU": False,
+            "WRITE_CAPABLE_ACTION_INVOKED_BY_PESU": False,
+            "UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU": False,
+            "composer_focus": "UNKNOWN",
+            "composer_text_input": "UNKNOWN",
+            "composer_send": "UNKNOWN",
+        },
+        "live_action_inventory": {
+            "search_activation_dispatches": 1,
+            "search_modal_observed": True,
+            "search_input_ready": report["live_action_inventory"]["search_input_ready"],
+            "search_submissions": 1,
+            "reply_bar_clicks": 1,
+            "pure_read_dom_extractions": 1,
+            "new_ui_actions_added": 0,
+            "new_click_targets_added": 0,
+        },
+        "search_telemetry": {
+            "modal_ever_observed": True,
+            "input_ready": report["search_telemetry"]["input_ready"],
+        },
+        "provider_calls": 0,
+        "retry_occurred": False,
+    }
+    assert evaluate_live_gate(synthetic_report) is True
+
+
+def test_25_supplemental_composer_missing_maps_to_unknown():
+    """Correction 2: Missing supplemental composer telemetry must NOT be fabricated as 0.
+    Missing fields must map to 'UNKNOWN'.
+    """
+    class MockBackendWithoutComposer:
+        last_search_telemetry = {
+            "activation_dispatched": True,
+            "modal_ever_observed": True,
+            "input_ever_observed": True,
+            "final_input_count": 1,
+            "last_confirmed_stage": "SUBMIT_EXECUTED",
+            "onenter_invoked": True,
+            "safe_search_action_selected": True,
+            "verified_query_state_before_submit": True,
+            "search_surface_query_matches_requested": True,
+            # No composer_* keys present
+        }
+
+    report = {
+        "checks": {},
+        "safety_telemetry": {},
+        "live_action_inventory": {},
+        "search_telemetry": {},
+    }
+    harvest_search_telemetry(MockBackendWithoutComposer(), None, report)
+
+    assert report["safety_telemetry"]["composer_focus"] == "UNKNOWN"
+    assert report["safety_telemetry"]["composer_text_input"] == "UNKNOWN"
+    assert report["safety_telemetry"]["composer_send"] == "UNKNOWN"
+    assert report["safety_telemetry"]["composer_focus"] != 0
+    assert report["safety_telemetry"]["composer_text_input"] != 0
+    assert report["safety_telemetry"]["composer_send"] != 0
+
+
+def test_26_unknown_composer_passes_search_authority_gate():
+    """Correction 2: UNKNOWN composer telemetry + all core safety valid passes gate.
+    Contract: SUPPLEMENTAL_NOT_REQUIRED_FOR_VERIFIED_SAFE
+    """
+    report = {
+        "checks": {
+            "SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED": True,
+            "QUERY_STATE_VERIFIED_BEFORE_SUBMIT": True,
+            "SEARCH_SURFACE_QUERY_MATCHES_REQUESTED": True,
+        },
+        "safety_telemetry": {
+            "GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH": False,
+            "SLACKBOT_ACTION_INVOKED_BY_PESU": False,
+            "WRITE_CAPABLE_ACTION_INVOKED_BY_PESU": False,
+            "UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU": False,
+            "composer_focus": "UNKNOWN",
+            "composer_text_input": "UNKNOWN",
+            "composer_send": "UNKNOWN",
+        },
+        "live_action_inventory": {
+            "search_submissions": 1,
+        },
+    }
+    ok, reason = evaluate_search_safety_and_query_authority(report)
+    assert ok is True
+    assert reason == "VERIFIED_SAFE_AND_CORRELATED"
+
+
+def test_27_explicit_composer_violations_fail_closed():
+    """Correction 2: Explicit violations (True / non-zero) must FAIL_CLOSED.
+    - explicit composer_focus=True -> FAIL_CLOSED
+    - explicit composer_text_input/non-zero -> FAIL_CLOSED
+    - explicit composer_send=True -> FAIL_CLOSED
+    """
+    base_report = {
+        "checks": {
+            "SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED": True,
+            "QUERY_STATE_VERIFIED_BEFORE_SUBMIT": True,
+            "SEARCH_SURFACE_QUERY_MATCHES_REQUESTED": True,
+        },
+        "safety_telemetry": {
+            "GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH": False,
+            "SLACKBOT_ACTION_INVOKED_BY_PESU": False,
+            "WRITE_CAPABLE_ACTION_INVOKED_BY_PESU": False,
+            "UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU": False,
+            "composer_focus": "UNKNOWN",
+            "composer_text_input": "UNKNOWN",
+            "composer_send": "UNKNOWN",
+        },
+        "live_action_inventory": {
+            "search_submissions": 1,
+        },
+    }
+
+    # Focus violation: True
+    r1 = json.loads(json.dumps(base_report))
+    r1["safety_telemetry"]["composer_focus"] = True
+    ok, reason = evaluate_search_safety_and_query_authority(r1)
+    assert ok is False
+    assert reason == "EXPLICIT_SAFETY_VIOLATION_COMPOSER_FOCUS"
+
+    # Input violation: non-zero count
+    r2 = json.loads(json.dumps(base_report))
+    r2["safety_telemetry"]["composer_text_input"] = 1
+    ok, reason = evaluate_search_safety_and_query_authority(r2)
+    assert ok is False
+    assert reason == "EXPLICIT_SAFETY_VIOLATION_COMPOSER_INPUT"
+
+    # Send violation: True
+    r3 = json.loads(json.dumps(base_report))
+    r3["safety_telemetry"]["composer_send"] = True
+    ok, reason = evaluate_search_safety_and_query_authority(r3)
+    assert ok is False
+    assert reason == "EXPLICIT_SAFETY_VIOLATION_COMPOSER_SEND"
+
+
+def test_28_live_artifact_overwrite_guard():
+    """Correction 3: Attempt 3 live artifact overwrite guard.
+    - live artifact exists -> zero UI actions, FAIL_CLOSED, artifact unchanged
+    - live artifact absent -> allowed to proceed to preflight
+    - dry-run artifact existence does not block live solely by itself
+    """
+    import scripts.qualify_task11q4_p2a_live_root_extraction_attempt3 as runner_mod
+
+    dummy_live_file = runner_mod.LIVE_OUTPUT_FILE
+    assert not dummy_live_file.exists(), "Precondition failed: live artifact already exists on disk!"
+
+    try:
+        dummy_live_file.parent.mkdir(parents=True, exist_ok=True)
+        original_bytes = b'{"dummy": "original_live_artifact_attempt3"}'
+        dummy_live_file.write_bytes(original_bytes)
+        orig_hash = hashlib.sha256(original_bytes).hexdigest()
+
+        report = runner_mod.run_p2a_l1_qualification(dry_run=False)
+
+        assert report["verdict"] == "FAIL_CLOSED"
+        assert report["error"] == "LIVE_ARTIFACT_ALREADY_EXISTS_ONE_SHOT_REPLAY_FORBIDDEN"
+        assert report["P2A_L1"] == "FAIL_CLOSED"
+        assert report.get("live_execution_started", False) is False
+        assert report["live_action_inventory"]["search_activation_dispatches"] == 0
+        assert report["live_action_inventory"]["search_submissions"] == 0
+        assert report["live_action_inventory"]["reply_bar_clicks"] == 0
+        assert report["live_action_inventory"]["pure_read_dom_extractions"] == 0
+
+        current_bytes = dummy_live_file.read_bytes()
+        assert current_bytes == original_bytes
+        assert hashlib.sha256(current_bytes).hexdigest() == orig_hash
+    finally:
+        if dummy_live_file.exists():
+            dummy_live_file.unlink()
+
+    assert not dummy_live_file.exists()
+    assert runner_mod.DRY_RUN_OUTPUT_FILE.exists()
+    assert not runner_mod.LIVE_OUTPUT_FILE.exists()

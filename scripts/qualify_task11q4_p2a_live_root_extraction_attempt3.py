@@ -229,6 +229,7 @@ def harvest_search_telemetry(
                 "INPUT_OBSERVED",
                 "SETTER_EXECUTED",
                 "SUBMIT_TRIGGERED",
+                "SUBMIT_EXECUTED",
                 "RESULTS_WAIT_STARTED",
                 "RESULTS_RENDERED",
                 "COMPLETED",
@@ -323,6 +324,27 @@ def harvest_search_telemetry(
     else:
         safety["UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU"] = "UNKNOWN"
 
+    # 9. Supplemental composer telemetry (RD1 Run 2 semantics: missing/UNKNOWN does not block; explicit True/non-zero fails closed)
+    def _clean_supp(val: Any) -> Any:
+        return "UNKNOWN" if val is None or val == "UNKNOWN" else val
+
+    safety["composer_focus"] = _clean_supp(telemetry.get("composer_focus"))
+    safety["composer_text_input"] = _clean_supp(telemetry.get("composer_text_input"))
+    safety["composer_send"] = _clean_supp(telemetry.get("composer_send"))
+
+
+def is_supplemental_safe(val: Any) -> bool:
+    """Returns True if supplemental composer telemetry observation is safe.
+
+    Semantics:
+    - missing / UNKNOWN / None / NOT_RUN -> True (allowed; does not block VERIFIED_SAFE)
+    - 0 / False -> True (safe supplemental observation)
+    - explicit True / non-zero / any other value -> False (triggers FAIL_CLOSED)
+    """
+    if val in (0, None, "UNKNOWN", False, "NOT_RUN"):
+        return True
+    return False
+
 
 def evaluate_search_safety_and_query_authority(report: dict[str, Any]) -> tuple[bool, str]:
     """Evaluates authoritative search safety and query authority before trusting results.
@@ -352,15 +374,15 @@ def evaluate_search_safety_and_query_authority(report: dict[str, Any]) -> tuple[
     if safety.get("UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU") is True:
         return False, "EXPLICIT_SAFETY_VIOLATION_UNSAFE_NON_SEARCH"
 
-    # Supplemental composer safety violations
-    comp_f = safety.get("composer_focus", 0)
-    comp_i = safety.get("composer_text_input", 0)
-    comp_s = safety.get("composer_send", 0)
-    if comp_f not in (0, None, "UNKNOWN", False):
+    # Supplemental composer safety violations (missing/UNKNOWN does not block; explicit True/non-zero fails closed)
+    comp_f = safety.get("composer_focus")
+    comp_i = safety.get("composer_text_input")
+    comp_s = safety.get("composer_send")
+    if not is_supplemental_safe(comp_f):
         return False, "EXPLICIT_SAFETY_VIOLATION_COMPOSER_FOCUS"
-    if comp_i not in (0, None, "UNKNOWN", False):
+    if not is_supplemental_safe(comp_i):
         return False, "EXPLICIT_SAFETY_VIOLATION_COMPOSER_INPUT"
-    if comp_s not in (0, None, "UNKNOWN", False):
+    if not is_supplemental_safe(comp_s):
         return False, "EXPLICIT_SAFETY_VIOLATION_COMPOSER_SEND"
 
     # Required core safety
@@ -503,9 +525,9 @@ def evaluate_live_gate(report: dict[str, Any]) -> bool:
         and safety.get("SLACKBOT_ACTION_INVOKED_BY_PESU") is False
         and safety.get("WRITE_CAPABLE_ACTION_INVOKED_BY_PESU") is False
         and safety.get("UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU") is False
-        and safety.get("composer_focus") == 0
-        and safety.get("composer_text_input") == 0
-        and safety.get("composer_send") == 0
+        and is_supplemental_safe(safety.get("composer_focus"))
+        and is_supplemental_safe(safety.get("composer_text_input"))
+        and is_supplemental_safe(safety.get("composer_send"))
         and actions.get("search_activation_dispatches") == 1
         and actions.get("search_modal_observed") is True
         and actions.get("search_input_ready") is True
@@ -641,9 +663,9 @@ def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> di
             "WRITE_CAPABLE_ACTION_INVOKED_BY_PESU": False,
             "UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU": False,
             "GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH": False,
-            "composer_focus": 0,
-            "composer_text_input": 0,
-            "composer_send": 0,
+            "composer_focus": "NOT_RUN" if dry_run else "UNKNOWN",
+            "composer_text_input": "NOT_RUN" if dry_run else "UNKNOWN",
+            "composer_send": "NOT_RUN" if dry_run else "UNKNOWN",
         },
         "error": None,
         "duration_seconds": 0.0,
@@ -746,6 +768,16 @@ def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> di
     # -------------------------------------------------------------
     # LIVE EXECUTION PATH
     # -------------------------------------------------------------
+    # Guard: MAX_LIVE_EXECUTIONS = 1. Prevent accidental second execution from overwriting native live artifact!
+    if LIVE_OUTPUT_FILE.exists():
+        logger.error(f"❌ Live artifact already exists at {LIVE_OUTPUT_FILE}! One-shot replay is forbidden. Failing closed.")
+        report["error"] = "LIVE_ARTIFACT_ALREADY_EXISTS_ONE_SHOT_REPLAY_FORBIDDEN"
+        report["verdict"] = "FAIL_CLOSED"
+        report["P2A_L1"] = "FAIL_CLOSED"
+        report["thread_root_data_extraction_live_validated"] = False
+        report["duration_seconds"] = round(time.time() - start_time, 2)
+        return report
+
     # If live run, frozen_hashes_matched is strictly mandatory
     if not frozen_hashes_valid:
         report["error"] = "PRE_EXECUTION_HASH_MISMATCH_WITH_PROTOCOL_FREEZE"
@@ -935,13 +967,14 @@ def run_p2a_l1_qualification(dry_run: bool = False, timeout: float = 30.0) -> di
             logger.warning(f"Error destroying host: {destroy_err}")
 
         # Write output trace artifact (guaranteed on all terminal paths: success, FAIL_NOT_RESIDENT, exception)
-        try:
-            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-            with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-                json.dump(report, f, indent=2, ensure_ascii=False)
-            logger.info(f"📄 Saved qualification trace to {OUTPUT_FILE}")
-        except Exception as write_err:
-            logger.error(f"Failed to write qualification trace: {write_err}")
+        if not (not dry_run and report.get("error") == "LIVE_ARTIFACT_ALREADY_EXISTS_ONE_SHOT_REPLAY_FORBIDDEN"):
+            try:
+                OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+                with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
+                    json.dump(report, f, indent=2, ensure_ascii=False)
+                logger.info(f"📄 Saved qualification trace to {OUTPUT_FILE}")
+            except Exception as write_err:
+                logger.error(f"Failed to write qualification trace: {write_err}")
 
     return report
 
