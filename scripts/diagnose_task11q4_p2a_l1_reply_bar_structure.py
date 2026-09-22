@@ -764,6 +764,38 @@ def run_rb1_diagnostic(dry_run: bool = False, timeout: float = 30.0) -> dict[str
     report["runtime_closure_audit"] = closure_audit
     report["checks"]["UNTRACKED_RUNTIME_DEPENDENCIES"] = closure_audit["untracked_loaded_project_dependency_count"]
 
+    # PRE-WEBVIEW HARD GATE: Frozen dependency & runtime closure integrity
+    if not report["checks"]["frozen_hashes_matched"]:
+        logger.error("❌ [HARD_GATE_FAIL] Pre-WebView Hard Gate: Frozen dependency hash mismatch detected!")
+        report["error"] = "PRE_WEBVIEW_HARD_GATE_FAILED_FROZEN_HASH_MISMATCH"
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "INTEGRITY_MISMATCH"
+        report["duration_seconds"] = round(time.time() - start_time, 2)
+        output_dest = DRY_RUN_OUTPUT_FILE if dry_run else LIVE_OUTPUT_FILE
+        try:
+            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            with open(output_dest, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
+        except Exception as we:
+            logger.error(f"Failed to write trace: {we}")
+        return report
+
+    if not closure_audit.get("closure_audit_passed", False) or closure_audit.get("untracked_loaded_project_dependency_count", 0) > 0:
+        logger.error("❌ [HARD_GATE_FAIL] Pre-WebView Hard Gate: Untracked runtime dependency detected!")
+        report["error"] = "PRE_WEBVIEW_HARD_GATE_FAILED_UNTRACKED_RUNTIME_DEPENDENCY"
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "INTEGRITY_MISMATCH"
+        report["duration_seconds"] = round(time.time() - start_time, 2)
+        output_dest = DRY_RUN_OUTPUT_FILE if dry_run else LIVE_OUTPUT_FILE
+        try:
+            OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+            with open(output_dest, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
+        except Exception as we:
+            logger.error(f"Failed to write trace: {we}")
+        return report
+
+
     # Check live artifact overwrite guard
     if not dry_run and LIVE_OUTPUT_FILE.exists():
         logger.error(f"❌ LIVE artifact already exists: {LIVE_OUTPUT_FILE}. Replay forbidden!")

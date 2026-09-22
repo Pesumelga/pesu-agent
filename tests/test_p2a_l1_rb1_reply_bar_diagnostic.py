@@ -482,3 +482,78 @@ def test_19_zero_clicks_strictly_preserved():
     assert contracts.get("MAX_RETRIES") == 0
     assert report["checks"].get("ACTION_CONTRACTS_SATISFIED") is True
 
+
+
+def test_20_frozen_hash_mismatch_blocks_live_before_webview(monkeypatch, tmp_path):
+    """Proves that any frozen hash mismatch fails closed BEFORE WebView construction or Slack search.
+
+    Ensures:
+    - frozen hash mismatch detected
+    - verdict == FAIL_CLOSED
+    - diagnostic reason == INTEGRITY_MISMATCH
+    - error == PRE_WEBVIEW_HARD_GATE_FAILED_FROZEN_HASH_MISMATCH
+    - WebView constructor call count == 0
+    - start_runtime call count == 0
+    - Slack search call count == 0
+    - DOM evaluate call count == 0
+    - reply-bar click count == 0
+    - live_execution_started == False
+    """
+    import scripts.diagnose_task11q4_p2a_l1_reply_bar_structure as runner_mod
+
+    # Redirect live output file so real live artifact is never touched
+    monkeypatch.setattr(runner_mod, "LIVE_OUTPUT_FILE", tmp_path / "mock_live_artifact.json")
+
+    # Tracking calls to ensure zero live actions / zero webview operations
+    webview_init_calls = []
+    start_runtime_calls = []
+    search_calls = []
+    evaluate_calls = []
+
+    class MockHost:
+        def __init__(self, *args, **kwargs):
+            webview_init_calls.append((args, kwargs))
+        def evaluate_js(self, *args, **kwargs):
+            evaluate_calls.append((args, kwargs))
+            return {}
+        def destroy(self):
+            pass
+
+    class MockBackend:
+        def __init__(self, *args, **kwargs):
+            pass
+        def start_runtime(self, *args, **kwargs):
+            start_runtime_calls.append((args, kwargs))
+        def search_messages(self, *args, **kwargs):
+            search_calls.append((args, kwargs))
+            return []
+
+    monkeypatch.setattr(runner_mod, "PesuWebViewHost", MockHost)
+    monkeypatch.setattr(runner_mod, "WebViewSlackSearchBackend", MockBackend)
+
+    # Monkeypatch compute_all_dependency_hashes to simulate a hash mismatch
+    orig_compute = runner_mod.compute_all_dependency_hashes
+    def mock_compute_hashes():
+        real_hashes = orig_compute()
+        real_hashes["rb1_runner"] = "0000000000000000000000000000000000000000000000000000000000000000"
+        return real_hashes
+
+    monkeypatch.setattr(runner_mod, "compute_all_dependency_hashes", mock_compute_hashes)
+
+    # Run in LIVE mode (dry_run=False)
+    report = runner_mod.run_rb1_diagnostic(dry_run=False)
+
+    # Verify hard-gate fail-closed contract
+    assert report["checks"]["frozen_hashes_matched"] is False
+    assert report["verdict"] == "FAIL_CLOSED"
+    assert report["diagnostic_verdict"] == "INTEGRITY_MISMATCH"
+    assert report["error"] == "PRE_WEBVIEW_HARD_GATE_FAILED_FROZEN_HASH_MISMATCH"
+    assert report["live_execution_started"] is False
+
+    # Verify zero webview / search / DOM / click calls
+    assert len(webview_init_calls) == 0, f"Expected 0 WebView inits, got {len(webview_init_calls)}"
+    assert len(start_runtime_calls) == 0, f"Expected 0 start_runtime calls, got {len(start_runtime_calls)}"
+    assert len(search_calls) == 0, f"Expected 0 search calls, got {len(search_calls)}"
+    assert len(evaluate_calls) == 0, f"Expected 0 evaluate_js calls, got {len(evaluate_calls)}"
+    assert report["live_action_inventory"]["reply_bar_clicks"] == 0
+
