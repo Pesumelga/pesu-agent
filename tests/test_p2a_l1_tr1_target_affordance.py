@@ -667,3 +667,57 @@ def test_top5_bound_applies_after_rendered_row_filter():
     assert filter_pos != -1
     assert slice_pos != -1
     assert filter_pos < slice_pos
+
+
+# ---------------------------------------------------------------------------
+# 36-40. Search View Scope & Production Result Root Enumeration Parity
+# ---------------------------------------------------------------------------
+
+def test_tr1_result_rows_are_scoped_to_single_search_view():
+    """Requirement 36: TR1 result rows are scoped strictly to a single connected search_view."""
+    js = tr1.JS_INSPECT_TOP5_TARGET_AFFORDANCE
+    assert "searchViews.length !== 1" in js
+    assert "SEARCH_VIEW_COUNT_INVALID" in js
+    assert "searchView.querySelectorAll(searchRowSel)" in js
+    assert "document.querySelectorAll(searchRowSel)" not in js
+
+
+def test_tr1_uses_production_search_result_root_selectors():
+    """Requirement 37: TR1 uses exact production search result root selectors."""
+    from pesu_agent.search.webview_slack_search import (
+        SEARCH_RESULT_ROW_SELECTORS as PROD_SEARCH_RESULT_ROW_SELECTORS,
+        SEARCH_VIEW_SELECTOR as PROD_SEARCH_VIEW_SELECTOR,
+    )
+    assert tr1.SEARCH_VIEW_SELECTOR == PROD_SEARCH_VIEW_SELECTOR
+    assert tr1.SEARCH_RESULT_ROW_SELECTORS == PROD_SEARCH_RESULT_ROW_SELECTORS
+    assert tr1.SEARCH_VIEW_SELECTOR == '[data-qa="search_view"]'
+    assert tr1.SEARCH_RESULT_ROW_SELECTORS == '[data-qa="search_result"], [data-qa="search_message_result_item"], .c-search_result'
+
+
+def test_unrelated_virtual_list_item_outside_search_view_cannot_consume_rank():
+    """Requirement 38: Unrelated virtual-list items outside search_view cannot consume rank."""
+    js = tr1.JS_INSPECT_TOP5_TARGET_AFFORDANCE
+    # Strict exclusion: virtual-list-item is not queried at all
+    assert "virtual-list-item" not in js
+    # Scoped only to searchView
+    assert "searchView.querySelectorAll" in js
+
+
+def test_top5_applies_after_search_view_scoped_rendered_filter():
+    """Requirement 39: top-5 bound applies only after search_view-scoped positive geometry filter."""
+    js = tr1.JS_INSPECT_TOP5_TARGET_AFFORDANCE
+    scoped_query_pos = js.find("searchView.querySelectorAll(searchRowSel)")
+    geom_filter_pos = js.find("return (r.width > 0 && r.height > 0);")
+    slice_pos = js.find("allRows.slice(0, maxRows)")
+
+    assert scoped_query_pos != -1
+    assert geom_filter_pos != -1
+    assert slice_pos != -1
+    assert scoped_query_pos < geom_filter_pos < slice_pos
+
+
+def test_tr1_search_result_row_enumeration_parity_flag():
+    """Requirement 40: TR1_SEARCH_RESULT_ROW_ENUMERATION_PARITY is verified dynamically."""
+    assert tr1.verify_production_search_result_row_enumeration_parity() is True
+    report = tr1.run_tr1_diagnostic(dry_run=True)
+    assert report["checks"]["TR1_SEARCH_RESULT_ROW_ENUMERATION_PARITY"] is True

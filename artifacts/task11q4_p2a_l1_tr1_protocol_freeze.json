@@ -15,7 +15,8 @@
     "parity_invariants": {
       "TR1_SEARCH_TELEMETRY_AUTHORITY_PARITY_WITH_ATTEMPT4": true,
       "TR1_SEARCH_EXCEPTION_ORDER_PARITY_WITH_ATTEMPT4": true,
-      "TR1_SEARCH_SAFETY_GATE_PARITY_WITH_ATTEMPT4": true
+      "TR1_SEARCH_SAFETY_GATE_PARITY_WITH_ATTEMPT4": true,
+      "TR1_SEARCH_RESULT_ROW_ENUMERATION_PARITY": true
     }
   },
   "production_pre_click_guard_contract": {
@@ -82,7 +83,7 @@
     }
   },
   "dependency_hashes": {
-    "tr1_runner": "d5e0ba7215c50057bdb3097e874534e162c3db89e96d48f8e1244f31ecb71f3f",
+    "tr1_runner": "4521493fc9076aea284a07ecc336d2f01708bd707d77f475790c720b8a44df19",
     "slack_search": "d214bb7a845e965c8c364a932a074ee73036098b91869242f0b2459a70780f5c",
     "models": "4ec38c787923b668aa530a1e4edbd434f90821abd510ff2af332472db9e39064",
     "webview_thread_reader": "01fecd9934227742329af0de782f0170c3cce2527f66d32f98f075bf268f0d87",
@@ -96,7 +97,7 @@
     "slack_agent_window": "a82c01578068c85e4c2bf12070171c0ae67556bc334b99c845bb9519d3c6180f"
   },
   "runtime_closure_hashes": {
-    "scripts/diagnose_task11q4_p2a_l1_target_affordance_tr1.py": "d5e0ba7215c50057bdb3097e874534e162c3db89e96d48f8e1244f31ecb71f3f",
+    "scripts/diagnose_task11q4_p2a_l1_target_affordance_tr1.py": "4521493fc9076aea284a07ecc336d2f01708bd707d77f475790c720b8a44df19",
     "src/pesu_agent/__init__.py": "d1ae8793964867c74ef4628e2776faef093c59f23c635e2b6ab9837e042cd4bd",
     "src/pesu_agent/adapters/__init__.py": "3153bd5a614bb98e5efedd0178add069aa78236f8c001e55698ce1671438d975",
     "src/pesu_agent/adapters/slack_cdp.py": "cfa7b1a52c7443746941738c5dd281f8439f0bcd2b1ba94ca503ba05905c0a8d",
@@ -156,5 +157,13 @@
     "src/pesu_agent/security/credential_store.py": "ce3d8e8d7dd911527e9cb45790dbc4c6a006f07d2e8ad108a0945f10343fcd0c",
     "src/pesu_agent/security/read_only_barrier.py": "c42afe7ea78ff9b1e2e9fd922d0249508ea4b15ce280e3529665acc95c72646c",
     "src/pesu_agent/security/write_audit.py": "5560ec12f85886b49c2bd40c3faa2b9271680e1a04abdd97e37e324d1fc6f09e"
+  },
+  "production_search_result_row_enumeration": {
+    "search_view_scope": "[data-qa=\"search_view\"]",
+    "search_view_exact_count": 1,
+    "result_root_selectors": "[data-qa=\"search_result\"], [data-qa=\"search_message_result_item\"], .c-search_result",
+    "positive_geometry": "width > 0 && height > 0",
+    "slice_bound": "slice(0, maxRows)",
+    "global_virtual_list_scoping_forbidden": true
   }
 }

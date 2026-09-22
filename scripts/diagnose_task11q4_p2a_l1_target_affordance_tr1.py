@@ -58,6 +58,9 @@ from pesu_agent.runtime.pesu_webview_host import (
 )
 from pesu_agent.search.slack_search import SlackSearchResult
 from pesu_agent.search.webview_slack_search import (
+    JS_EXTRACT_SEARCH_RESULTS as PROD_JS_EXTRACT_SEARCH_RESULTS,
+    SEARCH_RESULT_ROW_SELECTORS as PROD_SEARCH_RESULT_ROW_SELECTORS,
+    SEARCH_VIEW_SELECTOR as PROD_SEARCH_VIEW_SELECTOR,
     WebViewRuntimeConfig,
     WebViewSlackSearchBackend,
 )
@@ -367,6 +370,63 @@ PRIMARY_DEPENDENCY_PATHS = {
 }
 
 DEPENDENCY_PATHS = PRIMARY_DEPENDENCY_PATHS
+
+
+def verify_production_search_result_row_enumeration_parity() -> bool:
+    """Verifies that TR1's search result row enumeration logic maintains exact semantic parity
+    with the authoritative production search path in WebviewSlackSearch.
+
+    Authoritative production path:
+    1. Scoped strictly to a single connected search_view ([data-qa="search_view"]).
+    2. Uses production result root selectors:
+       [data-qa="search_result"], [data-qa="search_message_result_item"], .c-search_result
+    3. Filters for connected and positive geometry (r.width > 0 && r.height > 0).
+    4. Bounds top-N candidates via slice(0, maxRows) after positive geometry filtering.
+    5. Never uses global document.querySelectorAll('[data-qa="virtual-list-item"]').
+    """
+    # 1. Selector Parity
+    if SEARCH_VIEW_SELECTOR != PROD_SEARCH_VIEW_SELECTOR:
+        logger.error(f"❌ SEARCH_VIEW_SELECTOR mismatch: {SEARCH_VIEW_SELECTOR} != {PROD_SEARCH_VIEW_SELECTOR}")
+        return False
+    if SEARCH_RESULT_ROW_SELECTORS != PROD_SEARCH_RESULT_ROW_SELECTORS:
+        logger.error(f"❌ SEARCH_RESULT_ROW_SELECTORS mismatch: {SEARCH_RESULT_ROW_SELECTORS} != {PROD_SEARCH_RESULT_ROW_SELECTORS}")
+        return False
+
+    # 2. Production Source Authority Checks
+    prod_required = [
+        "querySelectorAll('[data-qa=\"search_view\"]')",
+        "searchViews.length !== 1",
+        "querySelectorAll('[data-qa=\"search_result\"], [data-qa=\"search_message_result_item\"], .c-search_result')",
+        "r.width > 0 && r.height > 0",
+        "resultRoots.slice(0, maxSampleCount)",
+    ]
+    for snippet in prod_required:
+        if snippet not in PROD_JS_EXTRACT_SEARCH_RESULTS:
+            logger.error(f"❌ Missing expected snippet in production JS_EXTRACT_SEARCH_RESULTS: {snippet}")
+            return False
+
+    # 3. TR1 JS Snapshot Semantic Parity Checks
+    tr1_required = [
+        "document.querySelectorAll(searchViewSel)",
+        "searchViews.length !== 1",
+        "searchView.querySelectorAll(searchRowSel)",
+        "r.width > 0 && r.height > 0",
+        "allRows.slice(0, maxRows)",
+    ]
+    for snippet in tr1_required:
+        if snippet not in JS_INSPECT_TOP5_TARGET_AFFORDANCE:
+            logger.error(f"❌ Missing expected snippet in TR1 JS_INSPECT_TOP5_TARGET_AFFORDANCE: {snippet}")
+            return False
+
+    # 4. Strict Exclusion of Global Virtual-List Scoping
+    if "virtual-list-item" in JS_INSPECT_TOP5_TARGET_AFFORDANCE:
+        logger.error("❌ Forbidden virtual-list-item found in TR1 JS_INSPECT_TOP5_TARGET_AFFORDANCE")
+        return False
+    if "document.querySelectorAll(searchRowSel)" in JS_INSPECT_TOP5_TARGET_AFFORDANCE:
+        logger.error("❌ Forbidden unscoped document.querySelectorAll(searchRowSel) found in TR1 JS")
+        return False
+
+    return True
 
 
 def verify_production_pre_click_guard_contract() -> bool:
@@ -867,6 +927,7 @@ def run_tr1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict[
             "TR1_SEARCH_EXCEPTION_ORDER_PARITY_WITH_ATTEMPT4": True,
             "TR1_SEARCH_SAFETY_GATE_PARITY_WITH_ATTEMPT4": True,
             "TR1_PRODUCTION_PRE_CLICK_GUARD_CONTRACT_COMPLETE": False,
+            "TR1_SEARCH_RESULT_ROW_ENUMERATION_PARITY": False,
             "UNTRACKED_RUNTIME_DEPENDENCIES": 0,
             "ACTION_CONTRACTS_SATISFIED": True,
             "SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED": "UNKNOWN",
@@ -900,6 +961,15 @@ def run_tr1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict[
         report["error"] = "PRODUCTION_PRE_CLICK_GUARD_CONTRACT_MISMATCH"
         report["verdict"] = "FAIL_CLOSED"
         report["diagnostic_verdict"] = "PREFLIGHT_GUARD_CONTRACT_MISMATCH"
+        return report
+
+    # 1B. Dynamic Production Search Result Row Enumeration Parity Verification
+    row_enum_parity_ok = verify_production_search_result_row_enumeration_parity()
+    report["checks"]["TR1_SEARCH_RESULT_ROW_ENUMERATION_PARITY"] = row_enum_parity_ok
+    if not row_enum_parity_ok:
+        report["error"] = "SEARCH_RESULT_ROW_ENUMERATION_PARITY_MISMATCH"
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "ROW_ENUMERATION_PARITY_FAILED"
         return report
 
     # 2. Protocol Preflight Gate
