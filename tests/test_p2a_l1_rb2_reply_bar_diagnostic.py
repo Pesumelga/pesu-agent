@@ -324,22 +324,20 @@ def test_10_forensic_transition_surface_query_authority():
     assert rep["search_telemetry"]["search_surface_query_after"] == "다음에 대한 결과: 26년 하반기 간담회"
 
 
-def test_11_live_artifact_overwrite_guard():
-    dummy_live = runner_mod.LIVE_OUTPUT_FILE
-    dummy_live.parent.mkdir(parents=True, exist_ok=True)
-    created_dummy = False
-    if not dummy_live.exists():
-        dummy_live.write_text('{"dummy": true}', encoding="utf-8")
-        created_dummy = True
+def test_11_live_artifact_overwrite_guard(monkeypatch, tmp_path):
+    mock_live = tmp_path / "mock_live_output.json"
+    mock_live.write_text('{"dummy": true}', encoding="utf-8")
+    monkeypatch.setattr(runner_mod, "LIVE_OUTPUT_FILE", mock_live)
 
-    try:
-        report = run_rb2_diagnostic(dry_run=False)
-        assert report["verdict"] == "FAIL_CLOSED"
-        assert report["error"] == "LIVE_ARTIFACT_ALREADY_EXISTS_ONE_SHOT_REPLAY_FORBIDDEN"
-        assert report["diagnostic_verdict"] == "LIVE_ARTIFACT_ALREADY_EXISTS_ONE_SHOT_REPLAY_FORBIDDEN"
-    finally:
-        if created_dummy and dummy_live.exists():
-            dummy_live.unlink()
+    report = run_rb2_diagnostic(dry_run=False)
+    assert report["verdict"] == "FAIL_CLOSED"
+    assert report["error"] == "LIVE_ARTIFACT_ALREADY_EXISTS_ONE_SHOT_REPLAY_FORBIDDEN"
+    assert report["diagnostic_verdict"] == "LIVE_ARTIFACT_ALREADY_EXISTS_ONE_SHOT_REPLAY_FORBIDDEN"
+    # Ensure test fixture was NOT deleted by runner
+    assert mock_live.exists() is True
+    # Ensure real production live artifact does NOT exist and was never touched
+    real_live = REPO_ROOT / "output" / "qualification_13_5d" / "live_trace" / "task11q4_p2a_l1_rb2_reply_bar_structure.json"
+    assert not real_live.exists()
 
 
 def test_12_dry_run_canonical_verdict_and_zero_live_actions():
@@ -605,3 +603,224 @@ def test_24_source_and_ast_parity_with_attempt4():
     assert "SEARCH_SUBMISSIONS_COUNT_INVALID" in a4_full_text
     assert "SEARCH_SURFACE_QUERY_MISMATCH" in rb2_gate_src
     assert "SEARCH_SURFACE_QUERY_MISMATCH" in a4_full_text
+
+
+def test_rb2_actual_attempt4_runtime_constructor_parity():
+    """Validates that RB2 host constructor, backend constructor, and runtime lifecycle
+    exact mirror the authoritative Attempt 4 source AST (not mock assumptions)."""
+    with open(PROTOCOL_FREEZE_PATH, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    comp_auth = manifest.get("comparison_authority", {})
+    a4_runner_path = REPO_ROOT / comp_auth["attempt4_runner"]
+    assert a4_runner_path.exists()
+    assert hashlib.sha256(a4_runner_path.read_bytes()).hexdigest() == comp_auth["attempt4_runner_sha256"]
+
+    a4_tree = ast.parse(a4_runner_path.read_text(encoding="utf-8"))
+    rb2_tree = ast.parse((REPO_ROOT / "scripts" / "diagnose_task11q4_p2a_l1_reply_bar_structure_rb2.py").read_text(encoding="utf-8"))
+
+    # Extract PesuWebViewHost call from Attempt 4
+    a4_host_call = None
+    for node in ast.walk(a4_tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "PesuWebViewHost":
+            a4_host_call = node
+            break
+    assert a4_host_call is not None, "PesuWebViewHost call not found in Attempt 4!"
+
+    a4_kwargs = {kw.arg: ast.unparse(kw.value) for kw in a4_host_call.keywords}
+    assert a4_kwargs["user_data_folder"] == "DIRECT_SLACK_PROFILE_PATH"
+    assert a4_kwargs["initial_url"] == "'https://app.slack.com/client'"
+    assert "data_dir" not in a4_kwargs
+
+    # Extract PesuWebViewHost call from RB2
+    rb2_host_call = None
+    for node in ast.walk(rb2_tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "PesuWebViewHost":
+            rb2_host_call = node
+            break
+    assert rb2_host_call is not None, "PesuWebViewHost call not found in RB2!"
+
+    rb2_kwargs = {kw.arg: ast.unparse(kw.value) for kw in rb2_host_call.keywords}
+    # Exact mirror of runtime-semantic arguments
+    assert rb2_kwargs["user_data_folder"] == a4_kwargs["user_data_folder"]
+    assert rb2_kwargs["initial_url"] == a4_kwargs["initial_url"]
+    assert "data_dir" not in rb2_kwargs, "data_dir must not be used in RB2!"
+    # Title may contain RB2 label
+    assert "RB2" in rb2_kwargs["title"]
+
+    # Extract WebViewSlackSearchBackend call in Attempt 4 and RB2
+    a4_backend_call = None
+    for node in ast.walk(a4_tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "WebViewSlackSearchBackend":
+            a4_backend_call = node
+            break
+    assert a4_backend_call is not None
+
+    rb2_backend_call = None
+    for node in ast.walk(rb2_tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "WebViewSlackSearchBackend":
+            rb2_backend_call = node
+            break
+    assert rb2_backend_call is not None
+
+    a4_b_kwargs = {kw.arg: ast.unparse(kw.value) for kw in a4_backend_call.keywords}
+    rb2_b_kwargs = {kw.arg: ast.unparse(kw.value) for kw in rb2_backend_call.keywords}
+    assert a4_b_kwargs["config"] == rb2_b_kwargs["config"]
+    assert a4_b_kwargs["host"] == rb2_b_kwargs["host"]
+
+    # Runtime lifecycle parity
+    rb2_src = inspect.getsource(runner_mod.run_rb2_diagnostic)
+    assert "backend.start_runtime(timeout=timeout)" in rb2_src
+    assert "backend.search_messages(TARGET_QUERY, max_results=SEARCH_MAX_RESULTS)" in rb2_src
+    assert "harvest_search_telemetry(backend, search_exception, report)" in rb2_src
+    assert "if search_exception is not None:" in rb2_src
+    assert "raise search_exception" in rb2_src
+    assert "host.destroy()" in rb2_src
+
+
+def test_rb2_frozen_permalink_thread_ts_group_is_group4():
+    """Validates that:
+    1. channel is parsed exact
+    2. message_ts is parsed exact
+    3. thread_ts is parsed exact
+    4. exact target row matches exactly once with m[4]
+    5. same permalink with query group read as m[3] must fail
+    """
+    frozen_permalink = SOURCE_RAW_PERMALINK
+    target_chan = EXPECTED_CHANNEL_ID
+    target_msg_ts = EXPECTED_MESSAGE_TS
+    target_root_ts = EXPECTED_ROOT_TS
+
+    # Node.js script executing the exact JS parser logic
+    js_test_code = rf"""
+    const permalink = {json.dumps(frozen_permalink)};
+    const targetChan = {json.dumps(target_chan)};
+    const targetMsgTs = {json.dumps(target_msg_ts)};
+    const targetRootTs = {json.dumps(target_root_ts)};
+
+    const regex = /\/archives\/([A-Z0-9]+)\/p(\d{{10}})(\d{{6}})(?:\?([^#\s]*))?/;
+    const m = permalink.match(regex);
+    if (!m) {{
+        console.log(JSON.stringify({{ error: "NO_MATCH" }}));
+        process.exit(1);
+    }}
+
+    const chan = m[1];
+    const normMsg = m[2] + '.' + m[3].padEnd(6, '0').slice(0, 6);
+
+    // Correct implementation with m[4]
+    const qStrCorrect = m[4] || '';
+    let thTsCorrect = null;
+    const thMatchCorrect = qStrCorrect.match(/(?:^|&)thread_ts=([0-9.]+)/);
+    if (thMatchCorrect) {{
+        thTsCorrect = thMatchCorrect[1];
+    }}
+
+    const isChanCorrect = (chan === targetChan);
+    const isMsgCorrect = (normMsg === targetMsgTs);
+    const isRootCorrect = (thTsCorrect === targetRootTs || (!thTsCorrect && normMsg === targetRootTs));
+    const targetMatchCorrect = isChanCorrect && isMsgCorrect && isRootCorrect;
+
+    // Buggy implementation with m[3]
+    const qStrBuggy = m[3] || '';
+    let thTsBuggy = null;
+    const thMatchBuggy = qStrBuggy.match(/(?:^|&)thread_ts=([0-9.]+)/);
+    if (thMatchBuggy) {{
+        thTsBuggy = thMatchBuggy[1];
+    }}
+
+    const isChanBuggy = (chan === targetChan);
+    const isMsgBuggy = (normMsg === targetMsgTs);
+    const isRootBuggy = (thTsBuggy === targetRootTs || (!thTsBuggy && normMsg === targetRootTs));
+    const targetMatchBuggy = isChanBuggy && isMsgBuggy && isRootBuggy;
+
+    console.log(JSON.stringify({{
+        chan: chan,
+        normMsg: normMsg,
+        thTsCorrect: thTsCorrect,
+        targetMatchCorrect: targetMatchCorrect,
+        qStrBuggy: qStrBuggy,
+        thTsBuggy: thTsBuggy,
+        targetMatchBuggy: targetMatchBuggy
+    }}));
+    """
+
+    res = subprocess.run(["node", "-e", js_test_code], capture_output=True, text=True, check=True)
+    parsed = json.loads(res.stdout.strip())
+
+    # 1. channel parsed exact
+    assert parsed["chan"] == target_chan == "C042WS25QAX"
+    # 2. message_ts parsed exact
+    assert parsed["normMsg"] == target_msg_ts == "1718079276.126469"
+    # 3. thread_ts parsed exact
+    assert parsed["thTsCorrect"] == target_root_ts == "1718058683.912369"
+    # 4. exact target row matches exactly once with m[4]
+    assert parsed["targetMatchCorrect"] is True
+
+    # 5. same permalink with query group read as m[3] must fail
+    assert parsed["qStrBuggy"] == "126469"
+    assert parsed["thTsBuggy"] is None
+    assert parsed["targetMatchBuggy"] is False
+
+    # Also verify that runner JS contains m[4] and not m[3] for qStr
+    assert "const qStr = m[4] || '';" in runner_mod.JS_INSPECT_TARGET_REPLY_BAR_STRUCTURE
+    assert "const qStr = m[3] || '';" not in runner_mod.JS_INSPECT_TARGET_REPLY_BAR_STRUCTURE
+
+
+def test_rb2_protocol_semantic_identity_mismatch_blocks_before_webview(monkeypatch, tmp_path):
+    """Validates that any semantic identity mismatch in the protocol manifest triggers
+    FAIL_CLOSED with PROTOCOL_SEMANTIC_IDENTITY_MISMATCH before WebView construction."""
+    monkeypatch.setattr(runner_mod, "LIVE_OUTPUT_FILE", tmp_path / "dummy_live.json")
+    monkeypatch.setattr(runner_mod, "PesuWebViewHost", MagicMock())
+
+    with open(PROTOCOL_FREEZE_PATH, "r", encoding="utf-8") as f:
+        base_manifest = json.load(f)
+
+    # Test cases of semantic corruptions
+    corruption_cases = [
+        ("protocol_name", "TASK11Q4_P2A_L1_RB1_REPLY_BAR_STRUCTURE"),
+        ("diagnostic_run", "RB1"),
+        ("live_output_file", "output/qualification_13_5d/live_trace/task11q4_p2a_l1_rb1_reply_bar_structure.json"),
+        ("dry_run_output_file", "output/qualification_13_5d/live_trace/task11q4_p2a_l1_rb1_reply_bar_structure_dry_run.json"),
+        ("canonical_dry_run_verdict", "FAIL_CLOSED"),
+        ("search_max_results", 10),
+    ]
+
+    for field, bad_value in corruption_cases:
+        corrupted = dict(base_manifest)
+        corrupted[field] = bad_value
+        bad_manifest_path = tmp_path / f"corrupted_{field}.json"
+        bad_manifest_path.write_text(json.dumps(corrupted), encoding="utf-8")
+        monkeypatch.setattr(runner_mod, "PROTOCOL_FREEZE_PATH", bad_manifest_path)
+
+        report = run_rb2_diagnostic(dry_run=False)
+        assert report["verdict"] == "FAIL_CLOSED", f"Failed to fail-closed on corrupted {field}"
+        assert report["diagnostic_verdict"] == "PROTOCOL_SEMANTIC_IDENTITY_MISMATCH", f"Wrong diagnostic verdict for {field}"
+        assert "PROTOCOL_SEMANTIC_IDENTITY_MISMATCH" in report["error"]
+        assert runner_mod.PesuWebViewHost.call_count == 0, f"WebViewHost was constructed despite {field} mismatch!"
+
+    # Test target_identity mismatch
+    corrupted_target = dict(base_manifest)
+    corrupted_target["target_identity"] = dict(base_manifest.get("target_identity", {}))
+    corrupted_target["target_identity"]["expected_channel_id"] = "C_WRONG_CHANNEL"
+    bad_manifest_path = tmp_path / "corrupted_target.json"
+    bad_manifest_path.write_text(json.dumps(corrupted_target), encoding="utf-8")
+    monkeypatch.setattr(runner_mod, "PROTOCOL_FREEZE_PATH", bad_manifest_path)
+
+    report = run_rb2_diagnostic(dry_run=False)
+    assert report["verdict"] == "FAIL_CLOSED"
+    assert report["diagnostic_verdict"] == "PROTOCOL_SEMANTIC_IDENTITY_MISMATCH"
+    assert runner_mod.PesuWebViewHost.call_count == 0
+
+    # Test comparison_authority SHA mismatch
+    corrupted_comp = dict(base_manifest)
+    corrupted_comp["comparison_authority"] = dict(base_manifest.get("comparison_authority", {}))
+    corrupted_comp["comparison_authority"]["attempt4_runner_sha256"] = "0000000000000000000000000000000000000000000000000000000000000000"
+    bad_manifest_path = tmp_path / "corrupted_comp_sha.json"
+    bad_manifest_path.write_text(json.dumps(corrupted_comp), encoding="utf-8")
+    monkeypatch.setattr(runner_mod, "PROTOCOL_FREEZE_PATH", bad_manifest_path)
+
+    report = run_rb2_diagnostic(dry_run=False)
+    assert report["verdict"] == "FAIL_CLOSED"
+    assert report["diagnostic_verdict"] == "PROTOCOL_SEMANTIC_IDENTITY_MISMATCH"
+    assert runner_mod.PesuWebViewHost.call_count == 0

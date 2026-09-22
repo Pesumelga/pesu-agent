@@ -1,5 +1,5 @@
 {
-  "protocol_name": "TASK11Q4_P2A_L1_RB1_REPLY_BAR_STRUCTURE",
+  "protocol_name": "TASK11Q4_P2A_L1_RB2_REPLY_BAR_STRUCTURE",
   "diagnostic_run": "RB2",
   "created_at": "2026-09-22T13:58:00+09:00",
   "authoritative_attempt4_runner": "scripts/qualify_task11q4_p2a_live_root_extraction_attempt4.py",
@@ -57,8 +57,8 @@
     "host_shutdown": "host.destroy()"
   },
   "output_paths": {
-    "live_output_file": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_rb1_reply_bar_structure.json",
-    "dry_run_output_file": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_rb1_reply_bar_structure_dry_run.json"
+    "live_output_file": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_rb2_reply_bar_structure.json",
+    "dry_run_output_file": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_rb2_reply_bar_structure_dry_run.json"
   },
   "prior_attempt_hashes": {
     "attempt1_trace_sha256": "f6f17e06f94808bac15dea32748526a1d146dac69ef0a75cc8a4467c5c8fd28e",
@@ -81,7 +81,7 @@
     "write_audit": "5560ec12f85886b49c2bd40c3faa2b9271680e1a04abdd97e37e324d1fc6f09e",
     "read_only_barrier": "c42afe7ea78ff9b1e2e9fd922d0249508ea4b15ce280e3529665acc95c72646c",
     "slack_agent_window": "a82c01578068c85e4c2bf12070171c0ae67556bc334b99c845bb9519d3c6180f",
-    "rb2_runner": "f3c42230987f1b8dcfab33a52ae61c7190f64ea9914eca27aea8dee7cb1e0f09"
+    "rb2_runner": "affb83a14725c587b219949681919771b6012463a029e3d79b2078a2a2039d64"
   },
   "runtime_closure_hashes": {
     "src/pesu_agent/__init__.py": "d1ae8793964867c74ef4628e2776faef093c59f23c635e2b6ab9837e042cd4bd",
@@ -143,7 +143,7 @@
     "src/pesu_agent/search/real_slack_backend.py": "2e15af2544fa6ad047c855ae9065b8544c2f8e6b771ede17c81a0d7bbf24b74c",
     "src/pesu_agent/search/slack_backend_factory.py": "c0151d0b4e57b42f72fae543a4b8490e62aed62c28c3c980bc10c78bf9b6b3bf",
     "src/pesu_agent/search/__init__.py": "5f1e2bb33d4a778fe263351804dc2b7cab52aad35253aa197ac2f312b8453ae5",
-    "scripts/diagnose_task11q4_p2a_l1_reply_bar_structure_rb2.py": "f3c42230987f1b8dcfab33a52ae61c7190f64ea9914eca27aea8dee7cb1e0f09"
+    "scripts/diagnose_task11q4_p2a_l1_reply_bar_structure_rb2.py": "affb83a14725c587b219949681919771b6012463a029e3d79b2078a2a2039d64"
   },
   "query_correlation_and_safety_gate": {
     "required_core_safety": [
@@ -187,5 +187,16 @@
       "RB2_SEARCH_EXCEPTION_ORDER_PARITY_WITH_ATTEMPT4": true,
       "RB2_SEARCH_SAFETY_GATE_PARITY_WITH_ATTEMPT4": true
     }
+  },
+  "live_output_file": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_rb2_reply_bar_structure.json",
+  "dry_run_output_file": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_rb2_reply_bar_structure_dry_run.json",
+  "target_identity": {
+    "target_query": "26년 하반기 간담회",
+    "expected_channel_id": "C042WS25QAX",
+    "expected_message_ts": "1718079276.126469",
+    "expected_root_ts": "1718058683.912369",
+    "source_rd1_run2_rank": 5,
+    "source_raw_permalink": "https://heumlabs.slack.com/archives/C042WS25QAX/p1718079276126469?thread_ts=1718058683.912369",
+    "search_max_results": 5
   }
 }

@@ -79,6 +79,7 @@ EXPECTED_MESSAGE_TS = "1718079276.126469"
 EXPECTED_ROOT_TS = "1718058683.912369"
 # Authoritative Comparison Reference
 AUTHORITATIVE_ATTEMPT4_RUNNER = "scripts/qualify_task11q4_p2a_live_root_extraction_attempt4.py"
+AUTHORITATIVE_ATTEMPT4_SHA256 = "b2f4c6972e1e1297045c7fe7d7f1e50492225d3bd073b311ee1dcadd967a905d"
 
 # Explicit Action Contracts (ONE_SEARCH_ZERO_CLICK_READ_ONLY_DIAGNOSTIC)
 MAX_SLACK_SEARCH_OPERATIONS = 1
@@ -163,7 +164,7 @@ JS_INSPECT_TARGET_REPLY_BAR_STRUCTURE = r"""
                 if (m) {
                     const chan = m[1];
                     const normMsg = m[2] + '.' + m[3].padEnd(6, '0').slice(0, 6);
-                    const qStr = m[3] || '';
+                    const qStr = m[4] || '';
                     let thTs = null;
                     const thMatch = qStr.match(/(?:^|&)thread_ts=([0-9.]+)/);
                     if (thMatch) {
@@ -875,14 +876,74 @@ def run_rb2_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict[
         report["verdict"] = "FAIL_CLOSED"
         return report
 
-    # 2. Protocol Freeze Verification
+    # 2. Protocol Freeze Verification & Semantic Identity Hard Gate
     if not PROTOCOL_FREEZE_PATH.exists():
         report["error"] = f"PROTOCOL_FREEZE_MANIFEST_MISSING: {PROTOCOL_FREEZE_PATH}"
         report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "PROTOCOL_FREEZE_MANIFEST_MISSING"
         return report
 
     with open(PROTOCOL_FREEZE_PATH, "r", encoding="utf-8") as f:
         protocol_manifest = json.load(f)
+
+    # Validate semantic identity of protocol manifest before WebView launch
+    sem_proto_name = protocol_manifest.get("protocol_name") or protocol_manifest.get("protocol")
+    sem_diag_run = protocol_manifest.get("diagnostic_run")
+    sem_live_out = protocol_manifest.get("live_output_file") or protocol_manifest.get("output_paths", {}).get("live_output_file")
+    sem_dry_out = protocol_manifest.get("dry_run_output_file") or protocol_manifest.get("output_paths", {}).get("dry_run_output_file")
+    sem_dry_verdict = protocol_manifest.get("canonical_dry_run_verdict")
+    sem_target = protocol_manifest.get("target_identity") or {}
+    comp_auth = protocol_manifest.get("comparison_authority", {})
+    sem_a4_sha = comp_auth.get("attempt4_runner_sha256")
+
+    semantic_errors = []
+    if sem_proto_name != PROTOCOL_NAME:
+        semantic_errors.append(f"protocol_name mismatch: {sem_proto_name} != {PROTOCOL_NAME}")
+    if sem_diag_run != DIAGNOSTIC_RUN:
+        semantic_errors.append(f"diagnostic_run mismatch: {sem_diag_run} != {DIAGNOSTIC_RUN}")
+    standard_live = "output/qualification_13_5d/live_trace/task11q4_p2a_l1_rb2_reply_bar_structure.json"
+    if LIVE_OUTPUT_FILE.is_relative_to(REPO_ROOT):
+        rel_live = str(LIVE_OUTPUT_FILE.relative_to(REPO_ROOT)).replace("\\", "/")
+        if sem_live_out != rel_live:
+            semantic_errors.append(f"live_output_file mismatch: {sem_live_out} != {rel_live}")
+    elif sem_live_out != standard_live:
+        semantic_errors.append(f"live_output_file mismatch: {sem_live_out} != {standard_live}")
+
+    standard_dry = "output/qualification_13_5d/live_trace/task11q4_p2a_l1_rb2_reply_bar_structure_dry_run.json"
+    if DRY_RUN_OUTPUT_FILE.is_relative_to(REPO_ROOT):
+        rel_dry = str(DRY_RUN_OUTPUT_FILE.relative_to(REPO_ROOT)).replace("\\", "/")
+        if sem_dry_out != rel_dry:
+            semantic_errors.append(f"dry_run_output_file mismatch: {sem_dry_out} != {rel_dry}")
+    elif sem_dry_out != standard_dry:
+        semantic_errors.append(f"dry_run_output_file mismatch: {sem_dry_out} != {standard_dry}")
+    if sem_dry_verdict != CANONICAL_DRY_RUN_VERDICT:
+        semantic_errors.append(f"canonical_dry_run_verdict mismatch: {sem_dry_verdict}")
+
+    for field_name, expected_val in [
+        ("target_query", TARGET_QUERY),
+        ("expected_channel_id", EXPECTED_CHANNEL_ID),
+        ("expected_message_ts", EXPECTED_MESSAGE_TS),
+        ("expected_root_ts", EXPECTED_ROOT_TS),
+        ("search_max_results", SEARCH_MAX_RESULTS),
+    ]:
+        top_val = protocol_manifest.get(field_name)
+        target_val = sem_target.get(field_name)
+        if top_val is not None and top_val != expected_val:
+            semantic_errors.append(f"{field_name} top-level mismatch: {top_val} != {expected_val}")
+        if target_val is not None and target_val != expected_val:
+            semantic_errors.append(f"{field_name} target_identity mismatch: {target_val} != {expected_val}")
+        if top_val is None and target_val is None:
+            semantic_errors.append(f"{field_name} missing from protocol manifest")
+
+    if sem_a4_sha != AUTHORITATIVE_ATTEMPT4_SHA256:
+        semantic_errors.append(f"attempt4_runner_sha256 mismatch: {sem_a4_sha}")
+
+    if semantic_errors:
+        report["error"] = f"PROTOCOL_SEMANTIC_IDENTITY_MISMATCH: {'; '.join(semantic_errors)}"
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "PROTOCOL_SEMANTIC_IDENTITY_MISMATCH"
+        logger.error(f"❌ Protocol semantic identity validation failed: {semantic_errors}")
+        return report
 
     pre_hashes = compute_all_dependency_hashes()
     report["pre_hashes"] = pre_hashes
@@ -939,7 +1000,8 @@ def run_rb2_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict[
     try:
         logger.info("🌐 [RUNTIME_START] Initializing Dedicated Slack WebView Host (Attempt 4 Parity)...")
         host = PesuWebViewHost(
-            data_dir=DIRECT_SLACK_PROFILE_PATH,
+            user_data_folder=DIRECT_SLACK_PROFILE_PATH,
+            initial_url="https://app.slack.com/client",
             title="PESU Task 11 / P2A-L1 / RB2 Live Qualification",
         )
         backend = WebViewSlackSearchBackend(
