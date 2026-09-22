@@ -1,3 +1,4 @@
+import re
 """Regression tests for Phase 13.5D / Task 11 / P2A-L1 / TR1 Target Affordance Diagnostic.
 
 Invariants verified:
@@ -721,3 +722,36 @@ def test_tr1_search_result_row_enumeration_parity_flag():
     assert tr1.verify_production_search_result_row_enumeration_parity() is True
     report = tr1.run_tr1_diagnostic(dry_run=True)
     assert report["checks"]["TR1_SEARCH_RESULT_ROW_ENUMERATION_PARITY"] is True
+
+
+def test_extra_row_filter_breaks_enumeration_parity():
+    """Requirement 41: Any extra row filter breaks enumeration parity."""
+    # Inject an extra predicate into the row filter
+    bad_js = tr1.JS_INSPECT_TOP5_TARGET_AFFORDANCE.replace(
+        "if (!el || !el.isConnected) return false;",
+        "if (!el || !el.isConnected) return false;\n            if (el.closest('[data-qa=\"search_filter\"]')) return false;"
+    )
+    assert tr1.verify_production_search_result_row_enumeration_parity(override_tr1_js=bad_js) is False
+
+
+def test_tr1_core_enumeration_has_no_extra_rank_affecting_predicate():
+    """Requirement 42: TR1 core enumeration has zero extra rank-affecting predicates."""
+    assert tr1.verify_production_search_result_row_enumeration_parity() is True
+    # Explicit check for absence of closest/filter/header/input in row enumeration
+    js = tr1.JS_INSPECT_TOP5_TARGET_AFFORDANCE
+    filter_m = re.search(r'searchView\.querySelectorAll\([^)]+\)\)\.filter\(el => \{(.*?)\}\);', js, re.DOTALL)
+    assert filter_m is not None
+    filter_body = filter_m.group(1)
+    assert "search_filter" not in filter_body
+    assert "search_header" not in filter_body
+    assert "search_input" not in filter_body
+    assert "closest(" not in filter_body
+
+
+def test_dynamic_row_enumeration_parity_failure_blocks_before_webview(monkeypatch):
+    """Requirement 43: Dynamic row enumeration parity failure blocks before WebView construction."""
+    monkeypatch.setattr(tr1, "verify_production_search_result_row_enumeration_parity", lambda **kw: False)
+    report = tr1.run_tr1_diagnostic(dry_run=True)
+    assert report["verdict"] == "FAIL_CLOSED"
+    assert report["diagnostic_verdict"] == "PREFLIGHT_ROW_ENUMERATION_PARITY_MISMATCH"
+    assert "PREFLIGHT_GATES_PASSED" not in report["harness_phases"]

@@ -133,10 +133,9 @@ JS_INSPECT_TOP5_TARGET_AFFORDANCE = r"""
         }
 
         const searchView = searchViews[0];
-        // Enforce RB2 parity: only rendered/visible rows (r.width > 0 && r.height > 0) consume top-5 ranks
+        // Enforce exact production parity: only rendered/visible rows (r.width > 0 && r.height > 0) consume top-5 ranks
         const allRows = Array.from(searchView.querySelectorAll(searchRowSel)).filter(el => {
             if (!el || !el.isConnected) return false;
-            if (el.closest('[data-qa="search_filter"], [data-qa="search_header"], [data-qa="search_input"]')) return false;
             const r = el.getBoundingClientRect();
             return (r.width > 0 && r.height > 0);
         });
@@ -372,7 +371,10 @@ PRIMARY_DEPENDENCY_PATHS = {
 DEPENDENCY_PATHS = PRIMARY_DEPENDENCY_PATHS
 
 
-def verify_production_search_result_row_enumeration_parity() -> bool:
+def verify_production_search_result_row_enumeration_parity(
+    override_tr1_js: Optional[str] = None,
+    override_prod_js: Optional[str] = None,
+) -> bool:
     """Verifies that TR1's search result row enumeration logic maintains exact semantic parity
     with the authoritative production search path in WebviewSlackSearch.
 
@@ -382,8 +384,12 @@ def verify_production_search_result_row_enumeration_parity() -> bool:
        [data-qa="search_result"], [data-qa="search_message_result_item"], .c-search_result
     3. Filters for connected and positive geometry (r.width > 0 && r.height > 0).
     4. Bounds top-N candidates via slice(0, maxRows) after positive geometry filtering.
-    5. Never uses global document.querySelectorAll('[data-qa="virtual-list-item"]').
+    5. Zero additional rank-affecting predicates (no header/filter/input exclusions in ranking).
+    6. Never uses global document.querySelectorAll('[data-qa="virtual-list-item"]').
     """
+    tr1_js = override_tr1_js or JS_INSPECT_TOP5_TARGET_AFFORDANCE
+    prod_js = override_prod_js or PROD_JS_EXTRACT_SEARCH_RESULTS
+
     # 1. Selector Parity
     if SEARCH_VIEW_SELECTOR != PROD_SEARCH_VIEW_SELECTOR:
         logger.error(f"❌ SEARCH_VIEW_SELECTOR mismatch: {SEARCH_VIEW_SELECTOR} != {PROD_SEARCH_VIEW_SELECTOR}")
@@ -392,7 +398,7 @@ def verify_production_search_result_row_enumeration_parity() -> bool:
         logger.error(f"❌ SEARCH_RESULT_ROW_SELECTORS mismatch: {SEARCH_RESULT_ROW_SELECTORS} != {PROD_SEARCH_RESULT_ROW_SELECTORS}")
         return False
 
-    # 2. Production Source Authority Checks
+    # 2. Production Source Authority Extraction
     prod_required = [
         "querySelectorAll('[data-qa=\"search_view\"]')",
         "searchViews.length !== 1",
@@ -401,9 +407,20 @@ def verify_production_search_result_row_enumeration_parity() -> bool:
         "resultRoots.slice(0, maxSampleCount)",
     ]
     for snippet in prod_required:
-        if snippet not in PROD_JS_EXTRACT_SEARCH_RESULTS:
+        if snippet not in prod_js:
             logger.error(f"❌ Missing expected snippet in production JS_EXTRACT_SEARCH_RESULTS: {snippet}")
             return False
+
+    # Extract production row filter body
+    prod_filter_m = re.search(
+        r'searchView\.querySelectorAll\([^)]+\)\)\.filter\(el => \{(.*?)\}\);',
+        prod_js,
+        re.DOTALL,
+    )
+    if not prod_filter_m:
+        logger.error("❌ Failed to extract production row filter body from PROD_JS_EXTRACT_SEARCH_RESULTS")
+        return False
+    prod_filter_norm = re.sub(r'\s+', '', prod_filter_m.group(1))
 
     # 3. TR1 JS Snapshot Semantic Parity Checks
     tr1_required = [
@@ -414,15 +431,48 @@ def verify_production_search_result_row_enumeration_parity() -> bool:
         "allRows.slice(0, maxRows)",
     ]
     for snippet in tr1_required:
-        if snippet not in JS_INSPECT_TOP5_TARGET_AFFORDANCE:
+        if snippet not in tr1_js:
             logger.error(f"❌ Missing expected snippet in TR1 JS_INSPECT_TOP5_TARGET_AFFORDANCE: {snippet}")
             return False
 
-    # 4. Strict Exclusion of Global Virtual-List Scoping
-    if "virtual-list-item" in JS_INSPECT_TOP5_TARGET_AFFORDANCE:
-        logger.error("❌ Forbidden virtual-list-item found in TR1 JS_INSPECT_TOP5_TARGET_AFFORDANCE")
+    # Extract TR1 row filter body
+    tr1_filter_m = re.search(
+        r'searchView\.querySelectorAll\([^)]+\)\)\.filter\(el => \{(.*?)\}\);',
+        tr1_js,
+        re.DOTALL,
+    )
+    if not tr1_filter_m:
+        logger.error("❌ Failed to extract TR1 row filter body from JS_INSPECT_TOP5_TARGET_AFFORDANCE")
         return False
-    if "document.querySelectorAll(searchRowSel)" in JS_INSPECT_TOP5_TARGET_AFFORDANCE:
+    tr1_filter_raw = tr1_filter_m.group(1)
+    tr1_filter_norm = re.sub(r'//.*', '', tr1_filter_raw)
+    tr1_filter_norm = re.sub(r'/\*.*?\*/', '', tr1_filter_norm, flags=re.DOTALL)
+    tr1_filter_norm = re.sub(r'\s+', '', tr1_filter_norm)
+
+    # Normalized filter body comparison: TR1 core filter must exactly match production
+    if tr1_filter_norm != prod_filter_norm:
+        logger.error(
+            f"❌ TR1 row filter body does not match production:\n  TR1: {tr1_filter_norm}\n  PROD: {prod_filter_norm}"
+        )
+        return False
+
+    # 4. Strict Exclusion of Extra Rank-Affecting Predicates
+    forbidden_predicates = [
+        "search_filter",
+        "search_header",
+        "search_input",
+        "closest(",
+        "virtual-list-item",
+    ]
+    for p in forbidden_predicates:
+        if p in tr1_filter_raw:
+            logger.error(f"❌ Forbidden extra rank-affecting predicate found in TR1 row filter: {p}")
+            return False
+
+    if "virtual-list-item" in tr1_js:
+        logger.error("❌ Forbidden virtual-list-item found anywhere in TR1 JS_INSPECT_TOP5_TARGET_AFFORDANCE")
+        return False
+    if "document.querySelectorAll(searchRowSel)" in tr1_js:
         logger.error("❌ Forbidden unscoped document.querySelectorAll(searchRowSel) found in TR1 JS")
         return False
 
@@ -969,7 +1019,7 @@ def run_tr1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict[
     if not row_enum_parity_ok:
         report["error"] = "SEARCH_RESULT_ROW_ENUMERATION_PARITY_MISMATCH"
         report["verdict"] = "FAIL_CLOSED"
-        report["diagnostic_verdict"] = "ROW_ENUMERATION_PARITY_FAILED"
+        report["diagnostic_verdict"] = "PREFLIGHT_ROW_ENUMERATION_PARITY_MISMATCH"
         return report
 
     # 2. Protocol Preflight Gate
@@ -983,6 +1033,25 @@ def run_tr1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict[
 
     with open(PROTOCOL_FREEZE_PATH, "r", encoding="utf-8") as f:
         protocol_manifest = json.load(f)
+
+    # Hard gate: both computed and protocol-declared row enumeration parity must be true
+    parity_inv = protocol_manifest.get("comparison_authority", {}).get("parity_invariants", {})
+    proto_declared_row_parity = parity_inv.get("TR1_SEARCH_RESULT_ROW_ENUMERATION_PARITY", False)
+    if not proto_declared_row_parity:
+        err_msg = "PROTOCOL_DECLARED_ROW_ENUMERATION_PARITY_MISSING_OR_FALSE"
+        logger.error(f"❌ {err_msg}")
+        report["error"] = err_msg
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "PROTOCOL_PARITY_DECLARATION_INVALID"
+        return report
+
+    if not (row_enum_parity_ok and proto_declared_row_parity):
+        err_msg = "ROW_ENUMERATION_PARITY_HARD_GATE_FAILED"
+        logger.error(f"❌ {err_msg}")
+        report["error"] = err_msg
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "ROW_ENUMERATION_PARITY_HARD_GATE_FAILED"
+        return report
 
     semantic_errors = []
     sem_proto = protocol_manifest.get("protocol")

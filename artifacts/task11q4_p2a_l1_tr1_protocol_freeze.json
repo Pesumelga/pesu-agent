@@ -83,7 +83,7 @@
     }
   },
   "dependency_hashes": {
-    "tr1_runner": "4521493fc9076aea284a07ecc336d2f01708bd707d77f475790c720b8a44df19",
+    "tr1_runner": "4ccd95175ec5ff26da5d1cfbd2cb663f7f12034093ec4eccf466f4e7701cc93c",
     "slack_search": "d214bb7a845e965c8c364a932a074ee73036098b91869242f0b2459a70780f5c",
     "models": "4ec38c787923b668aa530a1e4edbd434f90821abd510ff2af332472db9e39064",
     "webview_thread_reader": "01fecd9934227742329af0de782f0170c3cce2527f66d32f98f075bf268f0d87",
@@ -97,7 +97,7 @@
     "slack_agent_window": "a82c01578068c85e4c2bf12070171c0ae67556bc334b99c845bb9519d3c6180f"
   },
   "runtime_closure_hashes": {
-    "scripts/diagnose_task11q4_p2a_l1_target_affordance_tr1.py": "4521493fc9076aea284a07ecc336d2f01708bd707d77f475790c720b8a44df19",
+    "scripts/diagnose_task11q4_p2a_l1_target_affordance_tr1.py": "4ccd95175ec5ff26da5d1cfbd2cb663f7f12034093ec4eccf466f4e7701cc93c",
     "src/pesu_agent/__init__.py": "d1ae8793964867c74ef4628e2776faef093c59f23c635e2b6ab9837e042cd4bd",
     "src/pesu_agent/adapters/__init__.py": "3153bd5a614bb98e5efedd0178add069aa78236f8c001e55698ce1671438d975",
     "src/pesu_agent/adapters/slack_cdp.py": "cfa7b1a52c7443746941738c5dd281f8439f0bcd2b1ba94ca503ba05905c0a8d",
@@ -164,6 +164,7 @@
     "result_root_selectors": "[data-qa=\"search_result\"], [data-qa=\"search_message_result_item\"], .c-search_result",
     "positive_geometry": "width > 0 && height > 0",
     "slice_bound": "slice(0, maxRows)",
-    "global_virtual_list_scoping_forbidden": true
+    "global_virtual_list_scoping_forbidden": true,
+    "extra_rank_affecting_predicates_forbidden": true
   }
 }
