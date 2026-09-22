@@ -1,0 +1,72 @@
+{
+  "protocol_name": "TASK11Q4_P2A_L1_RB1_REPLY_BAR_STRUCTURE",
+  "diagnostic_run": "RB1",
+  "created_at": "2026-09-22T13:30:00+09:00",
+  "target_query": "26년 하반기 간담회",
+  "expected_channel_id": "C042WS25QAX",
+  "expected_message_ts": "1718079276.126469",
+  "expected_root_ts": "1718058683.912369",
+  "source_rd1_run2_rank": 5,
+  "source_raw_permalink": "https://heumlabs.slack.com/archives/C042WS25QAX/p1718079276126469?thread_ts=1718058683.912369",
+  "search_max_results": 5,
+  "target_fitness_contract": "EXPECTED_MESSAGE_TS != EXPECTED_ROOT_TS",
+  "atomic_js_snapshot_definition": "Evaluates search view, mounted search rows, exact permalink identity match, and target row reply-bar cardinality and structure in a single JS execution with zero DOM clicks.",
+  "same_snapshot_authority": true,
+  "output_paths": {
+    "live_output_file": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_rb1_reply_bar_structure.json",
+    "dry_run_output_file": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_rb1_reply_bar_structure_dry_run.json"
+  },
+  "prior_attempt_hashes": {
+    "attempt1_trace_sha256": "f6f17e06f94808bac15dea32748526a1d146dac69ef0a75cc8a4467c5c8fd28e",
+    "attempt2_derived_trace_sha256": "a6eacdb988306e610f446d65fd5eb56ae198d6ce976e62bd1937066eb834cd3a",
+    "rd1_search_residency_sha256": "5a44f58616a5dac21ebeb596a10e8f55ba7a2263eb177b945485c2bdd2556846",
+    "rd1_run2_search_residency_sha256": "fccfb28d380c81ad66e435ac43b63778184cb197da87d61eb304bf391c28f6a5",
+    "attempt3_trace_sha256": "b00fa70ec84da9efe329afed4cc70b4c00765adf64e773c2c5624ad72c84b18e",
+    "attempt4_trace_sha256": "e115b52de6b1ac1203d98e5a108fbe7b6a375fd708dc93233067d40a910a4965"
+  },
+  "dependency_hashes": {
+    "rb1_runner": "dbd695741b1639339881fde3542868eddf063c58536463f0b37b346b72b560c1",
+    "slack_search": "d214bb7a845e965c8c364a932a074ee73036098b91869242f0b2459a70780f5c",
+    "models": "4ec38c787923b668aa530a1e4edbd434f90821abd510ff2af332472db9e39064",
+    "webview_thread_reader": "01fecd9934227742329af0de782f0170c3cce2527f66d32f98f075bf268f0d87",
+    "webview_slack_search": "0f23a7430fd77659e5e3559c9105f9ce5acddb2ef2a0260feabd66cb10b72c21",
+    "retrieval_coordinator": "cda149c2ae0d2c1e9759aaf5df0a3577d561f719ee0224b62dcb6581f0228ef5",
+    "selector": "a439d7cbf09c9cfcc79187b25e3ae351af5858c468f19b8ab1d7974e43b02f0a",
+    "pesu_webview_host": "831cebf43320fe7ff4fcca84a439e0daa30e18b3d74519970d5d529389691ea0",
+    "slack_permalink_parser": "f46137cd074e6f9f98e3831e87a2504d056c93596bde8ef564fb87cf3738c5ab",
+    "write_audit": "5560ec12f85886b49c2bd40c3faa2b9271680e1a04abdd97e37e324d1fc6f09e",
+    "read_only_barrier": "c42afe7ea78ff9b1e2e9fd922d0249508ea4b15ce280e3529665acc95c72646c",
+    "slack_agent_window": "a82c01578068c85e4c2bf12070171c0ae67556bc334b99c845bb9519d3c6180f"
+  },
+  "query_correlation_and_safety_gate": {
+    "required_core_safety": [
+      "safe_search_action_explicitly_selected == true",
+      "generic_default_onenter_used == false",
+      "slackbot_action_invoked_by_pesu == false",
+      "write_capable_action_invoked_by_pesu == false",
+      "unsafe_non_search_action_invoked_by_pesu == false",
+      "composer_interaction == 0",
+      "search_submissions == 1",
+      "query_state_verified_before_submit == true",
+      "search_surface_query_matches_requested == true",
+      "search_exception is None"
+    ],
+    "supplemental_safety": {
+      "fields": [
+        "composer_focus",
+        "composer_input",
+        "composer_send"
+      ],
+      "policy": "SUPPLEMENTAL_NOT_REQUIRED_FOR_VERIFIED_SAFE",
+      "semantics": "Explicit True triggers FAIL_CLOSED; absent/UNKNOWN does not block VERIFIED_SAFE."
+    }
+  },
+  "production_parity_invariants": {
+    "src_changes": 0,
+    "zero_scroll": true,
+    "zero_click": true,
+    "zero_thread_interaction": true,
+    "zero_retry": true,
+    "live_action_count": 0
+  }
+}
