@@ -19,6 +19,13 @@ Run 2 Remediation (Task 11 / P2A-L1-RD1-R2-PREP):
     - write_capable_action_invoked_by_pesu -> write_capable_action_invoked_by_pesu
     - unsafe_non_search_action_invoked_by_pesu -> unsafe_non_search_action_invoked_by_pesu
 - Strict tri-state authority semantics: True / False / UNKNOWN.
+- Core vs Supplemental Safety Semantics:
+    - REQUIRED CORE SAFETY: safe_search_action_explicitly_selected==True, generic_default_onenter_used==False,
+      slackbot_action_invoked_by_pesu==False, write_capable_action_invoked_by_pesu==False,
+      unsafe_non_search_action_invoked_by_pesu==False, composer_interaction==0, search_submissions==1,
+      query_state_verified_before_submit==True, search_surface_query_matches_requested==True.
+    - SUPPLEMENTAL SAFETY (SUPPLEMENTAL_NOT_REQUIRED_FOR_VERIFIED_SAFE): composer_focus, composer_input, composer_send.
+      Explicit True fails closed; absent/UNKNOWN does not block VERIFIED_SAFE.
 - Pre-snapshot Query-Correlation & Safety Gate:
     JS_RD1_EXTRACT_AND_COUNT_RESIDENCY is evaluated ONLY if safety authority is VERIFIED_SAFE
     and post-search surface query matches requested query (SEARCH_SURFACE_QUERY_MATCHES_REQUESTED == True).
@@ -177,6 +184,7 @@ DEPENDENCY_PATHS = {
     "webview_slack_search": SRC_DIR / "pesu_agent" / "search" / "webview_slack_search.py",
     "pesu_webview_host": SRC_DIR / "pesu_agent" / "runtime" / "pesu_webview_host.py",
     "slack_permalink_parser": SRC_DIR / "pesu_agent" / "parsers" / "slack_permalink_parser.py",
+    "webview_thread_reader": SRC_DIR / "pesu_agent" / "search" / "webview_thread_reader.py",
 }
 
 
@@ -407,6 +415,7 @@ def harvest_rd1_search_telemetry(
     else:
         safety_tel["unsafe_non_search_action_invoked_by_pesu"] = "UNKNOWN"
 
+    # Supplemental safety telemetry (SUPPLEMENTAL_NOT_REQUIRED_FOR_VERIFIED_SAFE)
     safety_tel["composer_focus"] = telemetry.get("composer_focus", "UNKNOWN")
     safety_tel["composer_input"] = telemetry.get("composer_input", "UNKNOWN")
     safety_tel["composer_send"] = telemetry.get("composer_send", "UNKNOWN")
@@ -419,6 +428,22 @@ def evaluate_safety_and_query_authority(
     search_exception: Optional[Exception],
 ) -> tuple[str, str, Optional[str], Optional[str]]:
     """Evaluates safety and query authorities strictly without silent defaults.
+
+    Contracts:
+    - REQUIRED CORE SAFETY (Must be fully compliant for VERIFIED_SAFE):
+        - safe_search_action_explicitly_selected == True
+        - generic_default_onenter_used == False
+        - slackbot_action_invoked_by_pesu == False
+        - write_capable_action_invoked_by_pesu == False
+        - unsafe_non_search_action_invoked_by_pesu == False
+        - composer_interaction == 0
+        - search_submissions == 1
+        - query_state_verified_before_submit == True
+        - search_surface_query_matches_requested == True
+    - SUPPLEMENTAL SAFETY (SUPPLEMENTAL_NOT_REQUIRED_FOR_VERIFIED_SAFE):
+        - composer_focus, composer_input, composer_send.
+        - Explicit True triggers FAIL_CLOSED (EXPLICIT_SEARCH_SAFETY_VIOLATION).
+        - Absent/UNKNOWN does NOT block VERIFIED_SAFE.
 
     Returns:
         (safety_authority, query_authority, failure_verdict, failure_reason)
@@ -463,17 +488,18 @@ def evaluate_safety_and_query_authority(
     if search_exception is not None:
         return "NOT_VERIFIED", "NOT_VERIFIED", "FAIL_CLOSED", "SEARCH_PIPELINE_EXCEPTION"
 
-    # 4. REQUIRED TELEMETRY MISSING CHECK -> SEARCH_RESULT_CAPTURE_INSUFFICIENT
-    required_safety_missing = (
+    # 4. REQUIRED CORE SAFETY MISSING CHECK -> SEARCH_RESULT_CAPTURE_INSUFFICIENT
+    required_core_safety_missing = (
         safe_action == "UNKNOWN"
         or generic_onenter == "UNKNOWN"
         or slackbot == "UNKNOWN"
         or write_cap == "UNKNOWN"
         or unsafe_non_search == "UNKNOWN"
     )
-    if required_safety_missing:
+    if required_core_safety_missing:
         return "NOT_VERIFIED", "NOT_VERIFIED", "SEARCH_RESULT_CAPTURE_INSUFFICIENT", "REQUIRED_SEARCH_TELEMETRY_MISSING"
 
+    # Check required query authority fields
     if pre_sub_ok == "UNKNOWN" or sub_count == "UNKNOWN":
         return "NOT_VERIFIED", "NOT_VERIFIED", "SEARCH_RESULT_CAPTURE_INSUFFICIENT", "REQUIRED_SEARCH_TELEMETRY_MISSING"
 
@@ -484,7 +510,9 @@ def evaluate_safety_and_query_authority(
     if pre_sub_ok is not True or sub_count != 1:
         return "NOT_VERIFIED", "NOT_VERIFIED", "SEARCH_RESULT_CAPTURE_INSUFFICIENT", "REQUIRED_SEARCH_TELEMETRY_FALSE"
 
-    # 6. ALL AUTHORITATIVE CRITERIA MET -> VERIFIED_SAFE & VERIFIED
+    # 6. ALL REQUIRED CORE CRITERIA MET -> VERIFIED_SAFE & VERIFIED
+    # Note: composer_focus/input/send are SUPPLEMENTAL_NOT_REQUIRED_FOR_VERIFIED_SAFE.
+    # As checked in step 1, any explicit True fails closed. UNKNOWN is permitted.
     is_verified_safe = (
         safe_action is True
         and generic_onenter is False

@@ -1,7 +1,7 @@
 {
   "protocol_name": "TASK11Q4_P2A_L1_RD1_RUN2_SEARCH_RESIDENCY",
   "diagnostic_run": "RD1_RUN_2",
-  "created_at": "2026-09-22T08:17:30+09:00",
+  "created_at": "2026-09-22T11:00:00+09:00",
   "target_query": "26년 하반기 간담회",
   "expected_channel_id": "C09HL5XCTNJ",
   "expected_message_ts": "1788152491.960529",
@@ -25,10 +25,11 @@
     "attempt2_derived_trace_sha256": "A6EACDB988306E610F446D65FD5EB56AE198D6CE976E62BD1937066EB834CD3A"
   },
   "dependency_hashes": {
-    "rd1_runner": "182715871bf0198204eda917fb58b08d440e38eaebf9bc6d7900c89ea0c688f7",
+    "rd1_runner": "82ec42c39e7a28e552bf370a77eef7e189ed8ddc18c59159f383f17518163dc0",
     "webview_slack_search": "0f23a7430fd77659e5e3559c9105f9ce5acddb2ef2a0260feabd66cb10b72c21",
     "pesu_webview_host": "831cebf43320fe7ff4fcca84a439e0daa30e18b3d74519970d5d529389691ea0",
-    "slack_permalink_parser": "f46137cd074e6f9f98e3831e87a2504d056c93596bde8ef564fb87cf3738c5ab"
+    "slack_permalink_parser": "f46137cd074e6f9f98e3831e87a2504d056c93596bde8ef564fb87cf3738c5ab",
+    "webview_thread_reader": "01fecd9934227742329af0de782f0170c3cce2527f66d32f98f075bf268f0d87"
   },
   "telemetry_mapping_contracts": {
     "safe_search_action_explicitly_selected": "telemetry['safe_search_action_selected']",
@@ -39,7 +40,7 @@
     "search_surface_query_after": "telemetry['forensic_transition']['SEARCH_SURFACE_QUERY_AFTER']"
   },
   "query_correlation_and_safety_gate": {
-    "required_conditions": [
+    "required_core_safety": [
       "safe_search_action_explicitly_selected == true",
       "generic_default_onenter_used == false",
       "slackbot_action_invoked_by_pesu == false",
@@ -51,6 +52,15 @@
       "search_surface_query_matches_requested == true",
       "search_exception is None"
     ],
+    "supplemental_safety": {
+      "fields": [
+        "composer_focus",
+        "composer_input",
+        "composer_send"
+      ],
+      "policy": "SUPPLEMENTAL_NOT_REQUIRED_FOR_VERIFIED_SAFE",
+      "semantics": "Explicit True triggers FAIL_CLOSED (EXPLICIT_SEARCH_SAFETY_VIOLATION); absent/UNKNOWN does not block VERIFIED_SAFE."
+    },
     "gate_failure_semantics": "Stops before JS_RD1_EXTRACT_AND_COUNT_RESIDENCY. Explicit violations fail closed; missing telemetry yields SEARCH_RESULT_CAPTURE_INSUFFICIENT."
   },
   "disaggregated_verdict_reasons": [

@@ -2,11 +2,20 @@
 
 Tests purely offline:
 - Telemetry harvesting: tri-state mapping (True / False / UNKNOWN) for all safety and query keys
+- Core vs Supplemental Safety Semantics:
+    - REQUIRED CORE SAFETY: safe_search_action_selected, generic_default_onenter_used,
+      slackbot_action_invoked_by_pesu, write_capable_action_invoked_by_pesu, unsafe_non_search_action_invoked_by_pesu,
+      composer_interaction, search_submissions, query_state_verified_before_submit, search_surface_query_matches_requested
+    - SUPPLEMENTAL SAFETY: composer_focus, composer_input, composer_send.
+      Explicit True fails closed; absent/UNKNOWN does not block VERIFIED_SAFE.
 - Pre-snapshot Query-Correlation & Safety Gate:
-    - Explicit safety violations (generic onEnter, Slackbot, write-capable, unsafe non-search, unverified safe-action on submit) fail closed
+    - Explicit safety violations fail closed
     - Query mismatch fails closed
     - Missing authority fields yield SEARCH_RESULT_CAPTURE_INSUFFICIENT (NOT silently false)
     - Full compliance yields VERIFIED_SAFE and allows snapshot
+- Dependency Manifest & Runtime Import Closure:
+    - webview_thread_reader included in DEPENDENCY_PATHS
+    - Direct project dependencies audited
 - Disaggregated verdict reasons:
     - ZERO_MOUNTED_ROWS vs REQUIRED_SEARCH_TELEMETRY_MISSING vs SEARCH_QUERY_AUTHORITY_NOT_ESTABLISHED
 - Invariant verification:
@@ -17,6 +26,8 @@ Tests purely offline:
 
 import hashlib
 import json
+import os
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -24,6 +35,7 @@ import pytest
 
 import scripts.diagnose_task11q4_p2a_l1_search_residency as diag_mod
 from scripts.diagnose_task11q4_p2a_l1_search_residency import (
+    DEPENDENCY_PATHS,
     DRY_RUN_OUTPUT_FILE,
     EXPECTED_CHANNEL_ID,
     EXPECTED_MESSAGE_TS,
@@ -36,6 +48,7 @@ from scripts.diagnose_task11q4_p2a_l1_search_residency import (
     RUN1_LIVE_TRACE_SHA256,
     TARGET_QUERY,
     classify_row_identity,
+    compute_all_dependency_hashes,
     determine_diagnostic_verdict,
     evaluate_safety_and_query_authority,
     harvest_rd1_search_telemetry,
@@ -287,8 +300,8 @@ def test_21_explicit_unsafe_non_search_action_true_fails_closed():
     assert reason == "EXPLICIT_SEARCH_SAFETY_VIOLATION"
 
 
-def test_22_safety_field_missing_not_verified_insufficient():
-    """Test 22: Missing safety field yields NOT_VERIFIED and REQUIRED_SEARCH_TELEMETRY_MISSING."""
+def test_22_core_safety_field_missing_not_verified_insufficient():
+    """Test 22: Missing core safety field yields NOT_VERIFIED and REQUIRED_SEARCH_TELEMETRY_MISSING."""
     report = {
         "search_telemetry": {"search_submissions": 1, "query_state_verified_before_submit": True, "search_surface_query_matches_requested": True},
         "safety_telemetry": {
@@ -364,7 +377,116 @@ def test_25_post_search_query_mismatch_fails_closed():
 
 
 # =========================================================================
-# 3. Disaggregated Reasons Regressions (Section J: 13-14)
+# 3. Supplemental Composer Safety Regressions
+# =========================================================================
+
+def test_26_composer_supplemental_unknown_permits_verified_safe():
+    """Test 26: Supplemental composer fields UNKNOWN do NOT block VERIFIED_SAFE when core is compliant."""
+    report = {
+        "search_telemetry": {
+            "search_submissions": 1,
+            "query_state_verified_before_submit": True,
+            "search_surface_query_matches_requested": True,
+        },
+        "safety_telemetry": {
+            "safe_search_action_explicitly_selected": True,
+            "generic_default_onenter_used": False,
+            "slackbot_action_invoked_by_pesu": False,
+            "write_capable_action_invoked_by_pesu": False,
+            "unsafe_non_search_action_invoked_by_pesu": False,
+            "composer_interaction": 0,
+            "composer_focus": "UNKNOWN",  # SUPPLEMENTAL
+            "composer_input": "UNKNOWN",  # SUPPLEMENTAL
+            "composer_send": "UNKNOWN",   # SUPPLEMENTAL
+        },
+    }
+    safety_auth, query_auth, verdict, reason = evaluate_safety_and_query_authority(report, None)
+    assert safety_auth == "VERIFIED_SAFE"
+    assert query_auth == "VERIFIED"
+    assert verdict is None
+    assert reason is None
+
+
+def test_27_composer_explicit_true_fails_closed():
+    """Test 27: Explicit composer_focus/input/send == True triggers FAIL_CLOSED."""
+    for field in ["composer_focus", "composer_input", "composer_send"]:
+        report = {
+            "search_telemetry": {
+                "search_submissions": 1,
+                "query_state_verified_before_submit": True,
+                "search_surface_query_matches_requested": True,
+            },
+            "safety_telemetry": {
+                "safe_search_action_explicitly_selected": True,
+                "generic_default_onenter_used": False,
+                "slackbot_action_invoked_by_pesu": False,
+                "write_capable_action_invoked_by_pesu": False,
+                "unsafe_non_search_action_invoked_by_pesu": False,
+                "composer_interaction": 0,
+                field: True,  # EXPLICIT VIOLATION
+            },
+        }
+        safety_auth, query_auth, verdict, reason = evaluate_safety_and_query_authority(report, None)
+        assert safety_auth == "VIOLATION_PROVEN", f"Failed for {field}"
+        assert verdict == "FAIL_CLOSED", f"Failed for {field}"
+        assert reason == "EXPLICIT_SEARCH_SAFETY_VIOLATION", f"Failed for {field}"
+
+
+# =========================================================================
+# 4. Dependency Manifest & Runtime Closure Regressions
+# =========================================================================
+
+def test_28_webview_thread_reader_included_in_manifest_and_hashes():
+    """Test 28: webview_thread_reader is included in DEPENDENCY_PATHS and its hash is computed."""
+    assert "webview_thread_reader" in DEPENDENCY_PATHS
+    reader_path = DEPENDENCY_PATHS["webview_thread_reader"]
+    assert reader_path.exists(), f"webview_thread_reader.py does not exist: {reader_path}"
+    hashes = compute_all_dependency_hashes()
+    assert "webview_thread_reader" in hashes
+    assert len(hashes["webview_thread_reader"]) == 64
+
+
+def test_29_all_direct_rd1_project_imports_in_manifest():
+    """Test 29: Every direct PESU project import in RD1 runner is tracked in DEPENDENCY_PATHS."""
+    import inspect
+    import pesu_agent.parsers.slack_permalink_parser as m_parser
+    import pesu_agent.runtime.pesu_webview_host as m_host
+    import pesu_agent.search.webview_slack_search as m_search
+    import pesu_agent.search.webview_thread_reader as m_reader
+
+    direct_modules = [m_parser, m_host, m_search, m_reader]
+    manifest_files = {Path(p).resolve() for p in DEPENDENCY_PATHS.values()}
+
+    for mod in direct_modules:
+        mod_file = Path(inspect.getfile(mod)).resolve()
+        assert mod_file in manifest_files, f"Direct project module {mod.__name__} ({mod_file}) missing from DEPENDENCY_PATHS manifest!"
+
+
+def test_30_runtime_closure_audit_normalized():
+    """Test 30: Runtime closure audit detects loaded PESU modules without Windows path case defects."""
+    repo_root = Path(__file__).resolve().parent.parent
+    norm_repo = os.path.normcase(str(repo_root))
+
+    loaded_pesu = []
+    for name, m in sys.modules.items():
+        if m and hasattr(m, "__file__") and m.__file__:
+            m_norm = os.path.normcase(os.path.abspath(m.__file__))
+            if m_norm.startswith(norm_repo):
+                try:
+                    rel = Path(os.path.abspath(m.__file__)).resolve().relative_to(repo_root)
+                    loaded_pesu.append(str(rel))
+                except Exception:
+                    pass
+
+    assert len(loaded_pesu) >= 4, f"Expected at least 4 loaded project modules, found {len(loaded_pesu)}"
+    assert any("slack_permalink_parser.py" in p for p in loaded_pesu)
+    assert any("pesu_webview_host.py" in p for p in loaded_pesu)
+    assert any("webview_slack_search.py" in p for p in loaded_pesu)
+    assert any("webview_thread_reader.py" in p for p in loaded_pesu)
+
+
+# =========================================================================
+# 5. Disaggregated Reasons Regressions (Section J: 13-14)
 # =========================================================================
 
 def test_13_zero_mounted_rows_has_reason_zero_mounted_rows():
@@ -400,7 +522,7 @@ def test_14_missing_telemetry_has_distinct_reason():
 
 
 # =========================================================================
-# 4. Artifact & Path Invariants (Section J: 15-18)
+# 6. Artifact & Path Invariants (Section J: 15-18)
 # =========================================================================
 
 def test_15_run1_artifact_path_is_never_selected_for_run2():
@@ -453,7 +575,7 @@ def test_18_dry_run_cannot_claim_rd1_live_authority(tmp_path, monkeypatch):
 
 
 # =========================================================================
-# 5. Existing Tested Observer Invariants
+# 7. Existing Tested Observer Invariants
 # =========================================================================
 
 def test_attempt1_and_attempt2_artifacts_unchanged():
