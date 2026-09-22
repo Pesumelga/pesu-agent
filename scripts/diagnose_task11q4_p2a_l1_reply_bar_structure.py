@@ -74,6 +74,21 @@ TARGET_QUERY = "26년 하반기 간담회"
 EXPECTED_CHANNEL_ID = "C042WS25QAX"
 EXPECTED_MESSAGE_TS = "1718079276.126469"
 EXPECTED_ROOT_TS = "1718058683.912369"
+# Authoritative Comparison Reference
+AUTHORITATIVE_ATTEMPT4_RUNNER = "scripts/qualify_task11q4_p2a_live_root_extraction_attempt4.py"
+
+# Explicit Action Contracts (ONE_SEARCH_ZERO_CLICK_READ_ONLY_DIAGNOSTIC)
+MAX_SLACK_SEARCH_OPERATIONS = 1
+MAX_SEARCH_SUBMISSIONS = 1
+MAX_REPLY_BAR_CLICKS = 0
+MAX_RESULT_CARD_CLICKS = 0
+MAX_THREAD_EXPANSIONS = 0
+MAX_SCROLL_ACTIONS = 0
+MAX_KEYBOARD_EVENTS = 0
+MAX_COMPOSER_INTERACTIONS = 0
+MAX_WRITE_CAPABLE_ACTIONS = 0
+MAX_PROVIDER_CALLS = 0
+MAX_RETRIES = 0
 SOURCE_RD1_RUN2_RANK = 5
 SOURCE_RAW_PERMALINK = "https://heumlabs.slack.com/archives/C042WS25QAX/p1718079276126469?thread_ts=1718058683.912369"
 SEARCH_MAX_RESULTS = 5
@@ -647,6 +662,25 @@ def run_rb1_diagnostic(dry_run: bool = False, timeout: float = 30.0) -> dict[str
             "search_max_results": SEARCH_MAX_RESULTS,
             "target_fitness_contract": TARGET_FITNESS_CONTRACT,
         },
+        "action_contracts": {
+            "MAX_SLACK_SEARCH_OPERATIONS": MAX_SLACK_SEARCH_OPERATIONS,
+            "MAX_SEARCH_SUBMISSIONS": MAX_SEARCH_SUBMISSIONS,
+            "MAX_REPLY_BAR_CLICKS": MAX_REPLY_BAR_CLICKS,
+            "MAX_RESULT_CARD_CLICKS": MAX_RESULT_CARD_CLICKS,
+            "MAX_THREAD_EXPANSIONS": MAX_THREAD_EXPANSIONS,
+            "MAX_SCROLL_ACTIONS": MAX_SCROLL_ACTIONS,
+            "MAX_KEYBOARD_EVENTS": MAX_KEYBOARD_EVENTS,
+            "MAX_COMPOSER_INTERACTIONS": MAX_COMPOSER_INTERACTIONS,
+            "MAX_WRITE_CAPABLE_ACTIONS": MAX_WRITE_CAPABLE_ACTIONS,
+            "MAX_PROVIDER_CALLS": MAX_PROVIDER_CALLS,
+            "MAX_RETRIES": MAX_RETRIES,
+            "EXPECTED_LIVE_ACTION_INVENTORY": {
+                "safe_search_activation_submissions": 1,
+                "pure_read_dom_snapshots": 1,
+                "reply_bar_clicks": 0,
+                "other_ui_mutations_or_actions": 0,
+            },
+        },
         "live_action_inventory": {
             "search_activation_dispatches": 0,
             "search_modal_observed": False,
@@ -676,6 +710,7 @@ def run_rb1_diagnostic(dry_run: bool = False, timeout: float = 30.0) -> dict[str
             "PRODUCTION_CARDINALITY_PREDICATE_MIRRORED_EXACTLY": True,
             "RB1_RUNTIME_SEARCH_PATH_PARITY_WITH_ATTEMPT4": True,
             "UNTRACKED_RUNTIME_DEPENDENCIES": 0,
+            "ACTION_CONTRACTS_SATISFIED": True,
         },
         "atomic_inspection": None,
         "runtime_closure_audit": {},

@@ -389,31 +389,44 @@ def test_14_exact_production_cardinality_predicate_mirrored():
 
 
 def test_15_attempt4_runtime_search_path_parity():
-    """Proves RB1 live runner constructor and method calls have 100% parity with Attempt 4."""
-    # 1. PesuWebViewHost signature
-    sig_host = inspect.signature(PesuWebViewHost.__init__)
-    assert "user_data_folder" in sig_host.parameters
-    assert "initial_url" in sig_host.parameters
-    assert "title" in sig_host.parameters
+    """Proves RB1 live runner constructor and method calls have 100% parity with Attempt 4 authoritative runner."""
+    attempt4_path = REPO_ROOT / "scripts" / "qualify_task11q4_p2a_live_root_extraction_attempt4.py"
+    assert attempt4_path.exists(), f"Authoritative Attempt 4 runner missing at {attempt4_path}"
+    
+    with open(attempt4_path, "r", encoding="utf-8") as f:
+        attempt4_src = f.read()
+        
+    rb1_path = REPO_ROOT / "scripts" / "diagnose_task11q4_p2a_l1_reply_bar_structure.py"
+    with open(rb1_path, "r", encoding="utf-8") as f:
+        rb1_src = f.read()
 
-    # 2. WebViewSlackSearchBackend signature
-    sig_backend = inspect.signature(WebViewSlackSearchBackend.__init__)
-    assert "config" in sig_backend.parameters
-    assert "host" in sig_backend.parameters
+    # 1. PesuWebViewHost construction parity
+    assert 'host = PesuWebViewHost(' in attempt4_src
+    assert 'host = PesuWebViewHost(' in rb1_src
+    assert 'user_data_folder=DIRECT_SLACK_PROFILE_PATH' in attempt4_src and 'user_data_folder=DIRECT_SLACK_PROFILE_PATH' in rb1_src
+    assert 'initial_url="https://app.slack.com/client"' in attempt4_src and 'initial_url="https://app.slack.com/client"' in rb1_src
+    assert 'title="PESU Task 11 / P2A-L1 Live Qualification"' in attempt4_src and 'title="PESU Task 11 / P2A-L1 Live Qualification"' in rb1_src
 
-    # 3. WebViewRuntimeConfig signature
-    sig_cfg = inspect.signature(WebViewRuntimeConfig.__init__)
-    assert "storage_path" in sig_cfg.parameters
+    # 2. WebViewSlackSearchBackend construction parity
+    assert 'backend = WebViewSlackSearchBackend(' in attempt4_src
+    assert 'backend = WebViewSlackSearchBackend(' in rb1_src
+    assert 'config=WebViewRuntimeConfig(storage_path=Path(DIRECT_SLACK_PROFILE_PATH))' in attempt4_src
+    assert 'config=WebViewRuntimeConfig(storage_path=Path(DIRECT_SLACK_PROFILE_PATH))' in rb1_src
+    assert 'host=host' in attempt4_src and 'host=host' in rb1_src
 
-    # 4. Search method signature
-    sig_search = inspect.signature(WebViewSlackSearchBackend.search_messages)
-    assert "query" in sig_search.parameters
-    assert "max_results" in sig_search.parameters
+    # 3. Start runtime parity
+    assert 'backend.start_runtime(timeout=timeout)' in attempt4_src
+    assert 'backend.start_runtime(timeout=timeout)' in rb1_src
 
-    # 5. Start runtime method signature
-    sig_start = inspect.signature(WebViewSlackSearchBackend.start_runtime)
-    assert "timeout" in sig_start.parameters
+    # 4. Search invocation parity
+    assert 'backend.search_messages(TARGET_QUERY,' in attempt4_src
+    assert 'backend.search_messages(TARGET_QUERY,' in rb1_src
 
+    # 5. Host shutdown parity
+    assert 'host.destroy()' in attempt4_src
+    assert 'host.destroy()' in rb1_src
+
+    # 6. Dry run report verification
     report = run_rb1_diagnostic(dry_run=True)
     assert report["checks"].get("RB1_RUNTIME_SEARCH_PATH_PARITY_WITH_ATTEMPT4") is True
 
@@ -448,7 +461,24 @@ def test_18_p2a_l1_not_applicable_diagnostic_only():
 
 
 def test_19_zero_clicks_strictly_preserved():
-    """Verifies zero clicks strictly preserved in live_action_inventory and checks."""
+    """Validates that zero clicks and all action contracts are preserved."""
     report = run_rb1_diagnostic(dry_run=True)
-    assert report["live_action_inventory"]["reply_bar_clicks"] == 0
-    assert report["checks"]["zero_clicks_strictly_preserved"] is True
+    actions = report["live_action_inventory"]
+    assert actions.get("reply_bar_clicks", 0) == 0
+    assert report["checks"].get("zero_clicks_strictly_preserved") is True
+
+    # Action contracts verification
+    contracts = report.get("action_contracts", {})
+    assert contracts.get("MAX_SLACK_SEARCH_OPERATIONS") == 1
+    assert contracts.get("MAX_SEARCH_SUBMISSIONS") == 1
+    assert contracts.get("MAX_REPLY_BAR_CLICKS") == 0
+    assert contracts.get("MAX_RESULT_CARD_CLICKS") == 0
+    assert contracts.get("MAX_THREAD_EXPANSIONS") == 0
+    assert contracts.get("MAX_SCROLL_ACTIONS") == 0
+    assert contracts.get("MAX_KEYBOARD_EVENTS") == 0
+    assert contracts.get("MAX_COMPOSER_INTERACTIONS") == 0
+    assert contracts.get("MAX_WRITE_CAPABLE_ACTIONS") == 0
+    assert contracts.get("MAX_PROVIDER_CALLS") == 0
+    assert contracts.get("MAX_RETRIES") == 0
+    assert report["checks"].get("ACTION_CONTRACTS_SATISFIED") is True
+

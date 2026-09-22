@@ -1,7 +1,8 @@
 {
   "protocol_name": "TASK11Q4_P2A_L1_RB1_REPLY_BAR_STRUCTURE",
   "diagnostic_run": "RB1",
-  "created_at": "2026-09-22T13:40:00+09:00",
+  "created_at": "2026-09-22T13:58:00+09:00",
+  "authoritative_attempt4_runner": "scripts/qualify_task11q4_p2a_live_root_extraction_attempt4.py",
   "target_query": "26년 하반기 간담회",
   "expected_channel_id": "C042WS25QAX",
   "expected_message_ts": "1718079276.126469",
@@ -12,6 +13,25 @@
   "target_fitness_contract": "EXPECTED_MESSAGE_TS != EXPECTED_ROOT_TS",
   "atomic_js_snapshot_definition": "ONE_SEARCH_ZERO_CLICK_READ_ONLY_DIAGNOSTIC: Evaluates search view, mounted search rows, exact permalink identity match, and target row reply-bar cardinality and structure in a single JS execution with zero DOM clicks.",
   "same_snapshot_authority": true,
+  "action_contracts": {
+    "MAX_SLACK_SEARCH_OPERATIONS": 1,
+    "MAX_SEARCH_SUBMISSIONS": 1,
+    "MAX_REPLY_BAR_CLICKS": 0,
+    "MAX_RESULT_CARD_CLICKS": 0,
+    "MAX_THREAD_EXPANSIONS": 0,
+    "MAX_SCROLL_ACTIONS": 0,
+    "MAX_KEYBOARD_EVENTS": 0,
+    "MAX_COMPOSER_INTERACTIONS": 0,
+    "MAX_WRITE_CAPABLE_ACTIONS": 0,
+    "MAX_PROVIDER_CALLS": 0,
+    "MAX_RETRIES": 0,
+    "EXPECTED_LIVE_ACTION_INVENTORY": {
+      "safe_search_activation_submissions": 1,
+      "pure_read_dom_snapshots": 1,
+      "reply_bar_clicks": 0,
+      "other_ui_mutations_or_actions": 0
+    }
+  },
   "sensitive_content_exclusion": {
     "user_message_text_captured": false,
     "unrelated_raw_permalink_captured": false,
@@ -29,6 +49,7 @@
     "guard_field": "production_cardinality_guard_would_pass"
   },
   "attempt4_runtime_parity": {
+    "authoritative_runner": "scripts/qualify_task11q4_p2a_live_root_extraction_attempt4.py",
     "host_constructor": "PesuWebViewHost(user_data_folder=DIRECT_SLACK_PROFILE_PATH, initial_url=\"https://app.slack.com/client\", title=\"PESU Task 11 / P2A-L1 Live Qualification\")",
     "backend_constructor": "WebViewSlackSearchBackend(config=WebViewRuntimeConfig(storage_path=Path(DIRECT_SLACK_PROFILE_PATH)), host=host)",
     "runtime_start": "backend.start_runtime(timeout=timeout)",
@@ -48,7 +69,7 @@
     "attempt4_trace_sha256": "e115b52de6b1ac1203d98e5a108fbe7b6a375fd708dc93233067d40a910a4965"
   },
   "dependency_hashes": {
-    "rb1_runner": "58abc49d371e89b3cd32011e87947ba2839c58463361dec773daf4c82988ee7c",
+    "rb1_runner": "12820825f4641020c2d47b8e5cf86bba3123fe5b180f541de2c2d8cb67057d94",
     "slack_search": "d214bb7a845e965c8c364a932a074ee73036098b91869242f0b2459a70780f5c",
     "models": "4ec38c787923b668aa530a1e4edbd434f90821abd510ff2af332472db9e39064",
     "webview_thread_reader": "01fecd9934227742329af0de782f0170c3cce2527f66d32f98f075bf268f0d87",
@@ -121,7 +142,7 @@
     "src/pesu_agent/search/real_slack_backend.py": "2e15af2544fa6ad047c855ae9065b8544c2f8e6b771ede17c81a0d7bbf24b74c",
     "src/pesu_agent/search/slack_backend_factory.py": "c0151d0b4e57b42f72fae543a4b8490e62aed62c28c3c980bc10c78bf9b6b3bf",
     "src/pesu_agent/search/__init__.py": "5f1e2bb33d4a778fe263351804dc2b7cab52aad35253aa197ac2f312b8453ae5",
-    "scripts/diagnose_task11q4_p2a_l1_reply_bar_structure.py": "58abc49d371e89b3cd32011e87947ba2839c58463361dec773daf4c82988ee7c"
+    "scripts/diagnose_task11q4_p2a_l1_reply_bar_structure.py": "12820825f4641020c2d47b8e5cf86bba3123fe5b180f541de2c2d8cb67057d94"
   },
   "query_correlation_and_safety_gate": {
     "required_core_safety": [
@@ -152,6 +173,7 @@
     "zero_click": true,
     "zero_thread_interaction": true,
     "zero_retry": true,
-    "live_action_count": 0
+    "zero_composer_interaction": true,
+    "zero_write_capable_action": true
   }
 }
