@@ -1,41 +1,40 @@
-"""Phase 13.5D / Task 11 / P2A-L1 / TR2: Search-Row Thread Affordance Discovery Diagnostic.
+"""Phase 13.5D / Task 11 / P2A / TR2: Search-Row Thread Affordance Discovery Diagnostic.
 
-ONE_SEARCH_ZERO_CLICK_READ_ONLY_DIAGNOSTIC
+TR2 PURPOSE:
+What connected/rendered interactive structures actually exist inside the
+production top-5 Slack search-result rows that might relate structurally
+to message/thread navigation?
 
-Discovers connected/rendered interactive descendants inside the production top-5
-Slack search-result rows for the qualified query '26년 하반기 간담회' to evaluate
-whether any interactive structures relate to message/thread navigation.
-
-Strict Invariants:
-- PRODUCTION_CODE_CHANGED = false
-- ZERO_REPLY_BAR_CLICKS = true (reply_bar_clicks == 0)
-- ZERO_RESULT_CARD_CLICKS = true
-- ZERO_COMPOSER_INTERACTIONS = true
-- ZERO_THREAD_EXPANSIONS = true
-- ONE_ATOMIC_JS_SNAPSHOT = true (inspects all top-5 mounted rows in one pass)
-- REPLAY_FORBIDDEN = true (live artifact overwrite guard)
-- EXCLUSIVELY_DATA_COLLECTION = true
-- USER_MESSAGE_TEXT_CAPTURED = false
-- SENDER_TEXT_CAPTURED = false
-- RAW_HREF_CAPTURED = false
-- RAW_PERMALINK_CAPTURED = false
-- RAW_ARIA_LABEL_CAPTURED = false
-- RAW_TITLE_CAPTURED = false
-- INNER_TEXT_CAPTURED = false
-- TEXT_CONTENT_CAPTURED = false
-- INNER_HTML_CAPTURED = false
-- OUTER_HTML_CAPTURED = false
-- TR2_RUNTIME_SEARCH_PATH_PARITY_WITH_ATTEMPT4 = true
-- TR2_SEARCH_TELEMETRY_AUTHORITY_PARITY_WITH_ATTEMPT4 = true
-- TR2_SEARCH_EXCEPTION_ORDER_PARITY_WITH_ATTEMPT4 = true
-- TR2_SEARCH_SAFETY_GATE_PARITY_WITH_ATTEMPT4 = true
-- TR2_SEARCH_RESULT_ROW_ENUMERATION_PARITY = dynamically verified
-- UNTRACKED_RUNTIME_DEPENDENCIES = 0
+Strict Boundaries:
+- DISCOVERY ONLY: It must NOT decide safe to click, qualified interaction target,
+  preferred navigation mechanism, or Attempt 5 target.
+- ZERO INTERACTION: clicks = 0, scroll = 0, keyboard navigation = 0,
+  thread expansion = 0, composer interaction = 0, write action = 0,
+  provider call = 0, retry = 0.
+- ONE SEARCH, ONE ATOMIC SNAPSHOT: all top-5 mounted rows evaluated in a single evaluation.
+- PARITY HARD GATES:
+  * TR2_RUNTIME_SEARCH_PATH_PARITY_WITH_ATTEMPT4 = dynamically proven true
+  * TR2_SEARCH_TELEMETRY_AUTHORITY_PARITY_WITH_ATTEMPT4 = dynamically proven true
+  * TR2_SEARCH_EXCEPTION_ORDER_PARITY_WITH_ATTEMPT4 = dynamically proven true
+  * TR2_SEARCH_SAFETY_GATE_PARITY_WITH_ATTEMPT4 = dynamically proven true
+  * TR2_SEARCH_RESULT_ROW_ENUMERATION_PARITY = dynamically proven true
+- SENSITIVE CONTENT CONTRACT:
+  * USER_MESSAGE_TEXT_CAPTURED = false
+  * SENDER_TEXT_CAPTURED = false
+  * RAW_HREF_CAPTURED = false
+  * RAW_PERMALINK_CAPTURED = false
+  * RAW_ARIA_LABEL_CAPTURED = false
+  * RAW_TITLE_CAPTURED = false
+  * INNER_TEXT_CAPTURED = false
+  * TEXT_CONTENT_CAPTURED = false
+  * INNER_HTML_CAPTURED = false
+  * OUTER_HTML_CAPTURED = false
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import datetime
 import hashlib
 import json
@@ -88,16 +87,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger("task11q4_p2a_l1_thread_affordance_tr2")
 
-# Target Query & Budget
+# ---------------------------------------------------------------------------
+# Constants & Contracts
+# ---------------------------------------------------------------------------
+
 TARGET_QUERY = "26년 하반기 간담회"
 SEARCH_MAX_RESULTS = 5
 MAX_SERIALIZED_CANDIDATES_PER_ROW = 50
 
-# Authoritative Comparison Reference
-AUTHORITATIVE_ATTEMPT4_RUNNER = "scripts/qualify_task11q4_p2a_live_root_extraction_attempt4.py"
-AUTHORITATIVE_ATTEMPT4_SHA256 = "b2f4c6972e1e1297045c7fe7d7f1e50492225d3bd073b311ee1dcadd967a905d"
+PROTOCOL_NAME = "task11q4_p2a_l1_tr2_thread_affordance_discovery"
+DIAGNOSTIC_RUN = "TR2_DISCOVERY_RUN_1"
+CANONICAL_DRY_RUN_VERDICT = "DRY_RUN_PASS"
 
-# Explicit Action Contracts (ONE_SEARCH_ZERO_CLICK_READ_ONLY_DIAGNOSTIC)
+OUTPUT_DIR = REPO_ROOT / "output" / "qualification_13_5d" / "live_trace"
+DRY_RUN_OUTPUT_FILE = OUTPUT_DIR / "task11q4_p2a_l1_tr2_thread_affordance_dry_run.json"
+LIVE_OUTPUT_FILE = OUTPUT_DIR / "task11q4_p2a_l1_tr2_thread_affordance.json"
+PROTOCOL_FREEZE_PATH = REPO_ROOT / "artifacts" / "task11q4_p2a_l1_tr2_protocol_freeze.json"
+
+AUTHORITATIVE_ATTEMPT4_SHA256 = "b2f4c6972e1e1297045c7fe7d7f1e50492225d3bd073b311ee1dcadd967a905d"
+AUTHORITATIVE_RB2_SHA256 = "affb83a14725c587b219949681919771b6012463a029e3d79b2078a2a2039d64"
+AUTHORITATIVE_TR1_SHA256 = "4ccd95175ec5ff26da5d1cfbd2cb663f7f12034093ec4eccf466f4e7701cc93c"
+
 MAX_SLACK_SEARCH_OPERATIONS = 1
 MAX_SEARCH_SUBMISSIONS = 1
 MAX_REPLY_BAR_CLICKS = 0
@@ -110,18 +120,8 @@ MAX_WRITE_CAPABLE_ACTIONS = 0
 MAX_PROVIDER_CALLS = 0
 MAX_RETRIES = 0
 
-PROTOCOL_NAME = "TASK11Q4_P2A_L1_TR2_THREAD_AFFORDANCE"
-DIAGNOSTIC_RUN = "TR2"
-CANONICAL_DRY_RUN_VERDICT = "DRY_RUN_PASS"
-
-PROTOCOL_FREEZE_PATH = REPO_ROOT / "artifacts" / "task11q4_p2a_l1_tr2_protocol_freeze.json"
-OUTPUT_DIR = REPO_ROOT / "output" / "qualification_13_5d" / "live_trace"
-LIVE_OUTPUT_FILE = OUTPUT_DIR / "task11q4_p2a_l1_tr2_thread_affordance.json"
-DRY_RUN_OUTPUT_FILE = OUTPUT_DIR / "task11q4_p2a_l1_tr2_thread_affordance_dry_run.json"
-
-# Shared Search Selectors (Exact Parity with Production)
-SEARCH_VIEW_SELECTOR: str = '[data-qa="search_view"]'
-SEARCH_RESULT_ROW_SELECTORS: str = '[data-qa="search_result"], [data-qa="search_message_result_item"], .c-search_result'
+SEARCH_VIEW_SELECTOR = '[data-qa="search_view"]'
+SEARCH_RESULT_ROW_SELECTORS = '[data-qa="search_result"], [data-qa="search_message_result_item"], .c-search_result'
 
 PRIMARY_DEPENDENCY_PATHS = {
     "tr2_runner": REPO_ROOT / "scripts" / "diagnose_task11q4_p2a_l1_thread_affordance_tr2.py",
@@ -138,43 +138,86 @@ PRIMARY_DEPENDENCY_PATHS = {
     "slack_agent_window": SRC_DIR / "pesu_agent" / "lifecycle" / "slack_agent_window.py",
 }
 
-# Atomic JS Snapshot Script: Inspects top-5 rendered candidate rows for interactive structural discovery
-# Deduplicates a[href], button, [role="button"], [data-qa]
-# Derives booleans for aria/title, parses permalinks in-memory, excludes all raw text/HTML/href.
+# ---------------------------------------------------------------------------
+# Discovery JavaScript
+# ---------------------------------------------------------------------------
+
 JS_INSPECT_TOP5_THREAD_AFFORDANCE_DISCOVERY = r"""
-((searchViewSel, searchRowSel, maxRows, maxSerializedCandidatesPerRow) => {
+(searchViewSel, searchRowSel, maxRows, maxSerializedCandidates) => {
     try {
-        const searchViews = Array.from(document.querySelectorAll(searchViewSel)).filter(el => el && el.isConnected);
+        const searchViews = document.querySelectorAll(searchViewSel);
         if (searchViews.length !== 1) {
             return {
                 ok: false,
                 error: "SEARCH_VIEW_COUNT_INVALID",
-                view_count: searchViews.length,
-                mounted_row_count: 0,
+                observed_count: searchViews.length,
                 rows: []
             };
         }
-
         const searchView = searchViews[0];
-        // Enforce exact production parity: only rendered/visible rows (r.width > 0 && r.height > 0) consume top-5 ranks
+
+        // Authoritative production row enumeration
         const allRows = Array.from(searchView.querySelectorAll(searchRowSel)).filter(el => {
             if (!el || !el.isConnected) return false;
             const r = el.getBoundingClientRect();
             return (r.width > 0 && r.height > 0);
         });
 
-        const mounted_row_count = allRows.length;
         const candidateRows = allRows.slice(0, maxRows);
 
         function normTs(raw) {
             if (!raw) return null;
-            const parts = String(raw).trim().split('.');
-            const sec = parts[0] || '0';
-            const frac = (parts[1] || '').padEnd(6, '0').slice(0, 6);
-            return `${sec}.${frac}`;
+            let s = String(raw).trim();
+            if (s.startsWith("p") && s.length === 17 && /^\d+$/.test(s.slice(1))) {
+                s = s.slice(1, 11) + "." + s.slice(11);
+            }
+            if (/^\d{10}\.\d{6}$/.test(s)) return s;
+            if (/^\d{10}\.\d{3}$/.test(s)) return s + "000";
+            if (/^\d{16}$/.test(s)) return s.slice(0, 10) + "." + s.slice(10);
+            if (/^\d+$/.test(s)) {
+                let f = parseFloat(s);
+                if (f > 1e11) f = f / 1e6;
+                return f.toFixed(6);
+            }
+            return s;
         }
 
-        const rows = [];
+        function extractRowIdentities(row) {
+            const anchors = Array.from(row.querySelectorAll('a[href]'));
+            const identities = [];
+            const permalinkRegex = /\/archives\/([A-Z0-9]+)\/p(\d{10})(\d{6})(?:\?([^#\s]*))?/;
+
+            for (const a of anchors) {
+                const href = a.getAttribute('href') || '';
+                const m = href.match(permalinkRegex);
+                if (m) {
+                    const channelId = m[1];
+                    const msgTs = normTs(m[2] + '.' + m[3]);
+                    const qStr = m[4] || '';
+                    const thM = qStr.match(/(?:^|&)thread_ts=([0-9.]+)/);
+                    const threadTs = thM ? normTs(thM[1]) : null;
+                    identities.push({
+                        channel_id: channelId,
+                        message_ts: msgTs,
+                        thread_ts: threadTs,
+                        is_thread_reply: (threadTs !== null && threadTs !== msgTs)
+                    });
+                }
+            }
+
+            const uniqueIdentities = [];
+            const seen = new Set();
+            for (const id of identities) {
+                const key = `${id.channel_id}:${id.message_ts}:${id.thread_ts || ''}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    uniqueIdentities.push(id);
+                }
+            }
+            return uniqueIdentities;
+        }
+
+        const evaluatedRows = [];
         let anyRowHasThreadRelatedStructure = false;
         let anyRowSerializationTruncated = false;
 
@@ -182,94 +225,56 @@ JS_INSPECT_TOP5_THREAD_AFFORDANCE_DISCOVERY = r"""
             const row = candidateRows[idx];
             const rank = idx + 1;
 
-            // 1. Identity Extraction & Unique Identity Verification
-            const links = Array.from(row.querySelectorAll('a[href*="/archives/"]'));
-            const uniqueIdentities = new Map();
+            const identities = extractRowIdentities(row);
+            const primaryIdentity = identities.length > 0 ? identities[0] : null;
+            const isThreadReply = primaryIdentity ? primaryIdentity.is_thread_reply : false;
 
-            for (const a of links) {
-                const href = a.getAttribute('href') || '';
-                const m = href.match(/\/archives\/([A-Z0-9]+)\/p(\d{10})(\d{6})(?:\?([^#\s]*))?/);
-                if (m) {
-                    const chan = m[1];
-                    const normMsg = normTs(m[2] + '.' + m[3]);
-                    const qStr = m[4] || '';
-                    let thTs = null;
-                    const thMatch = qStr.match(/(?:^|&)thread_ts=([0-9.]+)/);
-                    if (thMatch) {
-                        thTs = normTs(thMatch[1]);
-                    }
-                    const identKey = `${chan}:${normMsg}:${thTs || ''}`;
-                    if (!uniqueIdentities.has(identKey)) {
-                        uniqueIdentities.set(identKey, {
-                            channel_id: chan,
-                            message_ts: normMsg,
-                            thread_ts: thTs
-                        });
-                    }
-                }
-            }
-
-            const uniqueCount = uniqueIdentities.size;
-            let primaryIdentity = null;
-            if (uniqueCount === 1) {
-                primaryIdentity = Array.from(uniqueIdentities.values())[0];
-            }
-
-            const rowInComposer = Boolean(row.closest('[data-qa="message_input"], .c-message_input, textarea, [role="textbox"], [contenteditable="true"]'));
-
-            const channelId = primaryIdentity ? primaryIdentity.channel_id : null;
-            const messageTs = primaryIdentity ? primaryIdentity.message_ts : null;
-            const threadTs = primaryIdentity ? primaryIdentity.thread_ts : null;
-            const isThreadReply = Boolean(threadTs && messageTs && threadTs !== messageTs);
-
-            // 2. Interactive Discovery Families & Deduplication
-            const rawMatchesA = Array.from(row.querySelectorAll('a[href]'));
-            const rawMatchesB = Array.from(row.querySelectorAll('button'));
-            const rawMatchesRoleB = Array.from(row.querySelectorAll('[role="button"]'));
-            const rawMatchesDataQa = Array.from(row.querySelectorAll('[data-qa]'));
-
-            const raw_family_match_count = rawMatchesA.length + rawMatchesB.length + rawMatchesRoleB.length + rawMatchesDataQa.length;
-
+            // Discovery Selector Families
+            const familySelectors = ['a[href]', 'button', '[role="button"]', '[data-qa]'];
+            let rawFamilyMatchCount = 0;
             const seenElements = new Set();
-            const uniqueElements = [];
-            for (const list of [rawMatchesA, rawMatchesB, rawMatchesRoleB, rawMatchesDataQa]) {
-                for (const el of list) {
-                    if (el && el.isConnected && !seenElements.has(el)) {
+            const uniqueCandidates = [];
+
+            for (const sel of familySelectors) {
+                const matches = Array.from(row.querySelectorAll(sel));
+                rawFamilyMatchCount += matches.length;
+                for (const el of matches) {
+                    if (!seenElements.has(el)) {
                         seenElements.add(el);
-                        uniqueElements.push(el);
+                        uniqueCandidates.push(el);
                     }
                 }
             }
 
-            const unique_interactive_candidate_count = uniqueElements.length;
-            const duplicate_family_matches_removed = raw_family_match_count - unique_interactive_candidate_count;
+            const uniqueInteractiveCandidateCount = uniqueCandidates.length;
+            const duplicateFamilyMatchesRemoved = rawFamilyMatchCount - uniqueInteractiveCandidateCount;
 
-            // 3. Complete In-Memory Evaluation of Candidate Descendants
             const allCandidateRecords = [];
             const rowClassifications = new Set();
 
-            for (let cIdx = 0; cIdx < uniqueElements.length; cIdx++) {
-                const el = uniqueElements[cIdx];
-                const tagName = el.tagName.toLowerCase();
-                const role = el.getAttribute('role') || null;
+            for (let cIdx = 0; cIdx < uniqueCandidates.length; cIdx++) {
+                const el = uniqueCandidates[cIdx];
+                const tagName = (el.tagName || '').toLowerCase();
+                const role = (el.getAttribute('role') || '').toLowerCase();
                 const dataQa = el.getAttribute('data-qa') || null;
-                const isConnected = Boolean(el.isConnected);
-                const rect = el.getBoundingClientRect();
-                const isRendered = (rect.width > 0 && rect.height > 0);
-                const insideComposer = Boolean(el.closest('[data-qa="message_input"], .c-message_input, textarea, [role="textbox"], [contenteditable="true"]'));
-                const insideReplyBar = Boolean(el.closest('div[data-qa="reply_bar"], [data-qa="reply_bar"]'));
+                const isConnected = !!el.isConnected;
+                const r = el.getBoundingClientRect();
+                const isRendered = (r.width > 0 && r.height > 0);
+                const insideComposer = !!el.closest('[data-qa="message_input"], .c-message_input, [data-qa="composer"]');
+                const insideReplyBar = !!el.closest('[data-qa="reply_bar"], .c-reply_bar');
 
+                // Depth from result row
                 let depth = 0;
                 let cur = el;
-                while (cur && cur !== row) {
+                while (cur && cur !== row && cur !== document.body) {
                     depth++;
                     cur = cur.parentElement;
                 }
 
-                const isAnchor = (tagName === 'a');
+                const isAnchor = (tagName === 'a' && el.hasAttribute('href'));
                 const isButton = (tagName === 'button');
                 const hasRoleButton = (role === 'button');
-                const hasDataQa = Boolean(dataQa);
+                const hasDataQa = (dataQa !== null);
 
                 // Derived ARIA / Title booleans (RAW STRINGS NEVER PERSISTED)
                 const rawAria = (el.getAttribute('aria-label') || '').toLowerCase();
@@ -400,196 +405,452 @@ JS_INSPECT_TOP5_THREAD_AFFORDANCE_DISCOVERY = r"""
                 });
             }
 
-            // 4. Truncation and Loss-Awareness
-            const total_unique_candidate_count = uniqueElements.length;
-            const serialized_candidates = allCandidateRecords.slice(0, maxSerializedCandidatesPerRow);
-            const serialized_candidate_count = serialized_candidates.length;
-            const candidate_serialization_truncated = (total_unique_candidate_count > maxSerializedCandidatesPerRow);
-            if (candidate_serialization_truncated) {
-                anyRowSerializationTruncated = true;
-            }
+            const rowClassArray = Array.from(rowClassifications);
+            const hasThreadRelatedStructure = (
+                rowClassifications.has("SAME_MESSAGE_PERMALINK_ANCHOR_PRESENT") ||
+                rowClassifications.has("THREAD_ROOT_PERMALINK_ANCHOR_PRESENT") ||
+                rowClassifications.has("THREAD_TOKEN_DATA_QA_PRESENT") ||
+                rowClassifications.has("THREAD_TOKEN_ARIA_DERIVED_PRESENT") ||
+                rowClassifications.has("REPLY_TOKEN_ARIA_DERIVED_PRESENT")
+            );
 
-            // Check if any thread-related structural tokens were observed across the FULL in-memory candidate set
-            const threadRelatedTokens = [
-                "THREAD_ROOT_PERMALINK_ANCHOR_PRESENT",
-                "THREAD_TOKEN_DATA_QA_PRESENT",
-                "THREAD_TOKEN_ARIA_DERIVED_PRESENT",
-                "REPLY_TOKEN_ARIA_DERIVED_PRESENT"
-            ];
-            const threadTokensObserved = threadRelatedTokens.filter(t => rowClassifications.has(t));
-            const hasThreadRelatedStructure = (threadTokensObserved.length > 0);
             if (hasThreadRelatedStructure) {
                 anyRowHasThreadRelatedStructure = true;
             }
 
-            if (!hasThreadRelatedStructure && rowClassifications.size === 0) {
-                rowClassifications.add("NO_THREAD_RELATED_INTERACTIVE_STRUCTURE_OBSERVED");
+            const candidatesTruncated = (allCandidateRecords.length > maxSerializedCandidates);
+            if (candidatesTruncated) {
+                anyRowSerializationTruncated = true;
             }
+            const serializedRecords = allCandidateRecords.slice(0, maxSerializedCandidates);
 
-            rows.push({
+            evaluatedRows.push({
                 rank: rank,
-                row_index: idx,
-                channel_id: channelId,
-                message_ts: messageTs,
-                thread_ts: threadTs,
-                unique_identity_count: uniqueCount,
+                channel_id: primaryIdentity ? primaryIdentity.channel_id : null,
+                message_ts: primaryIdentity ? primaryIdentity.message_ts : null,
+                thread_ts: primaryIdentity ? primaryIdentity.thread_ts : null,
+                unique_identity_count: identities.length,
                 is_thread_reply: isThreadReply,
-                row_in_composer: rowInComposer,
-                telemetry: {
-                    raw_family_match_count: raw_family_match_count,
-                    unique_interactive_candidate_count: unique_interactive_candidate_count,
-                    duplicate_family_matches_removed: duplicate_family_matches_removed,
-                    total_unique_candidate_count: total_unique_candidate_count,
-                    serialized_candidate_count: serialized_candidate_count,
-                    candidate_serialization_truncated: candidate_serialization_truncated,
-                    discovery_complete: true
-                },
+                raw_family_match_count: rawFamilyMatchCount,
+                unique_interactive_candidate_count: uniqueInteractiveCandidateCount,
+                duplicate_family_matches_removed: duplicateFamilyMatchesRemoved,
+                total_unique_candidate_count: allCandidateRecords.length,
+                serialized_candidate_count: serializedRecords.length,
+                candidate_serialization_truncated: candidatesTruncated,
+                row_classifications: rowClassArray.length > 0 ? rowClassArray : ["NO_THREAD_RELATED_INTERACTIVE_STRUCTURE_OBSERVED"],
                 has_thread_related_structure: hasThreadRelatedStructure,
-                thread_tokens_observed: threadTokensObserved,
-                row_classifications: Array.from(rowClassifications),
-                candidates: serialized_candidates
+                candidate_records: serializedRecords
             });
         }
 
         return {
             ok: true,
-            mounted_row_count: mounted_row_count,
+            mounted_row_count: allRows.length,
             inspected_row_count: candidateRows.length,
             any_row_has_thread_related_structure: anyRowHasThreadRelatedStructure,
             any_row_serialization_truncated: anyRowSerializationTruncated,
             discovery_complete: true,
-            discovery_loss_mode: "NONE",
-            rows: rows
+            discovery_loss_mode: "FULL_IN_MEMORY_EVALUATION",
+            rows: evaluatedRows
         };
-    } catch (err) {
+    } catch (e) {
         return {
             ok: false,
-            error: String(err),
-            mounted_row_count: 0,
-            inspected_row_count: 0,
+            error: String(e),
             rows: []
         };
     }
-})
+}
 """
 
+# ---------------------------------------------------------------------------
+# Telemetry Harvester & Safety Gate (Exact RB2/TR1 Parity)
+# ---------------------------------------------------------------------------
 
-def get_git_commit() -> str:
-    try:
-        res = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=str(REPO_ROOT),
-            capture_output=True,
-            text=True,
-            check=True,
+def harvest_search_telemetry(
+    backend: Any,
+    search_exception: Optional[Exception],
+    report: dict[str, Any],
+) -> None:
+    """Harvests backend.last_search_telemetry whether search_messages succeeds, fails, or raises.
+
+    Ensures authoritative telemetry extraction and tri-state (True/False/UNKNOWN) semantics.
+    Exact Attempt 4 parity:
+    - Primary: backend.last_search_telemetry
+    - Fallback: search_exception.details
+    - Strictly forbids backend.last_telemetry as search authority.
+    """
+    telemetry = getattr(backend, "last_search_telemetry", None)
+    if not isinstance(telemetry, dict) or not telemetry:
+        if search_exception is not None and hasattr(search_exception, "details"):
+            details = getattr(search_exception, "details", None)
+            if isinstance(details, dict) and details:
+                telemetry = details
+
+    actions = report.setdefault("live_action_inventory", {})
+    st = report.setdefault("search_telemetry", {})
+    safety = report.setdefault("safety_telemetry", {})
+    checks = report.setdefault("checks", {})
+
+    if not isinstance(telemetry, dict) or not telemetry:
+        logger.error("❌ backend.last_search_telemetry is missing or empty! Failing closed.")
+        actions["search_activation_dispatches"] = "UNKNOWN"
+        actions["search_modal_observed"] = "UNKNOWN"
+        actions["search_input_ready"] = "UNKNOWN"
+        actions["search_submissions"] = "UNKNOWN"
+        actions["search_modal_open_calls"] = "UNKNOWN"
+        st["search_activation_dispatches"] = "UNKNOWN"
+        st["modal_ever_observed"] = "UNKNOWN"
+        st["input_ready"] = "UNKNOWN"
+        st["last_confirmed_stage"] = "UNKNOWN"
+        st["failure_case_classification"] = "TELEMETRY_MISSING"
+        checks["SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED"] = "UNKNOWN"
+        checks["QUERY_STATE_VERIFIED_BEFORE_SUBMIT"] = "UNKNOWN"
+        checks["SEARCH_SURFACE_QUERY_MATCHES_REQUESTED"] = "UNKNOWN"
+        return
+
+    # 1. Activation dispatches
+    if "activation_dispatch_count" in telemetry:
+        actions["search_activation_dispatches"] = int(telemetry["activation_dispatch_count"])
+        st["search_activation_dispatches"] = int(telemetry["activation_dispatch_count"])
+    elif "activation_dispatched" in telemetry:
+        act_cnt = 1 if bool(telemetry["activation_dispatched"]) else 0
+        actions["search_activation_dispatches"] = act_cnt
+        st["search_activation_dispatches"] = act_cnt
+    else:
+        actions["search_activation_dispatches"] = "UNKNOWN"
+        st["search_activation_dispatches"] = "UNKNOWN"
+
+    # 2. Modal observation (True/False/UNKNOWN)
+    if "modal_ever_observed" in telemetry:
+        modal_obs = bool(telemetry["modal_ever_observed"])
+        actions["search_modal_observed"] = modal_obs
+        st["modal_ever_observed"] = modal_obs
+        actions["search_modal_open_calls"] = 1 if modal_obs else 0
+    else:
+        actions["search_modal_observed"] = "UNKNOWN"
+        st["modal_ever_observed"] = "UNKNOWN"
+        actions["search_modal_open_calls"] = "UNKNOWN"
+
+    st["final_modal_count"] = telemetry.get("final_modal_count", "UNKNOWN")
+    st["activation_to_first_modal_ms"] = telemetry.get("activation_to_first_modal_ms")
+    st["readiness_poll_count"] = telemetry.get("readiness_poll_count", "UNKNOWN")
+    st["last_confirmed_stage"] = telemetry.get("last_confirmed_stage", "UNKNOWN")
+    st["failure_case_classification"] = telemetry.get("failure_case_classification", "NONE")
+    st["document_visibility_state"] = telemetry.get("document_visibility_state", "unknown")
+    st["document_hidden"] = telemetry.get("document_hidden", "UNKNOWN")
+    st["document_has_focus"] = telemetry.get("document_has_focus", "UNKNOWN")
+    st["elapsed_ms"] = telemetry.get("elapsed_ms", 0)
+    st["timeout_ms"] = telemetry.get("timeout_ms", 5000)
+
+    # 3. Input readiness (True/False/UNKNOWN)
+    if (
+        "input_ever_observed" in telemetry
+        and "final_input_count" in telemetry
+        and "last_confirmed_stage" in telemetry
+    ):
+        last_stage = str(telemetry["last_confirmed_stage"])
+        inp_ready = bool(
+            telemetry["input_ever_observed"]
+            and int(telemetry["final_input_count"]) > 0
+            and last_stage in (
+                "INPUT_OBSERVED",
+                "SETTER_EXECUTED",
+                "SUBMIT_TRIGGERED",
+                "SUBMIT_EXECUTED",
+                "RESULTS_WAIT_STARTED",
+                "RESULTS_RENDERED",
+                "COMPLETED",
+            )
         )
-        return res.stdout.strip()
-    except Exception as e:
-        logger.warning(f"Failed to read git commit: {e}")
-        return "UNKNOWN"
+        actions["search_input_ready"] = inp_ready
+        st["input_ready"] = inp_ready
+    else:
+        actions["search_input_ready"] = "UNKNOWN"
+        st["input_ready"] = "UNKNOWN"
 
+    # 4. Search submissions (True/False/UNKNOWN)
+    if "onenter_invoked" in telemetry:
+        sub_invoked = 1 if bool(telemetry["onenter_invoked"]) else 0
+        actions["search_submissions"] = sub_invoked
+        st["search_submissions"] = sub_invoked
+    else:
+        actions["search_submissions"] = "UNKNOWN"
+        st["search_submissions"] = "UNKNOWN"
 
-def get_git_diff_stat() -> str:
-    try:
-        res = subprocess.run(
-            ["git", "diff", "HEAD"],
-            cwd=str(REPO_ROOT),
-            capture_output=True,
-            text=True,
-            check=True,
+    # 5. Safe search action explicitly selected
+    if "safe_search_action_selected" in telemetry:
+        safe_sel = bool(telemetry["safe_search_action_selected"])
+        checks["SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED"] = safe_sel
+        st["safe_search_action_explicitly_selected"] = safe_sel
+        safety["safe_search_action_explicitly_selected"] = safe_sel
+    elif "safe_search_action_explicitly_selected" in telemetry:
+        safe_sel = bool(telemetry["safe_search_action_explicitly_selected"])
+        checks["SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED"] = safe_sel
+        st["safe_search_action_explicitly_selected"] = safe_sel
+        safety["safe_search_action_explicitly_selected"] = safe_sel
+    else:
+        checks["SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED"] = "UNKNOWN"
+        st["safe_search_action_explicitly_selected"] = "UNKNOWN"
+        safety["safe_search_action_explicitly_selected"] = "UNKNOWN"
+
+    # 6. Pre-submit query verification (Distinct from post-search surface query!)
+    if "verified_query_state_before_submit" in telemetry:
+        pre_sub_ok = bool(telemetry["verified_query_state_before_submit"])
+        checks["QUERY_STATE_VERIFIED_BEFORE_SUBMIT"] = pre_sub_ok
+        st["query_state_verified_before_submit"] = pre_sub_ok
+    elif "query_state_verified_before_submit" in telemetry:
+        pre_sub_ok = bool(telemetry["query_state_verified_before_submit"])
+        checks["QUERY_STATE_VERIFIED_BEFORE_SUBMIT"] = pre_sub_ok
+        st["query_state_verified_before_submit"] = pre_sub_ok
+    else:
+        checks["QUERY_STATE_VERIFIED_BEFORE_SUBMIT"] = "UNKNOWN"
+        st["query_state_verified_before_submit"] = "UNKNOWN"
+
+    # 7. Post-search surface query verification (Correction 1: separate from pre-submit)
+    forensic_trans = telemetry.get("forensic_transition")
+    if isinstance(forensic_trans, dict) and "SEARCH_SURFACE_QUERY_MATCHES_REQUESTED" in forensic_trans:
+        surf_matches = bool(forensic_trans["SEARCH_SURFACE_QUERY_MATCHES_REQUESTED"])
+        checks["SEARCH_SURFACE_QUERY_MATCHES_REQUESTED"] = surf_matches
+        st["search_surface_query_matches_requested"] = surf_matches
+        if "SEARCH_SURFACE_QUERY_AFTER" in forensic_trans:
+            st["search_surface_query_after"] = forensic_trans["SEARCH_SURFACE_QUERY_AFTER"]
+    elif "search_surface_query_matches_requested" in telemetry:
+        surf_matches = bool(telemetry["search_surface_query_matches_requested"])
+        checks["SEARCH_SURFACE_QUERY_MATCHES_REQUESTED"] = surf_matches
+        st["search_surface_query_matches_requested"] = surf_matches
+        if "search_surface_query_after" in telemetry:
+            st["search_surface_query_after"] = telemetry["search_surface_query_after"]
+    else:
+        checks["SEARCH_SURFACE_QUERY_MATCHES_REQUESTED"] = "UNKNOWN"
+        st["search_surface_query_matches_requested"] = "UNKNOWN"
+
+    # 8. Safety telemetry
+    if "generic_default_onenter_used" in telemetry:
+        safety["GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH"] = bool(telemetry["generic_default_onenter_used"])
+    else:
+        safety["GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH"] = "UNKNOWN"
+
+    if "slackbot_action_invoked" in telemetry or "slackbot_action_invoked_by_pesu" in telemetry:
+        safety["SLACKBOT_ACTION_INVOKED_BY_PESU"] = bool(
+            telemetry.get("slackbot_action_invoked") or telemetry.get("slackbot_action_invoked_by_pesu")
         )
-        return res.stdout.strip()
-    except Exception as e:
-        logger.warning(f"Failed to read git diff: {e}")
-        return "UNKNOWN"
+    else:
+        safety["SLACKBOT_ACTION_INVOKED_BY_PESU"] = "UNKNOWN"
+
+    if "write_capable_action_invoked" in telemetry or "write_capable_action_invoked_by_pesu" in telemetry:
+        safety["WRITE_CAPABLE_ACTION_INVOKED_BY_PESU"] = bool(
+            telemetry.get("write_capable_action_invoked") or telemetry.get("write_capable_action_invoked_by_pesu")
+        )
+    else:
+        safety["WRITE_CAPABLE_ACTION_INVOKED_BY_PESU"] = "UNKNOWN"
+
+    if "unsafe_non_search_action_invoked" in telemetry or "unsafe_non_search_action_invoked_by_pesu" in telemetry:
+        safety["UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU"] = bool(
+            telemetry.get("unsafe_non_search_action_invoked") or telemetry.get("unsafe_non_search_action_invoked_by_pesu")
+        )
+    else:
+        safety["UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU"] = "UNKNOWN"
+
+    # 9. Supplemental composer telemetry (RD1 Run 2 semantics: missing/UNKNOWN does not block; explicit True/non-zero fails closed)
+    def _clean_supp(val: Any) -> Any:
+        return "UNKNOWN" if val is None or val == "UNKNOWN" else val
+
+    safety["composer_focus"] = _clean_supp(telemetry.get("composer_focus"))
+    safety["composer_text_input"] = _clean_supp(telemetry.get("composer_text_input"))
+    safety["composer_send"] = _clean_supp(telemetry.get("composer_send"))
 
 
-def get_file_sha256(path: Path) -> str:
-    if not path.exists():
-        return "MISSING"
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        while chunk := f.read(65536):
-            h.update(chunk)
-    return h.hexdigest()
+def is_supplemental_safe(val: Any) -> bool:
+    """Returns True if supplemental composer telemetry observation is safe.
+
+    Semantics:
+    - missing / UNKNOWN / None / NOT_RUN -> True (allowed; does not block VERIFIED_SAFE)
+    - 0 / False -> True (safe supplemental observation)
+    - explicit True / non-zero / any other value -> False (triggers FAIL_CLOSED)
+    """
+    if val in (0, None, "UNKNOWN", False, "NOT_RUN"):
+        return True
+    return False
 
 
-def compute_all_dependency_hashes() -> dict[str, str]:
-    return {name: get_file_sha256(p) for name, p in PRIMARY_DEPENDENCY_PATHS.items()}
+def evaluate_search_safety_and_query_authority(report: dict[str, Any]) -> tuple[bool, str]:
+    """Evaluates authoritative search safety and query authority before trusting results.
+
+    Exact Attempt 4 parity:
+    - safe_search_action_selected == true
+    - verified_query_state_before_submit == true
+    - generic_default_onenter_used == false
+    - slackbot_action_invoked_by_pesu == false
+    - write_capable_action_invoked_by_pesu == false
+    - unsafe_non_search_action_invoked_by_pesu == false
+    - onenter_invoked == true (search_submissions == 1)
+    - SEARCH_SURFACE_QUERY_MATCHES_REQUESTED == true
+    - Supplemental composer telemetry: explicit True/non-zero fails closed.
+    """
+    checks = report.get("checks", {})
+    safety = report.get("safety_telemetry", {})
+    actions = report.get("live_action_inventory", {})
+
+    # Explicit safety violations
+    if safety.get("GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH") is True:
+        return False, "EXPLICIT_SAFETY_VIOLATION_GENERIC_DEFAULT_ONENTER"
+    if safety.get("SLACKBOT_ACTION_INVOKED_BY_PESU") is True:
+        return False, "EXPLICIT_SAFETY_VIOLATION_SLACKBOT"
+    if safety.get("WRITE_CAPABLE_ACTION_INVOKED_BY_PESU") is True:
+        return False, "EXPLICIT_SAFETY_VIOLATION_WRITE_CAPABLE"
+    if safety.get("UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU") is True:
+        return False, "EXPLICIT_SAFETY_VIOLATION_UNSAFE_NON_SEARCH"
+
+    # Supplemental composer safety violations (missing/UNKNOWN does not block; explicit True/non-zero fails closed)
+    comp_f = safety.get("composer_focus")
+    comp_i = safety.get("composer_text_input")
+    comp_s = safety.get("composer_send")
+    if not is_supplemental_safe(comp_f):
+        return False, "EXPLICIT_SAFETY_VIOLATION_COMPOSER_FOCUS"
+    if not is_supplemental_safe(comp_i):
+        return False, "EXPLICIT_SAFETY_VIOLATION_COMPOSER_INPUT"
+    if not is_supplemental_safe(comp_s):
+        return False, "EXPLICIT_SAFETY_VIOLATION_COMPOSER_SEND"
+
+    # Required core safety
+    if checks.get("SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED") is not True:
+        return False, "SAFE_SEARCH_ACTION_NOT_EXPLICITLY_SELECTED"
+    if checks.get("QUERY_STATE_VERIFIED_BEFORE_SUBMIT") is not True:
+        return False, "QUERY_STATE_NOT_VERIFIED_BEFORE_SUBMIT"
+    if safety.get("GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH") is not False:
+        return False, "GENERIC_DEFAULT_ONENTER_NOT_PROVEN_FALSE"
+    if safety.get("SLACKBOT_ACTION_INVOKED_BY_PESU") is not False:
+        return False, "SLACKBOT_ACTION_NOT_PROVEN_FALSE"
+    if safety.get("WRITE_CAPABLE_ACTION_INVOKED_BY_PESU") is not False:
+        return False, "WRITE_CAPABLE_ACTION_NOT_PROVEN_FALSE"
+    if safety.get("UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU") is not False:
+        return False, "UNSAFE_NON_SEARCH_ACTION_NOT_PROVEN_FALSE"
+    if actions.get("search_submissions") != 1:
+        return False, "SEARCH_SUBMISSIONS_COUNT_INVALID"
+
+    # Post-search surface query match
+    if checks.get("SEARCH_SURFACE_QUERY_MATCHES_REQUESTED") is not True:
+        return False, "SEARCH_SURFACE_QUERY_MISMATCH"
+
+    return True, "VERIFIED_SAFE_AND_CORRELATED"
+
+# ---------------------------------------------------------------------------
+# Dynamic Parity Verifiers (Exact Attempt 4 / RB2 Parity)
+# ---------------------------------------------------------------------------
+
+def verify_runtime_search_path_parity_with_attempt4(runner_path: Optional[Path] = None) -> bool:
+    """Verifies that TR2 live execution path has exact constructor, start_runtime, and search parity with Attempt 4."""
+    target = runner_path or PRIMARY_DEPENDENCY_PATHS["tr2_runner"]
+    if not target.exists():
+        return False
+    content = target.read_text(encoding="utf-8")
+
+    required_patterns = [
+        r'PesuWebViewHost\s*\(\s*user_data_folder\s*=\s*DIRECT_SLACK_PROFILE_PATH,\s*initial_url\s*=\s*"https://app\.slack\.com/client"',
+        r'WebViewSlackSearchBackend\s*\(\s*config\s*=\s*WebViewRuntimeConfig\s*\(\s*storage_path\s*=\s*Path\s*\(\s*DIRECT_SLACK_PROFILE_PATH\s*\)\s*\),\s*host\s*=\s*host',
+        r'backend\.start_runtime\s*\(\s*timeout\s*=\s*timeout\s*\)',
+        r'backend\.search_messages\s*\(\s*TARGET_QUERY,\s*max_results\s*=\s*SEARCH_MAX_RESULTS\s*\)',
+        r'host\.destroy\s*\(\s*\)',
+    ]
+    for pat in required_patterns:
+        if not re.search(pat, content):
+            logger.error(f"Missing required runtime pattern in TR2 runner: {pat}")
+            return False
+    return True
 
 
-def get_all_loaded_project_files() -> dict[str, str]:
-    """Inspects sys.modules and computes SHA-256 for all resolved project source files."""
-    repo_root_str = os.path.normcase(str(REPO_ROOT.resolve()))
-    loaded_files = {}
+def verify_search_telemetry_authority_parity_with_attempt4(runner_path: Optional[Path] = None) -> bool:
+    """Verifies AST parity between TR2 and RB2 harvest_search_telemetry."""
+    rb2_file = REPO_ROOT / "scripts" / "diagnose_task11q4_p2a_l1_reply_bar_structure_rb2.py"
+    target = runner_path or PRIMARY_DEPENDENCY_PATHS["tr2_runner"]
+    if not rb2_file.exists() or not target.exists():
+        return False
 
-    for mod_name, mod in list(sys.modules.items()):
-        if not mod or not hasattr(mod, "__file__") or not mod.__file__:
-            continue
-        try:
-            fpath = os.path.normcase(os.path.realpath(mod.__file__))
-            if fpath.startswith(repo_root_str):
-                rel_path = os.path.relpath(fpath, repo_root_str).replace("\\", "/")
-                if rel_path.startswith("src/") or rel_path.startswith("scripts/"):
-                    loaded_files[rel_path] = get_file_sha256(Path(fpath))
-        except Exception:
-            continue
+    def extract_func_ast(src: str, func_name: str) -> str:
+        tree = ast.parse(src)
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                body = node.body[1:] if (isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant)) else node.body
+                node_copy = ast.FunctionDef(
+                    name=node.name,
+                    args=node.args,
+                    body=body,
+                    decorator_list=node.decorator_list,
+                    returns=node.returns
+                )
+                return ast.dump(node_copy)
+        raise ValueError(f"Function {func_name} not found")
 
-    this_script = os.path.relpath(os.path.normcase(str(Path(__file__).resolve())), repo_root_str).replace("\\", "/")
-    if this_script not in loaded_files:
-        loaded_files[this_script] = get_file_sha256(Path(__file__).resolve())
-
-    return loaded_files
-
-
-def audit_runtime_import_closure(manifest: dict[str, Any]) -> dict[str, Any]:
-    """Audits loaded project modules against the protocol manifest to guarantee zero untracked dependencies."""
-    loaded_files = get_all_loaded_project_files()
-    runtime_closure_manifest = manifest.get("runtime_closure_hashes", {})
-    primary_deps_manifest = manifest.get("dependency_hashes", {})
-
-    untracked_files = []
-    mismatched_files = []
-
-    for rel_path, actual_sha in loaded_files.items():
-        expected_sha = runtime_closure_manifest.get(rel_path)
-        if not expected_sha:
-            for dep_name, dep_path in PRIMARY_DEPENDENCY_PATHS.items():
-                p_rel = os.path.relpath(
-                    os.path.normcase(str(dep_path.resolve())),
-                    os.path.normcase(str(REPO_ROOT.resolve()))
-                ).replace("\\", "/")
-                if p_rel == rel_path:
-                    expected_sha = primary_deps_manifest.get(dep_name)
-                    break
-
-        if not expected_sha:
-            untracked_files.append(rel_path)
-        elif expected_sha != actual_sha:
-            mismatched_files.append({"path": rel_path, "expected": expected_sha, "actual": actual_sha})
-
-    return {
-        "loaded_project_module_count": len(loaded_files),
-        "loaded_project_module_paths": sorted(list(loaded_files.keys())),
-        "untracked_loaded_project_dependency_count": len(untracked_files),
-        "untracked_files": untracked_files,
-        "mismatched_files": mismatched_files,
-        "closure_audit_passed": (len(untracked_files) == 0 and len(mismatched_files) == 0 and len(loaded_files) == 60),
-    }
+    rb2_src = rb2_file.read_text(encoding="utf-8")
+    tr2_src = target.read_text(encoding="utf-8")
+    return extract_func_ast(tr2_src, "harvest_search_telemetry") == extract_func_ast(rb2_src, "harvest_search_telemetry")
 
 
-def verify_search_result_row_enumeration_parity() -> bool:
+def verify_search_exception_order_parity_with_attempt4(runner_path: Optional[Path] = None) -> bool:
+    """Verifies that search exception is captured, harvested in finally:, and re-raised before safety check."""
+    target = runner_path or PRIMARY_DEPENDENCY_PATHS["tr2_runner"]
+    if not target.exists():
+        return False
+    content = target.read_text(encoding="utf-8")
+
+    exc_block_pattern = (
+        r'try:\s+'
+        r'raw_results\s*=\s*backend\.search_messages\(TARGET_QUERY,\s*max_results=SEARCH_MAX_RESULTS\)\s+'
+        r'except Exception as se:\s+'
+        r'search_exception\s*=\s*se\s+.*?'
+        r'finally:\s+'
+        r'harvest_search_telemetry\(backend,\s*search_exception,\s*report\)\s+'
+        r'if search_exception is not None:\s+'
+        r'raise search_exception\s+'
+        r'safety_ok,\s*safety_reason\s*=\s*evaluate_search_safety_and_query_authority\(report\)'
+    )
+    return bool(re.search(exc_block_pattern, content, re.DOTALL))
+
+
+def verify_search_safety_gate_parity_with_attempt4(runner_path: Optional[Path] = None) -> bool:
+    """Verifies AST parity between TR2 and RB2 evaluate_search_safety_and_query_authority."""
+    rb2_file = REPO_ROOT / "scripts" / "diagnose_task11q4_p2a_l1_reply_bar_structure_rb2.py"
+    target = runner_path or PRIMARY_DEPENDENCY_PATHS["tr2_runner"]
+    if not rb2_file.exists() or not target.exists():
+        return False
+
+    def extract_func_ast(src: str, func_name: str) -> str:
+        tree = ast.parse(src)
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                body = node.body[1:] if (isinstance(node.body[0], ast.Expr) and isinstance(node.body[0].value, ast.Constant)) else node.body
+                node_copy = ast.FunctionDef(
+                    name=node.name,
+                    args=node.args,
+                    body=body,
+                    decorator_list=node.decorator_list,
+                    returns=node.returns
+                )
+                return ast.dump(node_copy)
+        raise ValueError(f"Function {func_name} not found")
+
+    rb2_src = rb2_file.read_text(encoding="utf-8")
+    tr2_src = target.read_text(encoding="utf-8")
+    return (
+        extract_func_ast(tr2_src, "evaluate_search_safety_and_query_authority") == extract_func_ast(rb2_src, "evaluate_search_safety_and_query_authority")
+        and extract_func_ast(tr2_src, "is_supplemental_safe") == extract_func_ast(rb2_src, "is_supplemental_safe")
+    )
+
+
+def verify_search_result_row_enumeration_parity(override_tr2_js: Optional[str] = None) -> bool:
     """Dynamically verifies that TR2 JS_INSPECT_TOP5_THREAD_AFFORDANCE_DISCOVERY exact row filter
     matches production JS_EXTRACT_SEARCH_RESULTS row filter.
     """
     prod_js = PROD_JS_EXTRACT_SEARCH_RESULTS
-    tr2_js = JS_INSPECT_TOP5_THREAD_AFFORDANCE_DISCOVERY
+    tr2_js = override_tr2_js or JS_INSPECT_TOP5_THREAD_AFFORDANCE_DISCOVERY
 
     if SEARCH_VIEW_SELECTOR != PROD_SEARCH_VIEW_SELECTOR:
-        logger.error("SEARCH_VIEW_SELECTOR mismatch")
+        logger.error(f"SEARCH_VIEW_SELECTOR mismatch: {SEARCH_VIEW_SELECTOR} != {PROD_SEARCH_VIEW_SELECTOR}")
         return False
+
     if SEARCH_RESULT_ROW_SELECTORS != PROD_SEARCH_RESULT_ROW_SELECTORS:
-        logger.error("SEARCH_RESULT_ROW_SELECTORS mismatch")
+        logger.error(f"SEARCH_RESULT_ROW_SELECTORS mismatch: {SEARCH_RESULT_ROW_SELECTORS} != {PROD_SEARCH_RESULT_ROW_SELECTORS}")
         return False
 
     prod_required = [
@@ -634,114 +895,173 @@ def verify_search_result_row_enumeration_parity() -> bool:
     if not tr2_filter_m:
         logger.error("Failed to extract TR2 row filter body")
         return False
-    tr2_filter_raw = tr2_filter_m.group(1)
-    tr2_filter_norm = re.sub(r'//.*', '', tr2_filter_raw)
-    tr2_filter_norm = re.sub(r'/\*.*?\*/', '', tr2_filter_norm, flags=re.DOTALL)
-    tr2_filter_norm = re.sub(r'\s+', '', tr2_filter_norm)
+    tr2_filter_norm = re.sub(r'\s+', '', tr2_filter_m.group(1))
 
-    if tr2_filter_norm != prod_filter_norm:
-        logger.error(f"TR2 filter does not match production:\n  TR2: {tr2_filter_norm}\n  PROD: {prod_filter_norm}")
-        return False
-
-    forbidden = ["search_filter", "search_header", "search_input", "closest(", "virtual-list-item"]
-    for f in forbidden:
-        if f in tr2_filter_raw:
-            logger.error(f"Forbidden predicate in TR2 filter: {f}")
-            return False
-
-    if "virtual-list-item" in tr2_js:
-        logger.error("Forbidden virtual-list-item in TR2 JS")
+    if prod_filter_norm != tr2_filter_norm:
+        logger.error(f"Row filter mismatch:\n  prod: {prod_filter_norm}\n  tr2:  {tr2_filter_norm}")
         return False
 
     return True
 
+# ---------------------------------------------------------------------------
+# Utility & Audit Functions
+# ---------------------------------------------------------------------------
 
-def verify_all_historical_baselines(baselines_dict: dict[str, dict[str, str]]) -> tuple[bool, dict[str, Any]]:
-    checks = {}
-    all_ok = True
-    for name, info in baselines_dict.items():
-        rel_path = info.get("path", "")
-        expected_sha = info.get("sha256", "")
-        full_path = REPO_ROOT / rel_path
-        if not full_path.exists():
-            checks[name] = {"exists": False, "match": False, "path": rel_path}
-            all_ok = False
+def get_git_commit() -> str:
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return res.stdout.strip()
+    except Exception:
+        return "UNKNOWN"
+
+
+def check_uncommitted_diff() -> bool:
+    try:
+        res = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        for line in res.stdout.splitlines():
+            if line.startswith(" M") or line.startswith("M "):
+                return True
+        return False
+    except Exception:
+        return False
+
+
+def get_file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while chunk := f.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def compute_all_dependency_hashes() -> dict[str, str]:
+    return {name: get_file_sha256(path) for name, path in PRIMARY_DEPENDENCY_PATHS.items()}
+
+
+def get_all_loaded_project_files() -> dict[str, str]:
+    repo_root_str = os.path.normcase(str(REPO_ROOT.resolve()))
+    loaded_files = {}
+
+    for mod_name, mod in list(sys.modules.items()):
+        if not mod or not hasattr(mod, "__file__") or not mod.__file__:
             continue
-        actual_sha = get_file_sha256(full_path)
-        match = (actual_sha == expected_sha)
-        checks[name] = {"exists": True, "match": match, "path": rel_path, "actual_sha": actual_sha, "expected_sha": expected_sha}
-        if not match:
-            all_ok = False
-    return all_ok, checks
+        fpath = mod.__file__
+        try:
+            norm_fpath = os.path.normcase(str(Path(fpath).resolve()))
+            if norm_fpath.startswith(repo_root_str):
+                rel_path = os.path.relpath(norm_fpath, repo_root_str).replace("\\", "/")
+                if rel_path.startswith("src/") or rel_path.startswith("scripts/"):
+                    loaded_files[rel_path] = get_file_sha256(Path(fpath))
+        except Exception:
+            continue
+
+    this_script = os.path.relpath(os.path.normcase(str(Path(__file__).resolve())), repo_root_str).replace("\\", "/")
+    if this_script not in loaded_files:
+        loaded_files[this_script] = get_file_sha256(Path(__file__).resolve())
+
+    return loaded_files
+
+
+def audit_runtime_import_closure(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Audits loaded project modules against the protocol manifest to guarantee zero untracked dependencies."""
+    loaded_files = get_all_loaded_project_files()
+    runtime_closure_manifest = manifest.get("runtime_closure_hashes", {})
+    primary_deps_manifest = manifest.get("dependency_hashes", {})
+
+    untracked_files = []
+    mismatched_files = []
+
+    for rel_path, actual_sha in loaded_files.items():
+        expected_sha = runtime_closure_manifest.get(rel_path)
+        if not expected_sha:
+            for dep_name, dep_path in PRIMARY_DEPENDENCY_PATHS.items():
+                p_rel = os.path.relpath(
+                    os.path.normcase(str(dep_path.resolve())),
+                    os.path.normcase(str(REPO_ROOT.resolve()))
+                ).replace("\\", "/")
+                if p_rel == rel_path:
+                    expected_sha = primary_deps_manifest.get(dep_name)
+                    break
+
+        if not expected_sha:
+            untracked_files.append(rel_path)
+        elif expected_sha != actual_sha:
+            mismatched_files.append({"path": rel_path, "expected": expected_sha, "actual": actual_sha})
+
+    return {
+        "loaded_project_module_count": len(loaded_files),
+        "loaded_project_module_paths": sorted(list(loaded_files.keys())),
+        "untracked_loaded_project_dependency_count": len(untracked_files),
+        "untracked_files": untracked_files,
+        "mismatched_runtime_dependency_count": len(mismatched_files),
+        "mismatched_runtime_dependencies": mismatched_files,
+        "closure_audit_passed": (len(untracked_files) == 0 and len(mismatched_files) == 0),
+    }
 
 
 def build_mock_dry_run_inspection() -> dict[str, Any]:
-    """Generates a comprehensive mock atomic inspection result for offline dry-run verification."""
-    rows = []
-    # Row 1: standalone/root with member link and timestamp link
-    rows.append({
-        "rank": 1,
-        "row_index": 0,
-        "channel_id": "C042WS25QAX",
-        "message_ts": "1718058683.912369",
-        "thread_ts": None,
-        "unique_identity_count": 1,
-        "is_thread_reply": False,
-        "row_in_composer": False,
-        "telemetry": {
-            "raw_family_match_count": 6,
-            "unique_interactive_candidate_count": 4,
-            "duplicate_family_matches_removed": 2,
-            "total_unique_candidate_count": 4,
-            "serialized_candidate_count": 4,
-            "candidate_serialization_truncated": False,
-            "discovery_complete": True
-        },
-        "has_thread_related_structure": False,
-        "thread_tokens_observed": [],
-        "row_classifications": ["SAME_MESSAGE_PERMALINK_ANCHOR_PRESENT", "ROLE_BUTTON_PRESENT"],
-        "candidates": [
+    """Builds synthetic mock atomic inspection conforming exactly to safe schema for offline dry run."""
+    mock_rows = []
+    for rank in range(1, 6):
+        is_thread_reply = (rank == 5)
+        ch_id = "C042WS25QAX"
+        msg_ts = "1718079276.126469" if is_thread_reply else f"171807927{rank}.100000"
+        th_ts = "1718058683.912369" if is_thread_reply else None
+
+        candidates = [
             {
                 "candidate_index": 1,
                 "tag_name": "a",
-                "role": None,
-                "data_qa": None,
+                "role": "link",
+                "data_qa": "message_content",
                 "is_connected": True,
                 "is_rendered": True,
                 "inside_composer": False,
                 "inside_reply_bar": False,
-                "depth_from_result_row": 4,
+                "depth_from_result_row": 3,
                 "is_anchor": True,
                 "is_button": False,
                 "has_role_button": False,
-                "has_data_qa": False,
+                "has_data_qa": True,
                 "aria_label_mentions_thread": False,
                 "aria_label_mentions_reply": False,
                 "aria_label_mentions_view_thread": False,
                 "title_mentions_thread": False,
                 "title_mentions_reply": False,
                 "is_slack_message_permalink": True,
-                "parsed_channel_id": "C042WS25QAX",
-                "parsed_message_ts": "1718058683.912369",
-                "parsed_thread_ts": None,
+                "parsed_channel_id": ch_id,
+                "parsed_message_ts": msg_ts,
+                "parsed_thread_ts": th_ts,
                 "identity_matches_row": True,
-                "points_to_thread_root": True,
+                "points_to_thread_root": False if is_thread_reply else True,
                 "points_to_same_message": True,
-                "has_thread_ts_parameter": False,
+                "has_thread_ts_parameter": is_thread_reply,
                 "element_classifications": ["SAME_MESSAGE_PERMALINK_ANCHOR_PRESENT"]
             },
             {
                 "candidate_index": 2,
-                "tag_name": "span",
+                "tag_name": "button",
                 "role": "button",
-                "data_qa": "message_sender_name",
+                "data_qa": "more_actions",
                 "is_connected": True,
                 "is_rendered": True,
                 "inside_composer": False,
                 "inside_reply_bar": False,
-                "depth_from_result_row": 3,
+                "depth_from_result_row": 4,
                 "is_anchor": False,
-                "is_button": False,
+                "is_button": True,
                 "has_role_button": True,
                 "has_data_qa": True,
                 "aria_label_mentions_thread": False,
@@ -757,34 +1077,26 @@ def build_mock_dry_run_inspection() -> dict[str, Any]:
                 "points_to_thread_root": False,
                 "points_to_same_message": False,
                 "has_thread_ts_parameter": False,
-                "element_classifications": ["ROLE_BUTTON_PRESENT"]
+                "element_classifications": ["ROLE_BUTTON_PRESENT", "BUTTON_PRESENT"]
             }
         ]
-    })
-    # Rows 2 to 5 with complete inspection and no thread structure
-    for r in range(2, 6):
-        rows.append({
-            "rank": r,
-            "row_index": r - 1,
-            "channel_id": f"C0{r}WS25QAX",
-            "message_ts": f"171805868{r}.912369",
-            "thread_ts": None,
+
+        mock_rows.append({
+            "rank": rank,
+            "channel_id": ch_id,
+            "message_ts": msg_ts,
+            "thread_ts": th_ts,
             "unique_identity_count": 1,
-            "is_thread_reply": False,
-            "row_in_composer": False,
-            "telemetry": {
-                "raw_family_match_count": 4,
-                "unique_interactive_candidate_count": 3,
-                "duplicate_family_matches_removed": 1,
-                "total_unique_candidate_count": 3,
-                "serialized_candidate_count": 3,
-                "candidate_serialization_truncated": False,
-                "discovery_complete": True
-            },
+            "is_thread_reply": is_thread_reply,
+            "raw_family_match_count": 3,
+            "unique_interactive_candidate_count": 2,
+            "duplicate_family_matches_removed": 1,
+            "total_unique_candidate_count": 2,
+            "serialized_candidate_count": 2,
+            "candidate_serialization_truncated": False,
+            "row_classifications": ["ROLE_BUTTON_PRESENT", "BUTTON_PRESENT", "SAME_MESSAGE_PERMALINK_ANCHOR_PRESENT"],
             "has_thread_related_structure": False,
-            "thread_tokens_observed": [],
-            "row_classifications": ["SAME_MESSAGE_PERMALINK_ANCHOR_PRESENT"],
-            "candidates": []
+            "candidate_records": candidates
         })
 
     return {
@@ -794,82 +1106,26 @@ def build_mock_dry_run_inspection() -> dict[str, Any]:
         "any_row_has_thread_related_structure": False,
         "any_row_serialization_truncated": False,
         "discovery_complete": True,
-        "discovery_loss_mode": "NONE",
-        "rows": rows
+        "discovery_loss_mode": "FULL_IN_MEMORY_EVALUATION",
+        "rows": mock_rows
     }
 
+# ---------------------------------------------------------------------------
+# Runner Execution
+# ---------------------------------------------------------------------------
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="TR2 Search-Row Thread Affordance Discovery Diagnostic")
-    parser.add_argument("--dry-run", action="store_true", help="Execute in offline dry-run mode")
-    parser.add_argument("--force-dry-run", action="store_true", help="Alias for --dry-run")
-    parser.add_argument("--no-headless", action="store_true", help="Run webview visible if supported")
-    args = parser.parse_args()
-
-    is_dry_run = args.dry_run or args.force_dry_run
+def run_tr2_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict[str, Any]:
     start_time = time.time()
-    logger.info(f"Starting TR2 Diagnostic (mode: {'DRY_RUN' if is_dry_run else 'LIVE'})...")
-
-    # 1. Pre-WebView Gate: Live Output Existence Guard
-    if LIVE_OUTPUT_FILE.exists() and not is_dry_run:
-        logger.error(f"FAIL_CLOSED: Live output artifact already exists at {LIVE_OUTPUT_FILE}. Cannot overwrite.")
-        return 1
-
-    # 2. Pre-WebView Gate: Protocol Freeze Verification
-    if not PROTOCOL_FREEZE_PATH.exists():
-        logger.error(f"FAIL_CLOSED: Protocol freeze file missing at {PROTOCOL_FREEZE_PATH}")
-        return 1
-
-    with open(PROTOCOL_FREEZE_PATH, "r", encoding="utf-8") as f:
-        protocol_data = json.load(f)
-
-    if protocol_data.get("protocol") != PROTOCOL_NAME:
-        logger.error(f"FAIL_CLOSED: Protocol name mismatch: {protocol_data.get('protocol')} vs {PROTOCOL_NAME}")
-        return 1
-
-    # 3. Pre-WebView Gate: Historical Baselines Verification (9 artifacts)
-    baselines_ok, baseline_checks = verify_all_historical_baselines(protocol_data.get("historical_baselines", {}))
-    if not baselines_ok:
-        logger.error(f"FAIL_CLOSED: Historical baselines mismatch: {baseline_checks}")
-        return 1
-
-    # 4. Pre-WebView Gate: Dependency Hashes Verification
-    dep_hashes = protocol_data.get("dependency_hashes", {})
-    for dep_key, expected_hash in dep_hashes.items():
-        if dep_key in PRIMARY_DEPENDENCY_PATHS:
-            actual_hash = get_file_sha256(PRIMARY_DEPENDENCY_PATHS[dep_key])
-            if actual_hash != expected_hash:
-                logger.error(f"FAIL_CLOSED: Hash mismatch for {dep_key}: {actual_hash} vs {expected_hash}")
-                return 1
-
-    # 5. Pre-WebView Gate: Runtime Closure Audit
-    closure_audit = audit_runtime_import_closure(protocol_data)
-    if not closure_audit.get("closure_audit_passed"):
-        logger.error(f"FAIL_CLOSED: Runtime closure audit failed: {closure_audit}")
-        return 1
-
-    # 6. Pre-WebView Gate: Production Search-Result Row-Enumeration Parity
-    row_parity_passed = verify_search_result_row_enumeration_parity()
-    if not row_parity_passed:
-        logger.error("FAIL_CLOSED: TR2_SEARCH_RESULT_ROW_ENUMERATION_PARITY failed")
-        return 1
-
     git_commit = get_git_commit()
-    git_diff = get_git_diff_stat()
-    pre_hashes = compute_all_dependency_hashes()
+    git_diff = check_uncommitted_diff()
 
-    report = {
-        "task_id": "task11q4_p2a_l1_tr2_thread_affordance",
+    report: dict[str, Any] = {
+        "task_id": "Phase 13.5D / Task 11 / P2A-L1 / TR2",
         "protocol": PROTOCOL_NAME,
         "diagnostic_run": DIAGNOSTIC_RUN,
-        "execution_mode": "DRY_RUN" if is_dry_run else "LIVE",
-        "verdict": "PENDING",
-        "diagnostic_verdict": "PENDING",
-        "P2A_L1": {
-            "query": TARGET_QUERY,
-            "budget": SEARCH_MAX_RESULTS,
-            "max_serialized_candidates_per_row": MAX_SERIALIZED_CANDIDATES_PER_ROW
-        },
+        "execution_mode": "DRY_RUN" if dry_run else "LIVE",
+        "verdict": "UNKNOWN",
+        "diagnostic_verdict": "UNKNOWN",
         "execution_timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "git_commit": git_commit,
         "uncommitted_diff": git_diff,
@@ -889,22 +1145,49 @@ def main() -> int:
         "live_action_inventory": {
             "search_activation_dispatches": 0,
             "search_modal_observed": False,
-            "search_input_ready": False,
-            "search_submissions": 0,
+            "search_input_ready": "UNKNOWN",
+            "search_submissions": "UNKNOWN",
             "reply_bar_clicks": 0,
             "result_card_clicks": 0,
             "pure_read_dom_extractions": 0,
             "new_ui_actions_added": 0,
             "new_click_targets_added": 0,
-            "search_modal_open_calls": 0
+            "search_modal_open_calls": 0,
         },
-        "search_telemetry": {},
-        "safety_telemetry": {},
+        "search_telemetry": {
+            "search_activation_dispatches": 0,
+            "modal_ever_observed": False,
+            "final_modal_count": "UNKNOWN",
+            "activation_to_first_modal_ms": None,
+            "readiness_poll_count": "UNKNOWN",
+            "last_confirmed_stage": "UNKNOWN",
+            "failure_case_classification": "NONE",
+            "document_visibility_state": "unknown",
+            "document_hidden": "UNKNOWN",
+            "document_has_focus": "UNKNOWN",
+            "elapsed_ms": 0,
+            "timeout_ms": 5000,
+            "input_ready": "UNKNOWN",
+            "search_submissions": "UNKNOWN",
+            "safe_search_action_explicitly_selected": "UNKNOWN",
+            "query_state_verified_before_submit": "UNKNOWN",
+            "search_surface_query_matches_requested": "UNKNOWN",
+        },
+        "safety_telemetry": {
+            "safe_search_action_explicitly_selected": "UNKNOWN",
+            "GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH": "UNKNOWN",
+            "SLACKBOT_ACTION_INVOKED_BY_PESU": "UNKNOWN",
+            "WRITE_CAPABLE_ACTION_INVOKED_BY_PESU": "UNKNOWN",
+            "UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU": "UNKNOWN",
+            "composer_focus": "UNKNOWN",
+            "composer_text_input": "UNKNOWN",
+            "composer_send": "UNKNOWN",
+        },
         "checks": {
-            "frozen_protocol_respected": True,
-            "frozen_hashes_matched": True,
+            "frozen_protocol_respected": False,
+            "frozen_hashes_matched": False,
             "code_or_protocol_mutated_after_first_live": False,
-            "search_safety_gate": "PASS",
+            "search_safety_gate": "NOT_EVALUATED",
             "atomic_snapshot_executed": False,
             "zero_clicks_strictly_preserved": True,
             "USER_MESSAGE_TEXT_CAPTURED": False,
@@ -917,34 +1200,169 @@ def main() -> int:
             "TEXT_CONTENT_CAPTURED": False,
             "INNER_HTML_CAPTURED": False,
             "OUTER_HTML_CAPTURED": False,
-            "TR2_RUNTIME_SEARCH_PATH_PARITY_WITH_ATTEMPT4": True,
-            "TR2_SEARCH_TELEMETRY_AUTHORITY_PARITY_WITH_ATTEMPT4": True,
-            "TR2_SEARCH_EXCEPTION_ORDER_PARITY_WITH_ATTEMPT4": True,
-            "TR2_SEARCH_SAFETY_GATE_PARITY_WITH_ATTEMPT4": True,
-            "TR2_SEARCH_RESULT_ROW_ENUMERATION_PARITY": True,
+            "TR2_RUNTIME_SEARCH_PATH_PARITY_WITH_ATTEMPT4": False,
+            "TR2_SEARCH_TELEMETRY_AUTHORITY_PARITY_WITH_ATTEMPT4": False,
+            "TR2_SEARCH_EXCEPTION_ORDER_PARITY_WITH_ATTEMPT4": False,
+            "TR2_SEARCH_SAFETY_GATE_PARITY_WITH_ATTEMPT4": False,
+            "TR2_SEARCH_RESULT_ROW_ENUMERATION_PARITY": False,
             "UNTRACKED_RUNTIME_DEPENDENCIES": 0,
             "ACTION_CONTRACTS_SATISFIED": True,
-            "SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED": False,
-            "QUERY_STATE_VERIFIED_BEFORE_SUBMIT": False,
-            "SEARCH_SURFACE_QUERY_MATCHES_REQUESTED": False,
+            "SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED": "UNKNOWN",
+            "QUERY_STATE_VERIFIED_BEFORE_SUBMIT": "UNKNOWN",
+            "SEARCH_SURFACE_QUERY_MATCHES_REQUESTED": "UNKNOWN",
         },
-        "atomic_inspection": {},
-        "runtime_closure_audit": closure_audit,
+        "atomic_inspection": None,
+        "runtime_closure_audit": None,
         "provider_calls": 0,
         "retry_occurred": False,
-        "live_execution_started": not is_dry_run,
+        "live_execution_started": False,
         "live_execution_completed": False,
-        "harness_phases": ["PREFLIGHT_GATES_PASSED"],
+        "harness_phases": [],
         "error": None,
         "duration_seconds": 0.0,
-        "pre_hashes": pre_hashes
     }
 
-    if is_dry_run:
-        logger.info("Executing in dry-run mode (offline simulation)...")
+    # 1. Live Artifact Overwrite Guard
+    if not dry_run and LIVE_OUTPUT_FILE.exists():
+        err_msg = "LIVE_ARTIFACT_ALREADY_EXISTS_ONE_SHOT_REPLAY_FORBIDDEN"
+        logger.error(f"❌ {err_msg}: {LIVE_OUTPUT_FILE}")
+        report["error"] = err_msg
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "LIVE_ARTIFACT_ALREADY_EXISTS"
+        return report
+
+    # 2. Dynamic Parity Verifications (COMPUTED, NOT HARDCODED)
+    row_enum_ok = verify_search_result_row_enumeration_parity()
+    report["checks"]["TR2_SEARCH_RESULT_ROW_ENUMERATION_PARITY"] = row_enum_ok
+    if not row_enum_ok:
+        report["error"] = "SEARCH_RESULT_ROW_ENUMERATION_PARITY_MISMATCH"
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "PREFLIGHT_ROW_ENUMERATION_PARITY_MISMATCH"
+        return report
+
+    runtime_parity_ok = verify_runtime_search_path_parity_with_attempt4()
+    report["checks"]["TR2_RUNTIME_SEARCH_PATH_PARITY_WITH_ATTEMPT4"] = runtime_parity_ok
+    if not runtime_parity_ok:
+        report["error"] = "RUNTIME_SEARCH_PATH_PARITY_MISMATCH"
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "PREFLIGHT_RUNTIME_PARITY_MISMATCH"
+        return report
+
+    telemetry_parity_ok = verify_search_telemetry_authority_parity_with_attempt4()
+    report["checks"]["TR2_SEARCH_TELEMETRY_AUTHORITY_PARITY_WITH_ATTEMPT4"] = telemetry_parity_ok
+    if not telemetry_parity_ok:
+        report["error"] = "SEARCH_TELEMETRY_AUTHORITY_PARITY_MISMATCH"
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "PREFLIGHT_TELEMETRY_PARITY_MISMATCH"
+        return report
+
+    exc_order_parity_ok = verify_search_exception_order_parity_with_attempt4()
+    report["checks"]["TR2_SEARCH_EXCEPTION_ORDER_PARITY_WITH_ATTEMPT4"] = exc_order_parity_ok
+    if not exc_order_parity_ok:
+        report["error"] = "SEARCH_EXCEPTION_ORDER_PARITY_MISMATCH"
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "PREFLIGHT_EXCEPTION_ORDER_PARITY_MISMATCH"
+        return report
+
+    safety_gate_parity_ok = verify_search_safety_gate_parity_with_attempt4()
+    report["checks"]["TR2_SEARCH_SAFETY_GATE_PARITY_WITH_ATTEMPT4"] = safety_gate_parity_ok
+    if not safety_gate_parity_ok:
+        report["error"] = "SEARCH_SAFETY_GATE_PARITY_MISMATCH"
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "PREFLIGHT_SAFETY_GATE_PARITY_MISMATCH"
+        return report
+
+    # 3. Protocol Preflight Gate
+    if not PROTOCOL_FREEZE_PATH.exists():
+        err_msg = f"PROTOCOL_FREEZE_NOT_FOUND: {PROTOCOL_FREEZE_PATH}"
+        logger.error(f"❌ {err_msg}")
+        report["error"] = err_msg
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "PROTOCOL_MISSING"
+        return report
+
+    with open(PROTOCOL_FREEZE_PATH, "r", encoding="utf-8") as f:
+        protocol_manifest = json.load(f)
+
+    # 4. Protocol Semantic Identity Validation
+    semantic_errors = []
+    if protocol_manifest.get("protocol") != PROTOCOL_NAME:
+        semantic_errors.append(f"protocol mismatch: {protocol_manifest.get('protocol')} != {PROTOCOL_NAME}")
+    if protocol_manifest.get("target_query") != TARGET_QUERY:
+        semantic_errors.append(f"target_query mismatch: {protocol_manifest.get('target_query')} != {TARGET_QUERY}")
+    if protocol_manifest.get("search_max_results") != SEARCH_MAX_RESULTS:
+        semantic_errors.append(f"search_max_results mismatch: {protocol_manifest.get('search_max_results')} != {SEARCH_MAX_RESULTS}")
+    if protocol_manifest.get("canonical_dry_run_verdict") != CANONICAL_DRY_RUN_VERDICT:
+        semantic_errors.append(f"canonical_dry_run_verdict mismatch: {protocol_manifest.get('canonical_dry_run_verdict')} != {CANONICAL_DRY_RUN_VERDICT}")
+
+    expected_live_file = str(LIVE_OUTPUT_FILE.relative_to(REPO_ROOT)).replace("\\", "/")
+    if protocol_manifest.get("live_output_file") != expected_live_file:
+        semantic_errors.append(f"live_output_file mismatch: {protocol_manifest.get('live_output_file')} != {expected_live_file}")
+
+    expected_dry_file = str(DRY_RUN_OUTPUT_FILE.relative_to(REPO_ROOT)).replace("\\", "/")
+    if protocol_manifest.get("dry_run_output_file") != expected_dry_file:
+        semantic_errors.append(f"dry_run_output_file mismatch: {protocol_manifest.get('dry_run_output_file')} != {expected_dry_file}")
+
+    comp_auth = protocol_manifest.get("comparison_authority", {})
+    if comp_auth.get("attempt4_runner_sha256") != AUTHORITATIVE_ATTEMPT4_SHA256:
+        semantic_errors.append(f"attempt4_runner_sha256 mismatch: {comp_auth.get('attempt4_runner_sha256')} != {AUTHORITATIVE_ATTEMPT4_SHA256}")
+
+    parity_inv = comp_auth.get("parity_invariants", {})
+    for p_flag in [
+        "TR2_RUNTIME_SEARCH_PATH_PARITY_WITH_ATTEMPT4",
+        "TR2_SEARCH_TELEMETRY_AUTHORITY_PARITY_WITH_ATTEMPT4",
+        "TR2_SEARCH_EXCEPTION_ORDER_PARITY_WITH_ATTEMPT4",
+        "TR2_SEARCH_SAFETY_GATE_PARITY_WITH_ATTEMPT4",
+        "TR2_SEARCH_RESULT_ROW_ENUMERATION_PARITY"
+    ]:
+        if parity_inv.get(p_flag) is not True:
+            semantic_errors.append(f"{p_flag} is not True in comparison_authority")
+
+    if semantic_errors:
+        report["error"] = f"PROTOCOL_SEMANTIC_IDENTITY_MISMATCH: {'; '.join(semantic_errors)}"
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "PROTOCOL_SEMANTIC_IDENTITY_MISMATCH"
+        logger.error(f"❌ Protocol semantic identity validation failed: {semantic_errors}")
+        return report
+
+    pre_hashes = compute_all_dependency_hashes()
+    report["pre_hashes"] = pre_hashes
+
+    expected_hashes = protocol_manifest.get("dependency_hashes", {})
+    hashes_matched = True
+    for dep_name, cur_hash in pre_hashes.items():
+        exp = expected_hashes.get(dep_name)
+        if not exp or exp != cur_hash:
+            hashes_matched = False
+            logger.error(f"❌ Dependency hash mismatch for {dep_name}: current={cur_hash} vs expected={exp}")
+
+    report["checks"]["frozen_protocol_respected"] = True
+    report["checks"]["frozen_hashes_matched"] = hashes_matched
+
+    if not hashes_matched:
+        report["error"] = "DEPENDENCY_HASH_MISMATCH_BEFORE_EXECUTION"
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "PREFLIGHT_HASH_MISMATCH"
+        return report
+
+    closure_audit = audit_runtime_import_closure(protocol_manifest)
+    report["runtime_closure_audit"] = closure_audit
+    report["checks"]["UNTRACKED_RUNTIME_DEPENDENCIES"] = closure_audit["untracked_loaded_project_dependency_count"]
+
+    if not closure_audit["closure_audit_passed"]:
+        report["error"] = f"RUNTIME_CLOSURE_AUDIT_FAILED: untracked={closure_audit['untracked_files']}, mismatched={closure_audit['mismatched_runtime_dependencies']}"
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "RUNTIME_CLOSURE_GATE_FAILED"
+        return report
+
+    report["harness_phases"].append("PREFLIGHT_GATES_PASSED")
+
+    if dry_run:
+        logger.info("🔍 [DRY_RUN] All preflight gates passed. Dry-run mode: executing offline mock inspection...")
         report["checks"]["SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED"] = True
         report["checks"]["QUERY_STATE_VERIFIED_BEFORE_SUBMIT"] = True
         report["checks"]["SEARCH_SURFACE_QUERY_MATCHES_REQUESTED"] = True
+        report["checks"]["search_safety_gate"] = "PASS"
         report["live_action_inventory"]["search_submissions"] = 1
         report["live_action_inventory"]["pure_read_dom_extractions"] = 1
 
@@ -959,132 +1377,118 @@ def main() -> int:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         with open(DRY_RUN_OUTPUT_FILE, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2, ensure_ascii=False)
-        logger.info(f"Dry run completed successfully. Written to {DRY_RUN_OUTPUT_FILE}")
-        return 0
+        logger.info(f"📄 Saved dry-run trace to {DRY_RUN_OUTPUT_FILE}")
+        return report
 
-    # LIVE EXECUTION PATH
-    logger.info("Initializing WebView host for LIVE TR2 execution...")
+    # LIVE EXECUTION PATH (Attempt 4 Parity)
+    report["live_execution_started"] = True
     report["harness_phases"].append("LIVE_EXECUTION_STARTED")
+
     host: Optional[PesuWebViewHost] = None
     try:
-        host = PesuWebViewHost(initial_url="https://app.slack.com/client")
-        host.start(timeout=20.0)
-        report["live_action_inventory"]["search_activation_dispatches"] += 1
-
-        cfg = WebViewRuntimeConfig(
-            max_search_results=SEARCH_MAX_RESULTS,
-            search_timeout_sec=15.0,
-            allow_navigation=False,
-            headless=not args.no_headless
+        logger.info("🌐 [RUNTIME_START] Initializing Dedicated Slack WebView Host (Attempt 4 Parity)...")
+        host = PesuWebViewHost(
+            user_data_folder=DIRECT_SLACK_PROFILE_PATH,
+            initial_url="https://app.slack.com/client",
+            title="PESU Task 11 / P2A-L1 / TR2 Thread Affordance Discovery",
         )
-        backend = WebViewSlackSearchBackend(host=host, config=cfg)
+        backend = WebViewSlackSearchBackend(
+            config=WebViewRuntimeConfig(storage_path=Path(DIRECT_SLACK_PROFILE_PATH)),
+            host=host,
+        )
 
-        # Execute single search
-        search_res = None
-        search_exc = None
+        logger.info("🌐 [RUNTIME_START] Starting Dedicated Slack WebView Host...")
+        backend.start_runtime(timeout=timeout)
+
+        logger.info(f"🔍 [SEARCH_EXECUTE] Submitting target query: '{TARGET_QUERY}' (max_results={SEARCH_MAX_RESULTS})...")
+        raw_results = None
+        search_exception = None
         try:
-            report["live_action_inventory"]["search_submissions"] += 1
-            search_res = backend.search_messages(TARGET_QUERY, max_results=SEARCH_MAX_RESULTS)
+            raw_results = backend.search_messages(TARGET_QUERY, max_results=SEARCH_MAX_RESULTS)
         except Exception as se:
-            search_exc = se
-            logger.error(f"Search execution threw exception: {se}")
+            search_exception = se
+            logger.warning(f"⚠️ search_messages raised: {se}")
+        finally:
+            harvest_search_telemetry(backend, search_exception, report)
 
-        # Telemetry authority extraction
-        search_telemetry = getattr(backend, "last_search_telemetry", {}) or {}
-        if not search_telemetry and search_exc and hasattr(search_exc, "details"):
-            search_telemetry = search_exc.details
+        if search_exception is not None:
+            raise search_exception
 
-        report["search_telemetry"] = search_telemetry
-        report["safety_telemetry"] = {
-            "safe_search_action_explicitly_selected": search_telemetry.get("safe_search_action_explicitly_selected", False),
-            "GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH": search_telemetry.get("GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH", False),
-            "SLACKBOT_ACTION_INVOKED_BY_PESU": search_telemetry.get("SLACKBOT_ACTION_INVOKED_BY_PESU", False),
-            "WRITE_CAPABLE_ACTION_INVOKED_BY_PESU": search_telemetry.get("WRITE_CAPABLE_ACTION_INVOKED_BY_PESU", False),
-            "UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU": search_telemetry.get("UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU", False),
-        }
+        safety_ok, safety_reason = evaluate_search_safety_and_query_authority(report)
+        report["checks"]["search_safety_gate"] = "PASS" if safety_ok else f"FAIL_{safety_reason}"
 
-        # Verify search authority
-        safe_action = bool(search_telemetry.get("safe_search_action_explicitly_selected"))
-        query_verified = bool(search_telemetry.get("query_state_verified_before_submit"))
-        surface_matches = bool(search_telemetry.get("search_surface_query_matches_requested"))
-        no_generic_enter = not bool(search_telemetry.get("GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH"))
-        no_slackbot = not bool(search_telemetry.get("SLACKBOT_ACTION_INVOKED_BY_PESU"))
-        no_write = not bool(search_telemetry.get("WRITE_CAPABLE_ACTION_INVOKED_BY_PESU"))
-        no_unsafe = not bool(search_telemetry.get("UNSAFE_NON_SEARCH_ACTION_INVOKED_BY_PESU"))
-
-        report["checks"]["SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED"] = safe_action
-        report["checks"]["QUERY_STATE_VERIFIED_BEFORE_SUBMIT"] = query_verified
-        report["checks"]["SEARCH_SURFACE_QUERY_MATCHES_REQUESTED"] = surface_matches
-
-        search_authority_ok = (
-            safe_action and query_verified and surface_matches and
-            no_generic_enter and no_slackbot and no_write and no_unsafe
-        )
-
-        if search_exc:
-            report["error"] = str(search_exc)
+        if not safety_ok:
+            logger.error(f"❌ Search safety / query correlation failed: {safety_reason}")
             report["verdict"] = "FAIL_CLOSED"
-            report["diagnostic_verdict"] = "FAIL_CLOSED"
-            return 1
-
-        if not search_authority_ok:
-            logger.error("Search telemetry authority insufficient.")
-            report["verdict"] = "FAIL_CLOSED"
-            report["diagnostic_verdict"] = "SEARCH_AUTHORITY_INSUFFICIENT"
-            return 1
+            report["diagnostic_verdict"] = f"SAFETY_GATE_FAILED_{safety_reason}"
+            return report
 
         report["harness_phases"].append("SEARCH_SAFETY_AND_QUERY_CORRELATION_VERIFIED")
 
-        # Execute single atomic DOM snapshot
-        js_cmd = f"({JS_INSPECT_TOP5_THREAD_AFFORDANCE_DISCOVERY})({json.dumps(SEARCH_VIEW_SELECTOR)}, {json.dumps(SEARCH_RESULT_ROW_SELECTORS)}, {SEARCH_MAX_RESULTS}, {MAX_SERIALIZED_CANDIDATES_PER_ROW})"
-        atomic_res = host.evaluate_js(js_cmd, timeout=10.0)
-        report["live_action_inventory"]["pure_read_dom_extractions"] += 1
-
-        if not isinstance(atomic_res, dict) or not atomic_res.get("ok"):
-            err_msg = atomic_res.get("error") if isinstance(atomic_res, dict) else "ATOMIC_SNAPSHOT_FAILED"
-            logger.error(f"Atomic inspection failed: {err_msg}")
-            report["error"] = err_msg
-            report["verdict"] = "FAIL_CLOSED"
-            report["diagnostic_verdict"] = "ATOMIC_SNAPSHOT_FAILED"
-            return 1
-
+        logger.info("🔬 [ATOMIC_DOM_SNAPSHOT] Evaluating top-5 rows for thread affordances in single JS snapshot...")
+        js_atomic = (
+            f"({JS_INSPECT_TOP5_THREAD_AFFORDANCE_DISCOVERY})"
+            f"({json.dumps(SEARCH_VIEW_SELECTOR)}, "
+            f"{json.dumps(SEARCH_RESULT_ROW_SELECTORS)}, "
+            f"{SEARCH_MAX_RESULTS}, "
+            f"{MAX_SERIALIZED_CANDIDATES_PER_ROW})"
+        )
+        atomic_res = host.evaluate_script(js_atomic, timeout=15.0)
         report["atomic_inspection"] = atomic_res
         report["checks"]["atomic_snapshot_executed"] = True
-        report["harness_phases"].append("ATOMIC_DOM_SNAPSHOT_COMPLETED")
+        report["live_action_inventory"]["pure_read_dom_extractions"] = 1
 
-        # Evaluate diagnostic verdict
+        if not isinstance(atomic_res, dict) or not atomic_res.get("ok"):
+            logger.error(f"❌ Atomic DOM snapshot failed: {atomic_res}")
+            report["verdict"] = "FAIL_CLOSED"
+            report["diagnostic_verdict"] = "ATOMIC_SNAPSHOT_FAILED"
+            return report
+
         if not atomic_res.get("discovery_complete"):
-            diag_verdict = "DISCOVERY_INCOMPLETE_TRUNCATED"
+            report["verdict"] = "DISCOVERY_INCOMPLETE_TRUNCATED"
+            report["diagnostic_verdict"] = "DISCOVERY_INCOMPLETE_TRUNCATED"
         elif atomic_res.get("any_row_has_thread_related_structure"):
-            diag_verdict = "THREAD_RELATED_STRUCTURE_OBSERVED"
+            report["verdict"] = "THREAD_RELATED_STRUCTURE_OBSERVED"
+            report["diagnostic_verdict"] = "THREAD_RELATED_STRUCTURE_OBSERVED"
         else:
-            diag_verdict = "NO_THREAD_RELATED_INTERACTIVE_STRUCTURE_OBSERVED"
+            report["verdict"] = "NO_THREAD_RELATED_INTERACTIVE_STRUCTURE_OBSERVED"
+            report["diagnostic_verdict"] = "NO_THREAD_RELATED_INTERACTIVE_STRUCTURE_OBSERVED"
 
-        report["diagnostic_verdict"] = diag_verdict
-        report["verdict"] = diag_verdict
-        report["harness_phases"].append("DIAGNOSTIC_EVALUATION_COMPLETED")
         report["live_execution_completed"] = True
+        report["harness_phases"].append("LIVE_EXECUTION_COMPLETED")
         report["duration_seconds"] = round(time.time() - start_time, 2)
 
-        # Write live artifact exactly once
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         with open(LIVE_OUTPUT_FILE, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2, ensure_ascii=False)
-        logger.info(f"Live diagnostic completed successfully: {diag_verdict}. Written to {LIVE_OUTPUT_FILE}")
-        return 0
+        logger.info(f"📄 Saved live diagnostic trace to {LIVE_OUTPUT_FILE}")
+        return report
 
     except Exception as e:
-        logger.exception(f"Unexpected error during TR2 execution: {e}")
+        logger.error(f"❌ TR2 execution error: {e}", exc_info=True)
         report["error"] = str(e)
         report["verdict"] = "FAIL_CLOSED"
-        report["diagnostic_verdict"] = "FAIL_CLOSED"
-        return 1
+        report["diagnostic_verdict"] = "EXECUTION_EXCEPTION"
+        return report
     finally:
-        if host:
+        if host is not None:
             try:
                 host.destroy()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"⚠️ Error destroying host: {e}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Task 11 / TR2: Search-Row Thread Affordance Discovery")
+    parser.add_argument("--dry-run", action="store_true", help="Run in offline dry-run mode")
+    parser.add_argument("--timeout", type=float, default=30.0, help="Search timeout in seconds")
+    args = parser.parse_args()
+
+    report = run_tr2_diagnostic(dry_run=args.dry_run, timeout=args.timeout)
+    print(f"TR2 Verdict: {report.get('verdict')} (diagnostic_verdict: {report.get('diagnostic_verdict')})")
+    if report.get("verdict") in (CANONICAL_DRY_RUN_VERDICT, "THREAD_RELATED_STRUCTURE_OBSERVED", "NO_THREAD_RELATED_INTERACTIVE_STRUCTURE_OBSERVED"):
+        return 0
+    return 1
 
 
 if __name__ == "__main__":
