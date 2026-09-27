@@ -1,6 +1,6 @@
 """Regression tests for Phase 13.5D / Task 11 / P2A / TR2 Search-Row Thread Affordance Discovery.
 
-Invariants verified (39 tests):
+Invariants verified (43 tests):
 1-28. Original core discovery, safe structural metadata, deduplication, derived booleans, permalink parsing,
       truncation awareness, historical hashes, clean repo, zero provider calls.
 29. TR2 host constructor parity with Attempt 4
@@ -14,6 +14,10 @@ Invariants verified (39 tests):
 37. Protocol semantic identity mismatch blocks pre-WebView
 38. Runtime closure hash mismatch blocks pre-WebView
 39. Parity flags are computed, not hardcoded
+40. TR1 Rank-5 historical case classified as thread-related
+41. Negative control 1: Plain same-message permalink without thread_ts is not thread-related by permalink alone
+42. Negative control 2: Root permalink without thread_ts does not create thread context token
+43. Negative control 3: Thread context permalink does not imply click eligibility
 """
 
 import ast
@@ -368,7 +372,6 @@ def test_34_missing_unsafe_telemetry_does_not_default_safe():
         "safe_search_action_selected": True,
         "verified_query_state_before_submit": True,
         "search_surface_query_matches_requested": True,
-        # Omit generic_default_onenter_used, slackbot_action_invoked, etc.
     }
     class MockBackend:
         last_search_telemetry = backend_telemetry
@@ -455,3 +458,215 @@ def test_39_parity_flags_are_computed_not_hardcoded():
     assert checks["TR2_SEARCH_EXCEPTION_ORDER_PARITY_WITH_ATTEMPT4"] is True
     assert checks["TR2_SEARCH_SAFETY_GATE_PARITY_WITH_ATTEMPT4"] is True
     assert checks["TR2_SEARCH_RESULT_ROW_ENUMERATION_PARITY"] is True
+
+
+# ---------------------------------------------------------------------------
+# Helper for evaluating Discovery JS in Node
+# ---------------------------------------------------------------------------
+
+def _run_node_discovery_evaluation(elements_config):
+    js_snippet = tr2_diag.JS_INSPECT_TOP5_THREAD_AFFORDANCE_DISCOVERY
+    node_script = f"""
+    const inspectFn = {js_snippet};
+
+    function makeElement(cfg) {{
+        return {{
+            tagName: cfg.tagName || 'A',
+            isConnected: true,
+            parentElement: null,
+            getBoundingClientRect: () => ({{ width: 50, height: 20 }}),
+            hasAttribute: (attr) => {{
+                if (attr === 'href') return !!cfg.href;
+                return false;
+            }},
+            getAttribute: (attr) => {{
+                if (attr === 'href') return cfg.href || null;
+                if (attr === 'aria-label') return cfg.ariaLabel || null;
+                if (attr === 'title') return cfg.title || null;
+                if (attr === 'role') return cfg.role || null;
+                if (attr === 'data-qa') return cfg.dataQa || null;
+                return null;
+            }},
+            closest: () => null
+        }};
+    }}
+
+    const elements = {json.dumps(elements_config)}.map(makeElement);
+
+    const mockRow = {{
+        isConnected: true,
+        getBoundingClientRect: () => ({{ width: 100, height: 100 }}),
+        querySelectorAll: (sel) => {{
+            if (sel === 'a[href]') return elements.filter(e => e.tagName === 'A' && e.hasAttribute('href'));
+            if (sel === 'button') return elements.filter(e => e.tagName === 'BUTTON');
+            if (sel === '[role="button"]') return elements.filter(e => e.getAttribute('role') === 'button');
+            if (sel === '[data-qa]') return elements.filter(e => e.getAttribute('data-qa') !== null);
+            return [];
+        }}
+    }};
+
+    global.document = {{
+        querySelectorAll: (sel) => {{
+            if (sel === '[data-qa="search_view"]') {{
+                return [{{
+                    querySelectorAll: (rowSel) => [mockRow]
+                }}];
+            }}
+            return [];
+        }}
+    }};
+
+    const res = inspectFn('[data-qa="search_view"]', '[data-qa="search_result"]', 5, 50);
+    console.log(JSON.stringify(res));
+    """
+    res = subprocess.run(["node", "-e", node_script], capture_output=True, text=True, check=True)
+    return json.loads(res.stdout.strip())
+
+
+# ---------------------------------------------------------------------------
+# 40-43. Required Regressions for TR2-PREP Final Discovery Correction
+# ---------------------------------------------------------------------------
+
+def test_thread_reply_same_message_permalink_with_thread_ts_is_thread_related():
+    """40. Verifies TR1 rank-5 regression fixture: same-message permalink with thread_ts parameter
+    is classified with SAME_MESSAGE_PERMALINK_ANCHOR_PRESENT, THREAD_CONTEXT_PERMALINK_ANCHOR_PRESENT,
+    and SAME_MESSAGE_THREAD_REPLY_PERMALINK_PRESENT, producing has_thread_related_structure = true.
+    """
+    channel_id = "C042WS25QAX"
+    message_ts = "1718079276.126469"
+    thread_ts = "1718058683.912369"
+    permalink = f"https://app.slack.com/archives/{channel_id}/p1718079276126469?thread_ts={thread_ts}"
+
+    res = _run_node_discovery_evaluation([
+        {"tagName": "A", "href": permalink}
+    ])
+    assert res["ok"] is True
+    assert len(res["rows"]) == 1
+    row = res["rows"][0]
+    row_classes = row["row_classifications"]
+    cand = row["candidate_records"][0]
+    cand_classes = cand["element_classifications"]
+
+    # Verify permalink parsed fields
+    assert cand["is_slack_message_permalink"] is True
+    assert cand["parsed_channel_id"] == channel_id
+    assert cand["parsed_message_ts"] == message_ts
+    assert cand["parsed_thread_ts"] == thread_ts
+    assert cand["has_thread_ts_parameter"] is True
+    assert cand["points_to_same_message"] is True
+    assert cand["points_to_thread_root"] is False
+
+    # Required tokens present
+    assert "SAME_MESSAGE_PERMALINK_ANCHOR_PRESENT" in row_classes
+    assert "THREAD_CONTEXT_PERMALINK_ANCHOR_PRESENT" in row_classes
+    assert "SAME_MESSAGE_THREAD_REPLY_PERMALINK_PRESENT" in row_classes
+
+    assert "SAME_MESSAGE_PERMALINK_ANCHOR_PRESENT" in cand_classes
+    assert "THREAD_CONTEXT_PERMALINK_ANCHOR_PRESENT" in cand_classes
+    assert "SAME_MESSAGE_THREAD_REPLY_PERMALINK_PRESENT" in cand_classes
+
+    # Row and global thread related structure
+    assert row["has_thread_related_structure"] is True
+    assert res["any_row_has_thread_related_structure"] is True
+
+
+def test_plain_same_message_permalink_without_thread_ts_is_not_thread_related_by_permalink_alone():
+    """41. Negative control: plain same-message permalink without thread_ts parameter
+    receives SAME_MESSAGE_PERMALINK_ANCHOR_PRESENT but NOT THREAD_CONTEXT_PERMALINK_ANCHOR_PRESENT,
+    and has_thread_related_structure remains false.
+    """
+    channel_id = "C042WS25QAX"
+    permalink = f"https://app.slack.com/archives/{channel_id}/p1718079276126469"
+
+    res = _run_node_discovery_evaluation([
+        {"tagName": "A", "href": permalink}
+    ])
+    assert res["ok"] is True
+    assert len(res["rows"]) == 1
+    row = res["rows"][0]
+    row_classes = row["row_classifications"]
+    cand = row["candidate_records"][0]
+
+    assert cand["is_slack_message_permalink"] is True
+    assert cand["has_thread_ts_parameter"] is False
+    assert cand["parsed_thread_ts"] is None
+    assert cand["points_to_same_message"] is True
+
+    # Same message token is present
+    assert "SAME_MESSAGE_PERMALINK_ANCHOR_PRESENT" in row_classes
+
+    # Thread context tokens must be ABSENT
+    assert "THREAD_CONTEXT_PERMALINK_ANCHOR_PRESENT" not in row_classes
+    assert "SAME_MESSAGE_THREAD_REPLY_PERMALINK_PRESENT" not in row_classes
+    assert "THREAD_ROOT_PERMALINK_ANCHOR_PRESENT" not in row_classes
+
+    # By permalink alone, not thread related
+    assert row["has_thread_related_structure"] is False
+    assert res["any_row_has_thread_related_structure"] is False
+
+
+def test_root_permalink_without_thread_ts_does_not_create_thread_context_token():
+    """42. Negative control: root permalink without thread_ts query parameter
+    receives THREAD_ROOT_PERMALINK_ANCHOR_PRESENT but does NOT receive THREAD_CONTEXT_PERMALINK_ANCHOR_PRESENT.
+    """
+    channel_id = "C042WS25QAX"
+    thread_ts = "1718058683.912369"
+    # Anchor 1 defines row as a thread reply
+    anchor1 = f"https://app.slack.com/archives/{channel_id}/p1718079276126469?thread_ts={thread_ts}"
+    # Anchor 2 points to thread root WITHOUT ?thread_ts= parameter
+    anchor2 = f"https://app.slack.com/archives/{channel_id}/p1718058683912369"
+
+    res = _run_node_discovery_evaluation([
+        {"tagName": "A", "href": anchor1},
+        {"tagName": "A", "href": anchor2}
+    ])
+    assert res["ok"] is True
+    row = res["rows"][0]
+    cand2 = row["candidate_records"][1]
+
+    assert cand2["is_slack_message_permalink"] is True
+    assert cand2["points_to_thread_root"] is True
+    assert cand2["points_to_same_message"] is False
+    assert cand2["has_thread_ts_parameter"] is False
+
+    # Root token present, but NOT thread context token
+    assert "THREAD_ROOT_PERMALINK_ANCHOR_PRESENT" in cand2["element_classifications"]
+    assert "THREAD_CONTEXT_PERMALINK_ANCHOR_PRESENT" not in cand2["element_classifications"]
+    assert "SAME_MESSAGE_THREAD_REPLY_PERMALINK_PRESENT" not in cand2["element_classifications"]
+
+
+def test_thread_context_permalink_does_not_imply_click_eligibility():
+    """43. Negative control: verifies neither THREAD_CONTEXT_PERMALINK_ANCHOR_PRESENT nor any other
+    discovery token introduces CLICK_ELIGIBLE, SAFE_TO_CLICK, QUALIFIED_NAVIGATION_TARGET, or ATTEMPT5_TARGET
+    into classifications, verdicts, checks, or contracts.
+    """
+    forbidden_tokens = [
+        "CLICK_ELIGIBLE",
+        "SAFE_TO_CLICK",
+        "QUALIFIED_NAVIGATION_TARGET",
+        "ATTEMPT5_TARGET"
+    ]
+
+    with open(tr2_diag.PROTOCOL_FREEZE_PATH, "r", encoding="utf-8") as f:
+        proto = json.load(f)
+
+    # Check protocol tokens
+    for ft in forbidden_tokens:
+        assert ft not in proto["discovery_classification_tokens"]
+        assert ft not in proto["thread_related_tokens"]
+
+    # Check runner constants
+    for ft in forbidden_tokens:
+        assert ft not in tr2_diag.DISCOVERY_CLASSIFICATION_TOKENS
+        assert ft not in tr2_diag.THREAD_RELATED_TOKENS
+
+    # Check report schema / action contracts
+    rep = tr2_diag.run_tr2_diagnostic(dry_run=True)
+    assert rep["action_contracts"]["MAX_REPLY_BAR_CLICKS"] == 0
+    assert rep["action_contracts"]["MAX_RESULT_CARD_CLICKS"] == 0
+    assert rep["action_contracts"]["MAX_WRITE_CAPABLE_ACTIONS"] == 0
+    assert rep["action_contracts"]["MAX_PROVIDER_CALLS"] == 0
+
+    rep_str = json.dumps(rep)
+    for ft in forbidden_tokens:
+        assert ft not in rep_str

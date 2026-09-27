@@ -123,6 +123,28 @@ MAX_RETRIES = 0
 SEARCH_VIEW_SELECTOR = '[data-qa="search_view"]'
 SEARCH_RESULT_ROW_SELECTORS = '[data-qa="search_result"], [data-qa="search_message_result_item"], .c-search_result'
 
+DISCOVERY_CLASSIFICATION_TOKENS = [
+    "SAME_MESSAGE_PERMALINK_ANCHOR_PRESENT",
+    "THREAD_ROOT_PERMALINK_ANCHOR_PRESENT",
+    "THREAD_CONTEXT_PERMALINK_ANCHOR_PRESENT",
+    "SAME_MESSAGE_THREAD_REPLY_PERMALINK_PRESENT",
+    "THREAD_TOKEN_DATA_QA_PRESENT",
+    "THREAD_TOKEN_ARIA_DERIVED_PRESENT",
+    "REPLY_TOKEN_ARIA_DERIVED_PRESENT",
+    "ROLE_BUTTON_PRESENT",
+    "BUTTON_PRESENT",
+    "NO_THREAD_RELATED_INTERACTIVE_STRUCTURE_OBSERVED",
+]
+
+THREAD_RELATED_TOKENS = [
+    "THREAD_ROOT_PERMALINK_ANCHOR_PRESENT",
+    "THREAD_CONTEXT_PERMALINK_ANCHOR_PRESENT",
+    "SAME_MESSAGE_THREAD_REPLY_PERMALINK_PRESENT",
+    "THREAD_TOKEN_DATA_QA_PRESENT",
+    "THREAD_TOKEN_ARIA_DERIVED_PRESENT",
+    "REPLY_TOKEN_ARIA_DERIVED_PRESENT",
+]
+
 PRIMARY_DEPENDENCY_PATHS = {
     "tr2_runner": REPO_ROOT / "scripts" / "diagnose_task11q4_p2a_l1_thread_affordance_tr2.py",
     "slack_search": SRC_DIR / "pesu_agent" / "search" / "slack_search.py",
@@ -349,6 +371,14 @@ JS_INSPECT_TOP5_THREAD_AFFORDANCE_DISCOVERY = r"""
                         elementClassifications.push("THREAD_ROOT_PERMALINK_ANCHOR_PRESENT");
                         rowClassifications.add("THREAD_ROOT_PERMALINK_ANCHOR_PRESENT");
                     }
+                    if (hasThreadTsParameter && parsedThreadTs !== null) {
+                        elementClassifications.push("THREAD_CONTEXT_PERMALINK_ANCHOR_PRESENT");
+                        rowClassifications.add("THREAD_CONTEXT_PERMALINK_ANCHOR_PRESENT");
+                    }
+                    if (pointsToSameMessage && hasThreadTsParameter && parsedThreadTs !== null && parsedMessageTs !== parsedThreadTs) {
+                        elementClassifications.push("SAME_MESSAGE_THREAD_REPLY_PERMALINK_PRESENT");
+                        rowClassifications.add("SAME_MESSAGE_THREAD_REPLY_PERMALINK_PRESENT");
+                    }
                 }
                 if (dataQa) {
                     const lowerDqa = dataQa.toLowerCase();
@@ -407,8 +437,9 @@ JS_INSPECT_TOP5_THREAD_AFFORDANCE_DISCOVERY = r"""
 
             const rowClassArray = Array.from(rowClassifications);
             const hasThreadRelatedStructure = (
-                rowClassifications.has("SAME_MESSAGE_PERMALINK_ANCHOR_PRESENT") ||
                 rowClassifications.has("THREAD_ROOT_PERMALINK_ANCHOR_PRESENT") ||
+                rowClassifications.has("THREAD_CONTEXT_PERMALINK_ANCHOR_PRESENT") ||
+                rowClassifications.has("SAME_MESSAGE_THREAD_REPLY_PERMALINK_PRESENT") ||
                 rowClassifications.has("THREAD_TOKEN_DATA_QA_PRESENT") ||
                 rowClassifications.has("THREAD_TOKEN_ARIA_DERIVED_PRESENT") ||
                 rowClassifications.has("REPLY_TOKEN_ARIA_DERIVED_PRESENT")
@@ -1015,10 +1046,8 @@ def build_mock_dry_run_inspection() -> dict[str, Any]:
     """Builds synthetic mock atomic inspection conforming exactly to safe schema for offline dry run."""
     mock_rows = []
     for rank in range(1, 6):
-        is_thread_reply = (rank == 5)
         ch_id = "C042WS25QAX"
-        msg_ts = "1718079276.126469" if is_thread_reply else f"171807927{rank}.100000"
-        th_ts = "1718058683.912369" if is_thread_reply else None
+        msg_ts = f"171807927{rank}.100000"
 
         candidates = [
             {
@@ -1043,11 +1072,11 @@ def build_mock_dry_run_inspection() -> dict[str, Any]:
                 "is_slack_message_permalink": True,
                 "parsed_channel_id": ch_id,
                 "parsed_message_ts": msg_ts,
-                "parsed_thread_ts": th_ts,
+                "parsed_thread_ts": None,
                 "identity_matches_row": True,
-                "points_to_thread_root": False if is_thread_reply else True,
+                "points_to_thread_root": False,
                 "points_to_same_message": True,
-                "has_thread_ts_parameter": is_thread_reply,
+                "has_thread_ts_parameter": False,
                 "element_classifications": ["SAME_MESSAGE_PERMALINK_ANCHOR_PRESENT"]
             },
             {
@@ -1085,9 +1114,9 @@ def build_mock_dry_run_inspection() -> dict[str, Any]:
             "rank": rank,
             "channel_id": ch_id,
             "message_ts": msg_ts,
-            "thread_ts": th_ts,
+            "thread_ts": None,
             "unique_identity_count": 1,
-            "is_thread_reply": is_thread_reply,
+            "is_thread_reply": False,
             "raw_family_match_count": 3,
             "unique_interactive_candidate_count": 2,
             "duplicate_family_matches_removed": 1,
@@ -1294,6 +1323,14 @@ def run_tr2_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict[
         semantic_errors.append(f"search_max_results mismatch: {protocol_manifest.get('search_max_results')} != {SEARCH_MAX_RESULTS}")
     if protocol_manifest.get("canonical_dry_run_verdict") != CANONICAL_DRY_RUN_VERDICT:
         semantic_errors.append(f"canonical_dry_run_verdict mismatch: {protocol_manifest.get('canonical_dry_run_verdict')} != {CANONICAL_DRY_RUN_VERDICT}")
+
+    manifest_tokens = protocol_manifest.get("discovery_classification_tokens", [])
+    if set(manifest_tokens) != set(DISCOVERY_CLASSIFICATION_TOKENS):
+        semantic_errors.append(f"discovery_classification_tokens mismatch: {manifest_tokens} != {DISCOVERY_CLASSIFICATION_TOKENS}")
+
+    manifest_thread_tokens = protocol_manifest.get("thread_related_tokens", [])
+    if set(manifest_thread_tokens) != set(THREAD_RELATED_TOKENS):
+        semantic_errors.append(f"thread_related_tokens mismatch: {manifest_thread_tokens} != {THREAD_RELATED_TOKENS}")
 
     expected_live_file = str(LIVE_OUTPUT_FILE.relative_to(REPO_ROOT)).replace("\\", "/")
     if protocol_manifest.get("live_output_file") != expected_live_file:

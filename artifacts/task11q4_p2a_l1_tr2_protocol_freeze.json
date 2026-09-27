@@ -11,6 +11,26 @@
     "target_query": "26년 하반기 간담회",
     "search_max_results": 5
   },
+  "discovery_classification_tokens": [
+    "SAME_MESSAGE_PERMALINK_ANCHOR_PRESENT",
+    "THREAD_ROOT_PERMALINK_ANCHOR_PRESENT",
+    "THREAD_CONTEXT_PERMALINK_ANCHOR_PRESENT",
+    "SAME_MESSAGE_THREAD_REPLY_PERMALINK_PRESENT",
+    "THREAD_TOKEN_DATA_QA_PRESENT",
+    "THREAD_TOKEN_ARIA_DERIVED_PRESENT",
+    "REPLY_TOKEN_ARIA_DERIVED_PRESENT",
+    "ROLE_BUTTON_PRESENT",
+    "BUTTON_PRESENT",
+    "NO_THREAD_RELATED_INTERACTIVE_STRUCTURE_OBSERVED"
+  ],
+  "thread_related_tokens": [
+    "THREAD_ROOT_PERMALINK_ANCHOR_PRESENT",
+    "THREAD_CONTEXT_PERMALINK_ANCHOR_PRESENT",
+    "SAME_MESSAGE_THREAD_REPLY_PERMALINK_PRESENT",
+    "THREAD_TOKEN_DATA_QA_PRESENT",
+    "THREAD_TOKEN_ARIA_DERIVED_PRESENT",
+    "REPLY_TOKEN_ARIA_DERIVED_PRESENT"
+  ],
   "comparison_authority": {
     "attempt4_runner": "scripts/qualify_task11q4_p2a_live_root_extraction_attempt4.py",
     "attempt4_runner_sha256": "b2f4c6972e1e1297045c7fe7d7f1e50492225d3bd073b311ee1dcadd967a905d",
@@ -52,7 +72,7 @@
     "OUTER_HTML_CAPTURED": false
   },
   "dependency_hashes": {
-    "tr2_runner": "cce38024b9692094ab6606a673d3944491c36e808f1f33c15beaf4c90b8e2b56",
+    "tr2_runner": "6cf4b96a84689aee7829199580d6dbb445bd8deac7b6831c338b200baea71338",
     "slack_search": "d214bb7a845e965c8c364a932a074ee73036098b91869242f0b2459a70780f5c",
     "models": "4ec38c787923b668aa530a1e4edbd434f90821abd510ff2af332472db9e39064",
     "webview_thread_reader": "01fecd9934227742329af0de782f0170c3cce2527f66d32f98f075bf268f0d87",
@@ -125,7 +145,7 @@
     "src/pesu_agent/search/real_slack_backend.py": "2e15af2544fa6ad047c855ae9065b8544c2f8e6b771ede17c81a0d7bbf24b74c",
     "src/pesu_agent/search/slack_backend_factory.py": "c0151d0b4e57b42f72fae543a4b8490e62aed62c28c3c980bc10c78bf9b6b3bf",
     "src/pesu_agent/search/__init__.py": "5f1e2bb33d4a778fe263351804dc2b7cab52aad35253aa197ac2f312b8453ae5",
-    "scripts/diagnose_task11q4_p2a_l1_thread_affordance_tr2.py": "cce38024b9692094ab6606a673d3944491c36e808f1f33c15beaf4c90b8e2b56"
+    "scripts/diagnose_task11q4_p2a_l1_thread_affordance_tr2.py": "6cf4b96a84689aee7829199580d6dbb445bd8deac7b6831c338b200baea71338"
   },
   "historical_baselines": {
     "attempt1": {
