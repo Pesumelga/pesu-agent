@@ -1052,39 +1052,55 @@ def get_all_loaded_project_files() -> dict[str, str]:
 
 
 def audit_runtime_import_closure(manifest: dict[str, Any]) -> dict[str, Any]:
-    """Audits loaded project modules against the protocol manifest to guarantee zero untracked dependencies."""
+    """Audits loaded project modules against the protocol manifest to guarantee exact set identity.
+
+    Enforces exact bidirectional set equality between loaded project files and runtime_closure_hashes:
+    - missing_from_manifest = loaded_paths - manifest_paths (must be empty)
+    - stale_manifest_entries = manifest_paths - loaded_paths (must be empty)
+    - shared_paths = loaded_paths & manifest_paths
+    - sha_mismatches = mismatches across shared_paths (must be empty)
+
+    NO primary-dependency fallback is permitted: every loaded project file must exist directly
+    in runtime_closure_hashes with exact matching SHA-256.
+    """
     loaded_files = get_all_loaded_project_files()
     runtime_closure_manifest = manifest.get("runtime_closure_hashes", {})
-    primary_deps_manifest = manifest.get("dependency_hashes", {})
 
-    untracked_files = []
+    loaded_paths = set(loaded_files.keys())
+    manifest_paths = set(runtime_closure_manifest.keys())
+
+    missing_from_manifest = sorted(list(loaded_paths - manifest_paths))
+    stale_manifest_entries = sorted(list(manifest_paths - loaded_paths))
+    shared_paths = loaded_paths & manifest_paths
+
     mismatched_files = []
+    for p in sorted(list(shared_paths)):
+        actual_sha = loaded_files[p]
+        expected_sha = runtime_closure_manifest[p]
+        if actual_sha != expected_sha:
+            mismatched_files.append({"path": p, "expected": expected_sha, "actual": actual_sha})
 
-    for rel_path, actual_sha in loaded_files.items():
-        expected_sha = runtime_closure_manifest.get(rel_path)
-        if not expected_sha:
-            for dep_name, dep_path in PRIMARY_DEPENDENCY_PATHS.items():
-                p_rel = os.path.relpath(
-                    os.path.normcase(str(dep_path.resolve())),
-                    os.path.normcase(str(REPO_ROOT.resolve()))
-                ).replace("\\", "/")
-                if p_rel == rel_path:
-                    expected_sha = primary_deps_manifest.get(dep_name)
-                    break
-
-        if not expected_sha:
-            untracked_files.append(rel_path)
-        elif expected_sha != actual_sha:
-            mismatched_files.append({"path": rel_path, "expected": expected_sha, "actual": actual_sha})
+    closure_audit_passed = (
+        len(missing_from_manifest) == 0 and
+        len(stale_manifest_entries) == 0 and
+        len(mismatched_files) == 0
+    )
 
     return {
         "loaded_project_module_count": len(loaded_files),
         "loaded_project_module_paths": sorted(list(loaded_files.keys())),
-        "untracked_loaded_project_dependency_count": len(untracked_files),
-        "untracked_files": untracked_files,
+        "manifest_runtime_closure_count": len(runtime_closure_manifest),
+        "manifest_runtime_closure_paths": sorted(list(runtime_closure_manifest.keys())),
+        "missing_from_runtime_closure_count": len(missing_from_manifest),
+        "missing_from_runtime_closure": missing_from_manifest,
+        "stale_runtime_closure_entry_count": len(stale_manifest_entries),
+        "stale_runtime_closure_entries": stale_manifest_entries,
         "mismatched_runtime_dependency_count": len(mismatched_files),
         "mismatched_runtime_dependencies": mismatched_files,
-        "closure_audit_passed": (len(untracked_files) == 0 and len(mismatched_files) == 0),
+        # Backward compatibility aliases
+        "untracked_loaded_project_dependency_count": len(missing_from_manifest),
+        "untracked_files": missing_from_manifest,
+        "closure_audit_passed": closure_audit_passed,
     }
 
 
@@ -1498,8 +1514,17 @@ def run_tr2_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict[
     report["runtime_closure_audit"] = closure_audit
     report["checks"]["UNTRACKED_RUNTIME_DEPENDENCIES"] = closure_audit["untracked_loaded_project_dependency_count"]
 
+    report["checks"]["UNTRACKED_RUNTIME_DEPENDENCIES"] = closure_audit["missing_from_runtime_closure_count"]
+    report["checks"]["STALE_RUNTIME_CLOSURE_ENTRIES"] = closure_audit["stale_runtime_closure_entry_count"]
+    report["checks"]["MISMATCHED_RUNTIME_DEPENDENCIES"] = closure_audit["mismatched_runtime_dependency_count"]
+
     if not closure_audit["closure_audit_passed"]:
-        report["error"] = f"RUNTIME_CLOSURE_AUDIT_FAILED: untracked={closure_audit['untracked_files']}, mismatched={closure_audit['mismatched_runtime_dependencies']}"
+        report["error"] = (
+            f"RUNTIME_CLOSURE_AUDIT_FAILED: "
+            f"missing={closure_audit['missing_from_runtime_closure']}, "
+            f"stale={closure_audit['stale_runtime_closure_entries']}, "
+            f"mismatched={closure_audit['mismatched_runtime_dependencies']}"
+        )
         report["verdict"] = "FAIL_CLOSED"
         report["diagnostic_verdict"] = "RUNTIME_CLOSURE_GATE_FAILED"
         return report

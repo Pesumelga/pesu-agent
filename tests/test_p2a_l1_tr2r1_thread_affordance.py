@@ -814,3 +814,86 @@ def test_tr2r1_final_artifact_never_overwritten(tmp_path, monkeypatch):
 
     content = json.loads(fake_live.read_text(encoding="utf-8"))
     assert content == {"original": "evidence"}, "File content must not have been overwritten"
+
+
+# ---------------------------------------------------------------------------
+# Exact Runtime Closure Regressions (Phase 13.5D Task 11 P2A TR2-R1)
+# ---------------------------------------------------------------------------
+
+def test_tr2r1_runtime_closure_contains_current_runner():
+    """Verifies that the frozen runtime_closure_hashes contains the TR2-R1 runner with exact SHA."""
+    proto_freeze = json.loads((REPO_ROOT / "artifacts" / "task11q4_p2a_l1_tr2r1_protocol_freeze.json").read_text(encoding="utf-8"))
+    closure = proto_freeze.get("runtime_closure_hashes", {})
+    runner_rel = "scripts/diagnose_task11q4_p2a_l1_thread_affordance_tr2r1.py"
+    assert runner_rel in closure, f"{runner_rel} must be in frozen runtime_closure_hashes"
+    act_sha = tr2r1_diag.get_file_sha256(REPO_ROOT / runner_rel)
+    assert closure[runner_rel] == act_sha, f"SHA mismatch for runner in closure: {closure[runner_rel]} != {act_sha}"
+
+
+def test_tr2r1_runtime_closure_excludes_consumed_tr2_runner():
+    """Verifies that the consumed failed TR2 runner is NOT in TR2-R1's runtime_closure_hashes."""
+    proto_freeze = json.loads((REPO_ROOT / "artifacts" / "task11q4_p2a_l1_tr2r1_protocol_freeze.json").read_text(encoding="utf-8"))
+    closure = proto_freeze.get("runtime_closure_hashes", {})
+    consumed_runner_rel = "scripts/diagnose_task11q4_p2a_l1_thread_affordance_tr2.py"
+    assert consumed_runner_rel not in closure, f"{consumed_runner_rel} must NOT be in TR2-R1 runtime_closure_hashes"
+
+
+def test_runtime_closure_missing_loaded_file_fails_even_if_primary_dependency_hash_exists():
+    """Verifies that if a loaded project file is missing from runtime_closure_hashes,
+    audit_runtime_import_closure fails EVEN IF it is present in dependency_hashes.
+    Proves dependency_hashes cannot mask an incomplete runtime closure.
+    """
+    proto_freeze = json.loads((REPO_ROOT / "artifacts" / "task11q4_p2a_l1_tr2r1_protocol_freeze.json").read_text(encoding="utf-8"))
+    manifest_copy = json.loads(json.dumps(proto_freeze))
+
+    runner_rel = "scripts/diagnose_task11q4_p2a_l1_thread_affordance_tr2r1.py"
+    assert runner_rel in manifest_copy["runtime_closure_hashes"]
+    del manifest_copy["runtime_closure_hashes"][runner_rel]
+    assert "tr2r1_runner" in manifest_copy.get("dependency_hashes", {})
+
+    audit = tr2r1_diag.audit_runtime_import_closure(manifest_copy)
+    assert audit["closure_audit_passed"] is False
+    assert audit["missing_from_runtime_closure_count"] == 1
+    assert runner_rel in audit["missing_from_runtime_closure"]
+
+
+def test_runtime_closure_stale_extra_manifest_entry_fails():
+    """Verifies that a stale/extra manifest entry in runtime_closure_hashes causes audit failure."""
+    proto_freeze = json.loads((REPO_ROOT / "artifacts" / "task11q4_p2a_l1_tr2r1_protocol_freeze.json").read_text(encoding="utf-8"))
+    manifest_copy = json.loads(json.dumps(proto_freeze))
+
+    stale_path = "src/pesu_agent/non_existent_module_for_testing.py"
+    manifest_copy["runtime_closure_hashes"][stale_path] = "0" * 64
+
+    audit = tr2r1_diag.audit_runtime_import_closure(manifest_copy)
+    assert audit["closure_audit_passed"] is False
+    assert audit["stale_runtime_closure_entry_count"] == 1
+    assert stale_path in audit["stale_runtime_closure_entries"]
+
+
+def test_runtime_closure_sha_mismatch_fails():
+    """Verifies that a SHA mismatch in runtime_closure_hashes causes audit failure."""
+    proto_freeze = json.loads((REPO_ROOT / "artifacts" / "task11q4_p2a_l1_tr2r1_protocol_freeze.json").read_text(encoding="utf-8"))
+    manifest_copy = json.loads(json.dumps(proto_freeze))
+
+    runner_rel = "scripts/diagnose_task11q4_p2a_l1_thread_affordance_tr2r1.py"
+    manifest_copy["runtime_closure_hashes"][runner_rel] = "f" * 64
+
+    audit = tr2r1_diag.audit_runtime_import_closure(manifest_copy)
+    assert audit["closure_audit_passed"] is False
+    assert audit["mismatched_runtime_dependency_count"] == 1
+    assert any(m["path"] == runner_rel for m in audit["mismatched_runtime_dependencies"])
+
+
+def test_runtime_closure_exact_path_set_and_hashes_pass():
+    """Verifies that the frozen manifest exactly matches the imported set with 0 missing, 0 stale, 0 mismatched."""
+    proto_freeze = json.loads((REPO_ROOT / "artifacts" / "task11q4_p2a_l1_tr2r1_protocol_freeze.json").read_text(encoding="utf-8"))
+    audit = tr2r1_diag.audit_runtime_import_closure(proto_freeze)
+    assert audit["closure_audit_passed"] is True
+    assert audit["missing_from_runtime_closure_count"] == 0
+    assert audit["missing_from_runtime_closure"] == []
+    assert audit["stale_runtime_closure_entry_count"] == 0
+    assert audit["stale_runtime_closure_entries"] == []
+    assert audit["mismatched_runtime_dependency_count"] == 0
+    assert audit["mismatched_runtime_dependencies"] == []
+    assert audit["loaded_project_module_count"] == audit["manifest_runtime_closure_count"]
