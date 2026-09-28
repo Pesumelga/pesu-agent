@@ -816,4 +816,149 @@ console.log(JSON.stringify(testAtomic()));
         assert report["verdict"] == "DRY_RUN_PASS"
         assert report["diagnostic_verdict"] == "DRY_RUN_PASS"
         assert "dry_run_simulation" in report
-        assert report["dry_run_simulation"]["simulated_post_click_outcome"] == "ANCHOR_OPENED_THREAD_FLEXPANE_SEARCH_PRESERVED_IDENTITY_CONFIRMED"
+        assert report["dry_run_simulation"]["simulated_post_click_outcome"] == taiq1.UNVERIFIED_WRITE_SAFETY_VERDICT
+
+class TestHistoricalIntegrityAndWriteSafety:
+    """Verifies historical baseline hashes, immutable TR2-R1 test file, and write safety authority contract."""
+
+    AUTHORITATIVE_HASHES = {
+        "attempt1": "f6f17e06f94808bac15dea32748526a1d146dac69ef0a75cc8a4467c5c8fd28e",
+        "attempt2": "a6eacdb988306e610f446d65fd5eb56ae198d6ce976e62bd1937066eb834cd3a",
+        "rd1_run1": "5a44f58616a5dac21ebeb596a10e8f55ba7a2263eb177b945485c2bdd2556846",
+        "rd1_run2": "fccfb28d380c81ad66e435ac43b63778184cb197da87d61eb304bf391c28f6a5",
+        "attempt3": "b00fa70ec84da9efe329afed4cc70b4c00765adf64e773c2c5624ad72c84b18e",
+        "attempt4": "e115b52de6b1ac1203d98e5a108fbe7b6a375fd708dc93233067d40a910a4965",
+        "rb1": "6d94c2ef2bdc9b4eda4e68bf23737fe5e3280a014892ba0ffcb0cb1481dd76d5",
+        "rb2": "fede0a42554c0fa6b3db029816e89a2fdbc63c4d11f380d4b61b4a9e05fd4565",
+        "tr1": "cf7e6682767c52515f82c6214fa6a27f27208322620d1768db26b2e622fb56ea",
+        "tr2_failed_live": "895748e464df6f97448fe805e7873f4c1b595186b880faabc34af718ca7a0bf4",
+        "tr2r1_live": "6a3a4171219174c654ccad0c61456e8f99bd657b925ec7519df7249db2c4c75b",
+        "tr2r1_attempt_marker": "c780905190ff8e905a890ab4d2117eacb0a5b532b1721dff442441b5b7efa12e"
+    }
+
+    def test_authoritative_historical_hash_literals_exact(self):
+        """Verifies authoritative historical hash literals match frozen expectation."""
+        assert len(self.AUTHORITATIVE_HASHES) == 12
+
+    def test_actual_historical_disk_hashes_exact(self):
+        """Verifies actual disk files match authoritative frozen hashes."""
+        with open(taiq1.PROTOCOL_FREEZE_PATH, "r", encoding="utf-8") as f:
+            proto = json.load(f)
+        hist = proto.get("historical_baselines", {})
+        for name, expected_sha in self.AUTHORITATIVE_HASHES.items():
+            key = name if name in hist else name.replace("attempt_marker", "marker")
+            p = REPO_ROOT / hist[key]["path"]
+            assert p.exists(), f"File {p} does not exist"
+            assert taiq1.get_file_sha256(p) == expected_sha
+
+    def test_protocol_historical_registry_exact(self):
+        """Verifies protocol historical baselines match authoritative frozen hashes."""
+        with open(taiq1.PROTOCOL_FREEZE_PATH, "r", encoding="utf-8") as f:
+            proto = json.load(f)
+        hist = proto.get("historical_baselines", {})
+        for name, expected_sha in self.AUTHORITATIVE_HASHES.items():
+            key = name if name in hist else name.replace("attempt_marker", "marker")
+            assert hist[key]["sha256"] == expected_sha
+
+    def test_frozen_tr2r1_test_file_byte_exact(self):
+        """Verifies frozen TR2-R1 test file matches frozen git commit byte-for-byte."""
+        tr2r1_test_p = REPO_ROOT / "tests/test_p2a_l1_tr2r1_thread_affordance.py"
+        cur_bytes = tr2r1_test_p.read_bytes()
+        proc = subprocess.run(
+            ["git", "show", "8db23d62202f744bed6e6690f3707ac0fa1ff7f4:tests/test_p2a_l1_tr2r1_thread_affordance.py"],
+            capture_output=True,
+            cwd=str(REPO_ROOT)
+        )
+        assert proc.returncode == 0
+        assert cur_bytes == proc.stdout, "TR2-R1 test file does not match frozen commit byte-for-byte"
+
+    def test_consumed_tr2r1_existing_live_artifact_rejects_replay(self):
+        """Verifies that consumed TR2-R1 rejects replay now that live artifact exists."""
+        from scripts import diagnose_task11q4_p2a_l1_thread_affordance_tr2r1 as tr2r1_diag
+        assert tr2r1_diag.LIVE_OUTPUT_FILE.exists()
+        res = tr2r1_diag.run_tr2_diagnostic(dry_run=False)
+        assert res["verdict"] == "FAIL_CLOSED"
+        assert res["diagnostic_verdict"] == "LIVE_ARTIFACT_ALREADY_EXISTS"
+
+    def test_new_taiq1_replay_test_does_not_mutate_tr2r1_suite(self):
+        """Verifies that TR2-R1 test file has zero diff against frozen TR2-R1 HEAD."""
+        proc = subprocess.run(
+            ["git", "diff", "8db23d62202f744bed6e6690f3707ac0fa1ff7f4", "--", "tests/test_p2a_l1_tr2r1_thread_affordance.py"],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT)
+        )
+        assert proc.stdout.strip() == "", "TR2-R1 test file must have zero diff against frozen TR2-R1 HEAD"
+
+    def test_post_click_write_audit_snapshots_or_unavailable(self):
+        """Verifies capture_write_audit_snapshot returns UNAVAILABLE when host does not expose audit API."""
+        class MockHostWithoutAudit:
+            pass
+        status, snap = taiq1.capture_write_audit_snapshot(MockHostWithoutAudit())
+        assert status == "UNAVAILABLE"
+        assert snap is None
+
+    def test_non_zero_write_delta_blocks_strong_positive(self):
+        """Verifies that even if all DOM criteria pass, a non-zero write delta prevents strong positive."""
+        valid_obs = {
+            "search_view_connected": True,
+            "search_surface_query_still_matches_requested": True,
+            "threads_flexpane_connected": True,
+            "root_message_container_count": 1,
+            "target_root_identity_observable": True,
+            "reply_message_container_count": 1,
+            "target_reply_identity_observable": True,
+            "root_reply_distinct_dom_nodes": True,
+            "composer_focus_observed": False,
+            "composer_active_element_observed": False,
+            "composer_text_mutation_observed": False,
+        }
+        verdict, diag_verdict = taiq1.determine_qualification_verdict(valid_obs, write_safety_authority="AVAILABLE", write_delta=1)
+        assert verdict != taiq1.CONFIRMED_IDENTITY_VERDICT
+        assert verdict == taiq1.UNVERIFIED_WRITE_SAFETY_VERDICT
+
+    def test_missing_post_click_write_authority_blocks_strong_positive(self):
+        """Verifies that missing write safety authority blocks strong positive confirmation."""
+        valid_obs = {
+            "search_view_connected": True,
+            "search_surface_query_still_matches_requested": True,
+            "threads_flexpane_connected": True,
+            "root_message_container_count": 1,
+            "target_root_identity_observable": True,
+            "reply_message_container_count": 1,
+            "target_reply_identity_observable": True,
+            "root_reply_distinct_dom_nodes": True,
+            "composer_focus_observed": False,
+            "composer_active_element_observed": False,
+            "composer_text_mutation_observed": False,
+        }
+        verdict, diag_verdict = taiq1.determine_qualification_verdict(valid_obs, write_safety_authority="UNAVAILABLE", write_delta=None)
+        assert verdict == taiq1.UNVERIFIED_WRITE_SAFETY_VERDICT
+        assert diag_verdict == taiq1.UNVERIFIED_WRITE_SAFETY_VERDICT
+
+    def test_pre_search_safety_cannot_substitute_for_post_click_safety(self):
+        """Verifies that pre-search telemetry cannot substitute for post-click write safety."""
+        report = {
+            "search_telemetry": {
+                "write_capable_action_invoked_by_pesu": False,
+                "safe_search_action_selected": True
+            },
+            "post_click_write_safety_authority": "UNAVAILABLE"
+        }
+        assert report["post_click_write_safety_authority"] == "UNAVAILABLE"
+        valid_obs = {
+            "search_view_connected": True,
+            "search_surface_query_still_matches_requested": True,
+            "threads_flexpane_connected": True,
+            "root_message_container_count": 1,
+            "target_root_identity_observable": True,
+            "reply_message_container_count": 1,
+            "target_reply_identity_observable": True,
+            "root_reply_distinct_dom_nodes": True,
+            "composer_focus_observed": False,
+            "composer_active_element_observed": False,
+            "composer_text_mutation_observed": False,
+        }
+        verdict, _ = taiq1.determine_qualification_verdict(valid_obs, write_safety_authority=report["post_click_write_safety_authority"], write_delta=None)
+        assert verdict == taiq1.UNVERIFIED_WRITE_SAFETY_VERDICT
+

@@ -231,6 +231,12 @@
     ],
     "raw_location_url_persisted": false
   },
+  "post_click_write_safety_authority_contract": {
+    "runtime_write_audit_authority_status": "UNAVAILABLE",
+    "reason": "PesuWebViewHost and WebViewSlackSearchBackend execute on STA thread without CDP SlackWriteAuditTracker integration",
+    "unverified_verdict_emitted_when_authority_unavailable": "ANCHOR_THREAD_CONTEXT_OBSERVED_WRITE_SAFETY_UNVERIFIED",
+    "strong_positive_blocked_when_authority_unavailable": true
+  },
   "success_and_verdict_hierarchy": {
     "success_criteria": {
       "search_view_connected": true,
@@ -242,10 +248,15 @@
       "target_reply_identity_observable": true,
       "root_reply_distinct_dom_nodes": true,
       "composer_focus_observed": false,
+      "composer_active_element_observed": false,
+      "composer_text_mutation_observed": false,
+      "post_click_write_safety_authority": "AVAILABLE",
+      "post_click_write_safety_delta": 0,
       "write_capable_actions": 0,
       "composer_interaction": 0
     },
     "success_verdict": "ANCHOR_OPENED_THREAD_FLEXPANE_SEARCH_PRESERVED_IDENTITY_CONFIRMED",
+    "unverified_write_safety_verdict": "ANCHOR_THREAD_CONTEXT_OBSERVED_WRITE_SAFETY_UNVERIFIED",
     "incomplete_identity_verdict": "ANCHOR_OPENED_THREAD_FLEXPANE_IDENTITY_INCOMPLETE",
     "main_navigated_verdict": "ANCHOR_NAVIGATED_MAIN_SURFACE",
     "other_surface_verdict": "ANCHOR_OPENED_OTHER_SURFACE",
@@ -285,7 +296,7 @@
     "delete_marker_permitted": false
   },
   "dependency_hashes": {
-    "taiq1_runner": "7969358c009dce7b9b59266883f94b4610cb12ba1347c893e9f4031c4e6785cd",
+    "taiq1_runner": "0fda508e8360ec3d90c2d84a9566793abb990fe06506c302b874ed92b4cbb6f8",
     "slack_search": "d214bb7a845e965c8c364a932a074ee73036098b91869242f0b2459a70780f5c",
     "models": "4ec38c787923b668aa530a1e4edbd434f90821abd510ff2af332472db9e39064",
     "webview_thread_reader": "01fecd9934227742329af0de782f0170c3cce2527f66d32f98f075bf268f0d87",
@@ -349,7 +360,7 @@
     }
   },
   "runtime_closure_hashes": {
-    "scripts/diagnose_task11q4_p2a_l1_thread_anchor_interaction_taiq1.py": "7969358c009dce7b9b59266883f94b4610cb12ba1347c893e9f4031c4e6785cd",
+    "scripts/diagnose_task11q4_p2a_l1_thread_anchor_interaction_taiq1.py": "0fda508e8360ec3d90c2d84a9566793abb990fe06506c302b874ed92b4cbb6f8",
     "src/pesu_agent/__init__.py": "d1ae8793964867c74ef4628e2776faef093c59f23c635e2b6ab9837e042cd4bd",
     "src/pesu_agent/adapters/__init__.py": "3153bd5a614bb98e5efedd0178add069aa78236f8c001e55698ce1671438d975",
     "src/pesu_agent/adapters/slack_cdp.py": "cfa7b1a52c7443746941738c5dd281f8439f0bcd2b1ba94ca503ba05905c0a8d",

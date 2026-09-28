@@ -113,6 +113,8 @@ SEARCH_MAX_RESULTS = 5
 PROTOCOL_NAME = "task11q4_p2a_l1_taiq1_thread_anchor_interaction"
 DIAGNOSTIC_RUN = "TAIQ1_INTERACTION_RUN_1"
 CANONICAL_DRY_RUN_VERDICT = "DRY_RUN_PASS"
+UNVERIFIED_WRITE_SAFETY_VERDICT = "ANCHOR_THREAD_CONTEXT_OBSERVED_WRITE_SAFETY_UNVERIFIED"
+CONFIRMED_IDENTITY_VERDICT = "ANCHOR_OPENED_THREAD_FLEXPANE_SEARCH_PRESERVED_IDENTITY_CONFIRMED"
 
 TARGET_CHANNEL_ID = "C042WS25QAX"
 TARGET_MESSAGE_TS = "1718079276.126469"
@@ -562,6 +564,23 @@ JS_OBSERVE_POST_CLICK_DOM_STATE = r"""
 
         const active = document.activeElement;
         const composer_focus_observed = Boolean(active && active.closest('[contenteditable="true"], [data-qa="message_input"], textarea, [role="textbox"]'));
+        const composer_active_element_observed = Boolean(active && (
+            active.matches('[data-qa="message_input"], [role="textbox"], .ql-editor') ||
+            active.closest('[data-qa="message_input"], [role="textbox"], .ql-editor')
+        ));
+        let composer_text_mutation_observed = false;
+        try {
+            const composerInputs = Array.from(document.querySelectorAll('[data-qa="message_input"], .ql-editor, textarea[data-qa="message_input"]'));
+            for (const inp of composerInputs) {
+                const val = inp.value || inp.innerText || inp.textContent || "";
+                if (val.trim().length > 0) {
+                    composer_text_mutation_observed = true;
+                    break;
+                }
+            }
+        } catch (e) {
+            composer_text_mutation_observed = false;
+        }
 
         return {
             ok: true,
@@ -576,7 +595,9 @@ JS_OBSERVE_POST_CLICK_DOM_STATE = r"""
             location_changed: location_changed,
             location_classification: location_classification,
             main_surface_changed: main_surface_changed,
-            composer_focus_observed: composer_focus_observed
+            composer_focus_observed: composer_focus_observed,
+            composer_active_element_observed: composer_active_element_observed,
+            composer_text_mutation_observed: composer_text_mutation_observed
         };
     } catch (err) {
         return {
@@ -1186,6 +1207,92 @@ def build_mock_dry_run_inspection() -> dict[str, Any]:
 # Runner Execution
 # ---------------------------------------------------------------------------
 
+
+# ---------------------------------------------------------------------------
+# Write Safety Authority & Verdict Evaluation Helpers
+# ---------------------------------------------------------------------------
+
+def capture_write_audit_snapshot(host: Any) -> tuple[str, Optional[dict[str, Any]]]:
+    """Captures write audit snapshot from runtime host if an authoritative API is exposed.
+    Returns (authority_status, snapshot_dict).
+    """
+    if hasattr(host, "get_write_audit_snapshot") and callable(getattr(host, "get_write_audit_snapshot")):
+        try:
+            snap = host.get_write_audit_snapshot()
+            if isinstance(snap, dict):
+                return ("AVAILABLE", snap)
+        except Exception:
+            pass
+    return ("UNAVAILABLE", None)
+
+
+def compute_write_delta(pre_snap: Optional[dict[str, Any]], post_snap: Optional[dict[str, Any]]) -> Optional[int]:
+    """Computes delta across tracked write-capable counters."""
+    if pre_snap is None or post_snap is None:
+        return None
+    delta = 0
+    tracked_keys = [
+        "write_action_requested",
+        "write_action_blocked",
+        "prohibited_low_level_action_attempted",
+        "main_composer_interaction_detected",
+        "thread_composer_interaction_detected",
+        "send_control_interaction_detected",
+        "composer_input_count",
+        "composer_send_count",
+        "unsafe_action_count",
+        "read_only_barrier_violation_count",
+    ]
+    for k in tracked_keys:
+        if k in pre_snap and k in post_snap:
+            try:
+                pre_v = int(pre_snap[k])
+                post_v = int(post_snap[k])
+                delta += max(0, post_v - pre_v)
+            except (ValueError, TypeError):
+                pass
+    if post_snap.get("unexpected_slack_write_observed") and not pre_snap.get("unexpected_slack_write_observed"):
+        delta += 1
+    return delta
+
+
+def determine_qualification_verdict(
+    final_obs: Optional[dict[str, Any]],
+    write_safety_authority: str = "UNAVAILABLE",
+    write_delta: Optional[int] = None,
+) -> tuple[str, str]:
+    """Pure deterministic helper to evaluate post-click qualification outcome."""
+    if not final_obs or not isinstance(final_obs, dict):
+        return ("FAIL_CLOSED", "POST_CLICK_OBSERVATION_FAILED")
+    if (
+        final_obs.get("search_view_connected") is True
+        and final_obs.get("search_surface_query_still_matches_requested") is True
+        and final_obs.get("threads_flexpane_connected") is True
+        and final_obs.get("root_message_container_count") == 1
+        and final_obs.get("target_root_identity_observable") is True
+        and final_obs.get("reply_message_container_count", 0) >= 1
+        and final_obs.get("target_reply_identity_observable") is True
+        and final_obs.get("root_reply_distinct_dom_nodes") is True
+        and not final_obs.get("composer_focus_observed")
+        and not final_obs.get("composer_active_element_observed")
+        and not final_obs.get("composer_text_mutation_observed")
+    ):
+        if write_safety_authority == "AVAILABLE" and write_delta == 0:
+            return (CONFIRMED_IDENTITY_VERDICT, CONFIRMED_IDENTITY_VERDICT)
+        return (UNVERIFIED_WRITE_SAFETY_VERDICT, UNVERIFIED_WRITE_SAFETY_VERDICT)
+    if (
+        final_obs.get("threads_flexpane_connected") is True
+        and final_obs.get("search_view_connected") is True
+    ):
+        return ("ANCHOR_OPENED_THREAD_FLEXPANE_IDENTITY_INCOMPLETE", "ANCHOR_OPENED_THREAD_FLEXPANE_IDENTITY_INCOMPLETE")
+    if (
+        not final_obs.get("search_view_connected")
+        or final_obs.get("main_surface_changed") is True
+        or final_obs.get("location_classification") in ("SLACK_CLIENT_THREAD_ROUTE", "SLACK_ARCHIVE_MESSAGE_ROUTE", "EXTERNAL_ORIGIN")
+    ):
+        return ("ANCHOR_NAVIGATED_MAIN_SURFACE", "ANCHOR_NAVIGATED_MAIN_SURFACE")
+    return ("ANCHOR_CLICK_NO_OBSERVABLE_THREAD_CONTEXT", "ANCHOR_CLICK_NO_OBSERVABLE_THREAD_CONTEXT")
+
 def run_taiq1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict[str, Any]:
     start_time = time.time()
     git_commit = get_git_commit()
@@ -1501,16 +1608,24 @@ def run_taiq1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dic
         # Partition simulated outcome
         mock_res = build_mock_dry_run_inspection()
         report["interaction_inspection"] = mock_res
+        report["post_click_write_safety_authority"] = "UNAVAILABLE"
+        report["pre_click_write_audit_snapshot"] = None
+        report["post_click_write_audit_snapshot"] = None
+        report["post_click_write_safety_delta"] = None
         report["dry_run_simulation"] = {
             "simulated_guard_passed": True,
             "simulated_click_executed": True,
-            "simulated_post_click_outcome": "ANCHOR_OPENED_THREAD_FLEXPANE_SEARCH_PRESERVED_IDENTITY_CONFIRMED",
+            "simulated_post_click_outcome": UNVERIFIED_WRITE_SAFETY_VERDICT,
             "simulated_root_message_container_count": 1,
             "simulated_reply_message_container_count": 1,
             "simulated_target_root_identity_observable": True,
             "simulated_target_reply_identity_observable": True,
             "simulated_root_reply_distinct_dom_nodes": True,
             "simulated_anchor_hit_test_passed": True,
+            "simulated_post_click_write_safety_authority": "UNAVAILABLE",
+            "simulated_composer_focus_observed": False,
+            "simulated_composer_active_element_observed": False,
+            "simulated_composer_text_mutation_observed": False,
         }
 
         report["verdict"] = CANONICAL_DRY_RUN_VERDICT
@@ -1651,6 +1766,7 @@ def run_taiq1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dic
             f"{json.dumps(TARGET_THREAD_TS)}, "
             f"{json.dumps(FROZEN_ALLOWED_ORIGINS)})"
         )
+        pre_write_status, pre_write_snap = capture_write_audit_snapshot(host)
         atomic_click_res = host.evaluate_js(js_atomic_click, timeout=10.0)
 
         report["checks"]["atomic_guard_and_click_executed"] = True
@@ -1722,38 +1838,22 @@ def run_taiq1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dic
 
         interaction_rep["final_observation"] = final_obs
 
-        if not final_obs or not isinstance(final_obs, dict):
-            report["verdict"] = "FAIL_CLOSED"
-            report["diagnostic_verdict"] = "POST_CLICK_OBSERVATION_FAILED"
-        elif (
-            final_obs.get("search_view_connected") is True
-            and final_obs.get("search_surface_query_still_matches_requested") is True
-            and final_obs.get("threads_flexpane_connected") is True
-            and final_obs.get("root_message_container_count") == 1
-            and final_obs.get("target_root_identity_observable") is True
-            and final_obs.get("reply_message_container_count", 0) >= 1
-            and final_obs.get("target_reply_identity_observable") is True
-            and final_obs.get("root_reply_distinct_dom_nodes") is True
-            and not final_obs.get("composer_focus_observed")
-        ):
-            report["verdict"] = "ANCHOR_OPENED_THREAD_FLEXPANE_SEARCH_PRESERVED_IDENTITY_CONFIRMED"
-            report["diagnostic_verdict"] = "ANCHOR_OPENED_THREAD_FLEXPANE_SEARCH_PRESERVED_IDENTITY_CONFIRMED"
-        elif (
-            final_obs.get("threads_flexpane_connected") is True
-            and final_obs.get("search_view_connected") is True
-        ):
-            report["verdict"] = "ANCHOR_OPENED_THREAD_FLEXPANE_IDENTITY_INCOMPLETE"
-            report["diagnostic_verdict"] = "ANCHOR_OPENED_THREAD_FLEXPANE_IDENTITY_INCOMPLETE"
-        elif (
-            not final_obs.get("search_view_connected")
-            or final_obs.get("main_surface_changed") is True
-            or final_obs.get("location_classification") in ("SLACK_CLIENT_THREAD_ROUTE", "SLACK_ARCHIVE_MESSAGE_ROUTE", "EXTERNAL_ORIGIN")
-        ):
-            report["verdict"] = "ANCHOR_NAVIGATED_MAIN_SURFACE"
-            report["diagnostic_verdict"] = "ANCHOR_NAVIGATED_MAIN_SURFACE"
+        post_write_status, post_write_snap = capture_write_audit_snapshot(host)
+        if pre_write_status == "AVAILABLE" and post_write_status == "AVAILABLE":
+            write_safety_authority = "AVAILABLE"
+            write_delta = compute_write_delta(pre_write_snap, post_write_snap)
         else:
-            report["verdict"] = "ANCHOR_CLICK_NO_OBSERVABLE_THREAD_CONTEXT"
-            report["diagnostic_verdict"] = "ANCHOR_CLICK_NO_OBSERVABLE_THREAD_CONTEXT"
+            write_safety_authority = "UNAVAILABLE"
+            write_delta = None
+
+        report["post_click_write_safety_authority"] = write_safety_authority
+        report["pre_click_write_audit_snapshot"] = pre_write_snap
+        report["post_click_write_audit_snapshot"] = post_write_snap
+        report["post_click_write_safety_delta"] = write_delta
+
+        v, dv = determine_qualification_verdict(final_obs, write_safety_authority, write_delta)
+        report["verdict"] = v
+        report["diagnostic_verdict"] = dv
 
         report["live_execution_completed"] = True
         report["harness_phases"].append("LIVE_EXECUTION_COMPLETED")
@@ -1786,7 +1886,7 @@ def main() -> int:
 
     report = run_taiq1_diagnostic(dry_run=args.dry_run, timeout=args.timeout)
     print(f"TAIQ1 Verdict: {report.get('verdict')} (diagnostic_verdict: {report.get('diagnostic_verdict')})")
-    if report.get("verdict") in (CANONICAL_DRY_RUN_VERDICT, "ANCHOR_OPENED_THREAD_FLEXPANE_SEARCH_PRESERVED_IDENTITY_CONFIRMED", "ANCHOR_NAVIGATED_MAIN_SURFACE"):
+    if report.get("verdict") in (CANONICAL_DRY_RUN_VERDICT, CONFIRMED_IDENTITY_VERDICT, UNVERIFIED_WRITE_SAFETY_VERDICT, "ANCHOR_NAVIGATED_MAIN_SURFACE"):
         return 0
     return 1
 
