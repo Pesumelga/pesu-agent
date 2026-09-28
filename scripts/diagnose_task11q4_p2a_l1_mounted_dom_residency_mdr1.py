@@ -75,6 +75,9 @@ from pesu_agent.search.webview_slack_search import (
     WebViewRuntimeConfig,
     WebViewSlackSearchBackend,
 )
+from pesu_agent.parsers.slack_permalink_parser import (
+    parse_slack_message_permalink,
+)
 from pesu_agent.search.webview_thread_reader import (
     normalize_slack_ts,
 )
@@ -108,6 +111,11 @@ TARGET_CHANNEL_ID = "C042WS25QAX"
 TARGET_MESSAGE_TS = "1718079276.126469"
 TARGET_THREAD_TS = "1718058683.912369"
 TARGET_IS_THREAD_REPLY = True
+CANONICAL_TARGET_IDENTITY: tuple[str, str, Optional[str]] = (
+    TARGET_CHANNEL_ID,
+    normalize_slack_ts(TARGET_MESSAGE_TS),
+    normalize_slack_ts(TARGET_THREAD_TS),
+)
 
 FROZEN_ALLOWED_ORIGINS = [
     "https://app.slack.com",
@@ -126,10 +134,9 @@ SEARCH_VIEW_SELECTOR = PROD_SEARCH_VIEW_SELECTOR
 SEARCH_RESULT_ROW_SELECTORS = PROD_SEARCH_RESULT_ROW_SELECTORS
 
 DIAGNOSTIC_OUTCOMES = [
-    "TARGET_FOUND_IN_MOUNTED_DOM_CURRENT_QUERY_CORRELATED",
-    "TARGET_FOUND_IN_MOUNTED_DOM_QUERY_CORRELATION_UNPROVEN",
-    "TARGET_NOT_FOUND_IN_MOUNTED_DOM",
-    "TARGET_IDENTITY_DUPLICATED_IN_MOUNTED_DOM",
+    "TARGET_FOUND_IN_CONNECTED_MOUNTED_DOM",
+    "TARGET_NOT_FOUND_IN_CONNECTED_MOUNTED_DOM",
+    "TARGET_IDENTITY_DUPLICATED_IN_CONNECTED_MOUNTED_DOM",
     "MOUNTED_DOM_STATE_INSUFFICIENT",
     "FAIL_CLOSED",
 ]
@@ -334,21 +341,77 @@ def evaluate_search_surface_current_query_correlation(
     return True
 
 
+def build_canonical_backend_identity_set(
+    raw_results: Optional[list[Any]],
+) -> tuple[set[tuple[str, str, Optional[str]]], dict[str, int]]:
+    """Extracts canonical identity tuples from backend SearchResult items via authoritative permalinks.
+
+    Preferred semantic path:
+    backend SearchResult -> authoritative result_url -> parse_slack_message_permalink -> normalized tuple.
+    Never creates guessed identities upon parse failure.
+    """
+    identity_set: set[tuple[str, str, Optional[str]]] = set()
+    stats = {
+        "backend_result_count": len(raw_results) if raw_results else 0,
+        "backend_identity_parse_success_count": 0,
+        "backend_identity_parse_failure_count": 0,
+    }
+    if not raw_results:
+        return identity_set, stats
+
+    for item in raw_results:
+        plink = getattr(item, "result_url", None)
+        if plink is None and isinstance(item, dict):
+            plink = item.get("result_url")
+
+        parsed_id = parse_slack_message_permalink(plink) if plink else None
+        if parsed_id and parsed_id.channel_id and parsed_id.message_ts:
+            norm_cid = str(parsed_id.channel_id).strip()
+            norm_mts = normalize_slack_ts(str(parsed_id.message_ts))
+            norm_tts = normalize_slack_ts(str(parsed_id.thread_ts)) if parsed_id.thread_ts else None
+            identity_set.add((norm_cid, norm_mts, norm_tts))
+            stats["backend_identity_parse_success_count"] += 1
+        else:
+            stats["backend_identity_parse_failure_count"] += 1
+
+    return identity_set, stats
+
+
+def build_canonical_mounted_row_identity(
+    row_record: dict[str, Any],
+) -> Optional[tuple[str, str, Optional[str]]]:
+    """Builds normalized canonical identity tuple for a mounted DOM row record."""
+    if not row_record.get("identity_parse_success"):
+        return None
+    cid = row_record.get("channel_id")
+    mts = row_record.get("message_ts")
+    if not cid or not mts:
+        return None
+    norm_cid = str(cid).strip()
+    norm_mts = normalize_slack_ts(str(mts))
+    tts = row_record.get("thread_ts")
+    norm_tts = normalize_slack_ts(str(tts)) if tts else None
+    return (norm_cid, norm_mts, norm_tts)
+
+
 def evaluate_row_current_query_membership(
     row_connected: bool,
     surface_correlated: bool,
-    is_in_backend_top5: bool = False,
+    row_identity: Optional[tuple[str, str, Optional[str]]],
+    backend_identity_set: set[tuple[str, str, Optional[str]]],
 ) -> str:
     """Classifies individual mounted row query membership.
 
     Authority B:
-    PROVEN: Connected row on correlated surface matching backend-returned identity.
-    UNPROVEN: Connected row on correlated surface outside backend top 5.
-    STALE_OR_RECYCLED_POSSIBLE: Disconnected row or uncorrelated search surface.
+    - PROVEN: Connected row on correlated surface with valid identity present in backend identity set.
+    - UNPROVEN: Connected row on correlated surface whose identity is not in backend identity set (or parse failure).
+    - STALE_OR_RECYCLED_POSSIBLE: Disconnected row or uncorrelated search surface.
+
+    Strictly semantic identity match; never infers membership from DOM position or array index.
     """
     if not row_connected or not surface_correlated:
         return "STALE_OR_RECYCLED_POSSIBLE"
-    if is_in_backend_top5:
+    if row_identity is not None and row_identity in backend_identity_set:
         return "PROVEN"
     return "UNPROVEN"
 
@@ -380,23 +443,54 @@ def classify_mounted_dom_residency(
             return "TARGET_NOT_FOUND_IN_CONNECTED_MOUNTED_DOM"
 
 
-def build_mock_dry_run_dom_snapshot(simulated_position: int = 6) -> dict[str, Any]:
+def build_mock_dry_run_backend_results() -> list[dict[str, Any]]:
+    """Builds 5 simulated backend SearchResult fixtures for offline dry run."""
+    results = []
+    for i in range(1, 6):
+        results.append({
+            "result_index": i,
+            "channel_id": "C042WS25QAX",
+            "gold_message_ts": f"1788000000.{i:06d}",
+            "gold_thread_ts": f"1788000000.{i:06d}",
+            "result_url": f"https://heumlabs.slack.com/archives/C042WS25QAX/p1788000000{i:06d}?thread_ts=1788000000.{i:06d}",
+        })
+    return results
+
+
+def build_mock_dry_run_dom_snapshot(
+    simulated_position: int = 6,
+    backend_identity_set: Optional[set[tuple[str, str, Optional[str]]]] = None,
+) -> dict[str, Any]:
     """Builds a simulated mounted DOM snapshot for offline dry-run testing."""
+    if backend_identity_set is None:
+        backend_identity_set, _ = build_canonical_backend_identity_set(build_mock_dry_run_backend_results())
+
     records = []
     for i in range(1, 21):
         is_target = (i == simulated_position)
-        records.append({
+        cid = TARGET_CHANNEL_ID if is_target else "C042WS25QAX"
+        mts = TARGET_MESSAGE_TS if is_target else f"1788000000.{i:06d}"
+        tts = TARGET_THREAD_TS if is_target else f"1788000000.{i:06d}"
+        rec = {
             "mounted_dom_position": i,
-            "channel_id": TARGET_CHANNEL_ID if is_target else f"C{i:08d}",
-            "message_ts": TARGET_MESSAGE_TS if is_target else f"1788000000.{i:06d}",
-            "thread_ts": TARGET_THREAD_TS if is_target else f"1788000000.{i:06d}",
+            "channel_id": cid,
+            "message_ts": mts,
+            "thread_ts": tts,
             "connected": True,
             "positive_geometry": True,
             "identity_parse_success": True,
-            "is_thread_reply": True if is_target else False,
+            "is_thread_reply": True if is_target else True,
             "is_target": is_target,
-            "row_current_query_membership": "PROVEN" if (i <= 5) else "UNPROVEN",
-        })
+        }
+        row_ident = build_canonical_mounted_row_identity(rec)
+        rec["row_current_query_membership"] = evaluate_row_current_query_membership(
+            row_connected=True,
+            surface_correlated=True,
+            row_identity=row_ident,
+            backend_identity_set=backend_identity_set,
+        )
+        records.append(rec)
+
     return {
         "ok": True,
         "search_view_connected": True,
@@ -1137,7 +1231,11 @@ def run_mdr1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict
         report["live_action_inventory"]["restorations_attempted"] = 0
         report["live_action_inventory"]["back_navigations_attempted"] = 0
 
-        mock_dom = build_mock_dry_run_dom_snapshot(simulated_position=6)
+        mock_backend_results = build_mock_dry_run_backend_results()
+        backend_identity_set, backend_stats = build_canonical_backend_identity_set(mock_backend_results)
+        report["backend_identity_telemetry"] = backend_stats
+
+        mock_dom = build_mock_dry_run_dom_snapshot(simulated_position=6, backend_identity_set=backend_identity_set)
         report["simulation_dom"] = mock_dom
         report["dom_telemetry"] = None
 
@@ -1147,10 +1245,13 @@ def run_mdr1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict
             search_readiness="RESULTS_READY",
         )
         report["search_surface_current_query_correlated"] = surface_correlated
+
+        # Target membership uses same canonical identity authority
         target_membership = evaluate_row_current_query_membership(
             row_connected=True,
             surface_correlated=surface_correlated,
-            is_in_backend_top5=False,  # Position 6 is outside backend top 5
+            row_identity=CANONICAL_TARGET_IDENTITY,
+            backend_identity_set=backend_identity_set,
         )
         report["target_row_current_query_membership"] = target_membership
         classification = classify_mounted_dom_residency(mock_dom)
@@ -1271,6 +1372,9 @@ def run_mdr1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict
         readiness = str(st.get("SEARCH_RESULT_READINESS"))
         mounted_count = dom_res.get("mounted_row_count", 0)
 
+        backend_identity_set, backend_stats = build_canonical_backend_identity_set(raw_results)
+        report["backend_identity_telemetry"] = backend_stats
+
         surface_correlated = evaluate_search_surface_current_query_correlation(
             search_view_connected=bool(dom_res.get("search_view_connected")),
             surface_query_matches=surface_query_matches,
@@ -1278,27 +1382,14 @@ def run_mdr1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict
         )
         report["search_surface_current_query_correlated"] = surface_correlated
 
-        target_in_backend_top5 = False
-        if raw_results:
-            for item in raw_results:
-                cid = getattr(item, "channel_id", None) or (item.get("channel_id") if isinstance(item, dict) else None)
-                mts = getattr(item, "message_ts", None) or (item.get("message_ts") if isinstance(item, dict) else None)
-                tts = getattr(item, "thread_ts", None) or (item.get("thread_ts") if isinstance(item, dict) else None)
-                if (
-                    cid == TARGET_CHANNEL_ID
-                    and normalize_ts(str(mts)) == normalize_ts(TARGET_MESSAGE_TS)
-                    and normalize_ts(str(tts or "")) == normalize_ts(TARGET_THREAD_TS)
-                ):
-                    target_in_backend_top5 = True
-                    break
-
         target_matches = dom_res.get("target_match_count", 0)
         target_connected = bool(dom_res.get("target_connected"))
         if target_matches == 1:
             target_membership = evaluate_row_current_query_membership(
                 row_connected=target_connected,
                 surface_correlated=surface_correlated,
-                is_in_backend_top5=target_in_backend_top5,
+                row_identity=CANONICAL_TARGET_IDENTITY,
+                backend_identity_set=backend_identity_set,
             )
         else:
             target_membership = "NOT_APPLICABLE" if target_matches == 0 else "AMBIGUOUS_DUPLICATE"
@@ -1307,13 +1398,13 @@ def run_mdr1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict
 
         if "mounted_row_records" in dom_res and isinstance(dom_res["mounted_row_records"], list):
             for row_rec in dom_res["mounted_row_records"]:
-                r_pos = row_rec.get("mounted_dom_position", 0)
                 r_conn = bool(row_rec.get("connected"))
-                r_in_b5 = (r_pos <= (len(raw_results) if raw_results else 0))
+                row_ident = build_canonical_mounted_row_identity(row_rec)
                 row_rec["row_current_query_membership"] = evaluate_row_current_query_membership(
                     row_connected=r_conn,
                     surface_correlated=surface_correlated,
-                    is_in_backend_top5=r_in_b5,
+                    row_identity=row_ident,
+                    backend_identity_set=backend_identity_set,
                 )
 
         classification = classify_mounted_dom_residency(dom_res)

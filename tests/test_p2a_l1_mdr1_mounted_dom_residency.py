@@ -11,9 +11,15 @@ Verifies:
    - Search surface correlation does not imply per-row query membership
    - Target at DOM position 6 retains row membership UNPROVEN
    - No unsupported promotion from connected row to current-query result
-8. Exact historical baselines (TAIQ1, VRA1 immutable markers and live traces)
-9. One-shot replay prevention
-10. Sensitive data exclusion
+8. Canonical backend identity extraction & matching:
+   - Semantic (channel_id, norm_message_ts, norm_thread_ts) tuple matching
+   - DOM position 1 or 5 with mismatch is UNPROVEN
+   - DOM position 6 or 20 matching backend identity is PROVEN
+   - Target membership uses exact same canonical identity authority
+   - No position-based membership heuristic in AST or runtime
+9. Exact historical baselines (all 16 entries, including TAIQ1 and VRA1)
+10. One-shot replay prevention
+11. Sensitive data exclusion
 """
 
 import ast
@@ -45,7 +51,7 @@ class TestMdr1ParityAndStaticContracts:
 
     def test_container_and_row_selectors_match_production(self):
         assert mdr1.SEARCH_VIEW_SELECTOR == '[data-qa="search_view"]'
-        assert mdr1.SEARCH_RESULT_ROW_SELECTORS == '[data-qa="search_result"], [data-qa="search_message_result_item"], .c-search_result' 
+        assert mdr1.SEARCH_RESULT_ROW_SELECTORS == '[data-qa="search_result"], [data-qa="search_message_result_item"], .c-search_result'
 
     def test_runtime_search_path_parity(self):
         assert mdr1.verify_runtime_search_path_parity_with_attempt4() is True
@@ -195,6 +201,11 @@ class TestMdr1HistoricalAndGovernance:
         assert rep["residency_classification"] == "TARGET_FOUND_IN_CONNECTED_MOUNTED_DOM"
         assert rep["search_surface_current_query_correlated"] is True
         assert rep["target_row_current_query_membership"] == "UNPROVEN"
+        assert "backend_identity_telemetry" in rep
+        b_tel = rep["backend_identity_telemetry"]
+        assert b_tel["backend_result_count"] == 5
+        assert b_tel["backend_identity_parse_success_count"] == 5
+        assert b_tel["backend_identity_parse_failure_count"] == 0
         inv = rep["live_action_inventory"]
         for k, v in inv.items():
             if isinstance(v, int):
@@ -211,8 +222,18 @@ class TestMdr1HistoricalAndGovernance:
         assert res.stdout.strip() == "", "Production src/ has uncommitted modifications against HEAD!"
 
 
-class TestMdr1PythonClassifier:
-    """Verifies search surface correlation vs per-row query membership semantic split."""
+class TestMdr1CanonicalIdentityAndMembership:
+    """Verifies canonical identity derivation, backend identity set, and semantic membership."""
+
+    @pytest.fixture
+    def sample_backend_set(self):
+        return {
+            ("C042WS25QAX", "1788000000.000001", "1788000000.000001"),
+            ("C042WS25QAX", "1788000000.000002", "1788000000.000002"),
+            ("C042WS25QAX", "1788000000.000003", "1788000000.000003"),
+            ("C042WS25QAX", "1788000000.000004", "1788000000.000004"),
+            ("C042WS25QAX", "1788000000.000005", "1788000000.000005"),
+        }
 
     def test_search_surface_correlation_proven(self):
         auth = mdr1.evaluate_search_surface_current_query_correlation(
@@ -246,53 +267,200 @@ class TestMdr1PythonClassifier:
         )
         assert auth is False
 
-    def test_row_query_membership_proven_when_in_backend_top5(self):
+    def test_dom_position_1_but_backend_identity_mismatch_unproven(self, sample_backend_set):
+        # DOM position 1 contains an identity NOT in the backend set
+        ident = ("C042WS25QAX", "1788000000.999999", None)
         mem = mdr1.evaluate_row_current_query_membership(
             row_connected=True,
             surface_correlated=True,
-            is_in_backend_top5=True,
+            row_identity=ident,
+            backend_identity_set=sample_backend_set,
+        )
+        assert mem == "UNPROVEN"
+
+    def test_dom_position_5_but_backend_identity_mismatch_unproven(self, sample_backend_set):
+        ident = ("C042WS25QAX", "1788000000.888888", "1788000000.888888")
+        mem = mdr1.evaluate_row_current_query_membership(
+            row_connected=True,
+            surface_correlated=True,
+            row_identity=ident,
+            backend_identity_set=sample_backend_set,
+        )
+        assert mem == "UNPROVEN"
+
+    def test_dom_position_6_but_identity_exists_in_backend_set_proven(self, sample_backend_set):
+        # Row at position 6 matches backend item 1
+        ident = ("C042WS25QAX", "1788000000.000001", "1788000000.000001")
+        mem = mdr1.evaluate_row_current_query_membership(
+            row_connected=True,
+            surface_correlated=True,
+            row_identity=ident,
+            backend_identity_set=sample_backend_set,
         )
         assert mem == "PROVEN"
 
-    def test_row_query_membership_unproven_when_outside_backend_top5(self):
+    def test_dom_position_20_but_identity_exists_in_backend_set_proven(self, sample_backend_set):
+        # Row at position 20 matches backend item 5
+        ident = ("C042WS25QAX", "1788000000.000005", "1788000000.000005")
         mem = mdr1.evaluate_row_current_query_membership(
             row_connected=True,
             surface_correlated=True,
-            is_in_backend_top5=False,
+            row_identity=ident,
+            backend_identity_set=sample_backend_set,
+        )
+        assert mem == "PROVEN"
+
+    def test_same_position_as_backend_array_index_does_not_prove_membership(self, sample_backend_set):
+        # Position 2 has identity X, backend item 2 is different
+        ident_x = ("C042WS25QAX", "1788000000.000099", None)
+        mem = mdr1.evaluate_row_current_query_membership(
+            row_connected=True,
+            surface_correlated=True,
+            row_identity=ident_x,
+            backend_identity_set=sample_backend_set,
         )
         assert mem == "UNPROVEN"
 
-    def test_surface_correlation_does_not_imply_row_membership(self):
+    def test_backend_identity_exact_tuple_match_proves_membership(self, sample_backend_set):
+        target_in_set = ("C042WS25QAX", "1788000000.000003", "1788000000.000003")
         mem = mdr1.evaluate_row_current_query_membership(
             row_connected=True,
             surface_correlated=True,
-            is_in_backend_top5=False,
+            row_identity=target_in_set,
+            backend_identity_set=sample_backend_set,
+        )
+        assert mem == "PROVEN"
+
+    def test_message_ts_mismatch_unproven(self, sample_backend_set):
+        ident = ("C042WS25QAX", "1788000000.000009", "1788000000.000001")
+        mem = mdr1.evaluate_row_current_query_membership(
+            row_connected=True,
+            surface_correlated=True,
+            row_identity=ident,
+            backend_identity_set=sample_backend_set,
         )
         assert mem == "UNPROVEN"
 
-    def test_row_membership_stale_when_disconnected(self):
-        mem = mdr1.evaluate_row_current_query_membership(
-            row_connected=False,
-            surface_correlated=True,
-            is_in_backend_top5=True,
-        )
-        assert mem == "STALE_OR_RECYCLED_POSSIBLE"
-
-    def test_row_membership_stale_when_surface_uncorrelated(self):
+    def test_thread_ts_mismatch_unproven(self, sample_backend_set):
+        ident = ("C042WS25QAX", "1788000000.000001", "1788000000.999999")
         mem = mdr1.evaluate_row_current_query_membership(
             row_connected=True,
-            surface_correlated=False,
-            is_in_backend_top5=True,
+            surface_correlated=True,
+            row_identity=ident,
+            backend_identity_set=sample_backend_set,
         )
-        assert mem == "STALE_OR_RECYCLED_POSSIBLE"
+        assert mem == "UNPROVEN"
 
-    def test_target_found_at_dom_position_6_row_membership_unproven(self):
+    def test_channel_id_mismatch_unproven(self, sample_backend_set):
+        ident = ("C9999999999", "1788000000.000001", "1788000000.000001")
+        mem = mdr1.evaluate_row_current_query_membership(
+            row_connected=True,
+            surface_correlated=True,
+            row_identity=ident,
+            backend_identity_set=sample_backend_set,
+        )
+        assert mem == "UNPROVEN"
+
+    def test_backend_permalink_parse_failure_no_guessed_membership(self):
+        raw_results = [
+            {"result_url": "https://example.com/unsupported/link"},
+            {"result_url": None},
+        ]
+        b_set, stats = mdr1.build_canonical_backend_identity_set(raw_results)
+        assert len(b_set) == 0
+        assert stats["backend_result_count"] == 2
+        assert stats["backend_identity_parse_success_count"] == 0
+        assert stats["backend_identity_parse_failure_count"] == 2
+
+    def test_mounted_row_identity_parse_failure_unproven(self, sample_backend_set):
+        row_rec = {"identity_parse_success": False, "channel_id": None, "message_ts": None}
+        ident = mdr1.build_canonical_mounted_row_identity(row_rec)
+        assert ident is None
+        mem = mdr1.evaluate_row_current_query_membership(
+            row_connected=True,
+            surface_correlated=True,
+            row_identity=ident,
+            backend_identity_set=sample_backend_set,
+        )
+        assert mem == "UNPROVEN"
+
+    def test_target_membership_uses_same_canonical_identity_authority(self, sample_backend_set):
+        # Target not in backend set
+        target_ident = mdr1.CANONICAL_TARGET_IDENTITY
+        mem = mdr1.evaluate_row_current_query_membership(
+            row_connected=True,
+            surface_correlated=True,
+            row_identity=target_ident,
+            backend_identity_set=sample_backend_set,
+        )
+        assert mem == "UNPROVEN"
+
+        # If target WAS in backend set, it would be PROVEN
+        backend_with_target = set(sample_backend_set)
+        backend_with_target.add(target_ident)
+        mem_proven = mdr1.evaluate_row_current_query_membership(
+            row_connected=True,
+            surface_correlated=True,
+            row_identity=target_ident,
+            backend_identity_set=backend_with_target,
+        )
+        assert mem_proven == "PROVEN"
+
+    def test_target_at_position_6_and_absent_backend_set(self):
         dom = mdr1.build_mock_dry_run_dom_snapshot(simulated_position=6)
         cls = mdr1.classify_mounted_dom_residency(dom)
         assert cls == "TARGET_FOUND_IN_CONNECTED_MOUNTED_DOM"
-        target_rec = dom["mounted_row_records"][5]
-        assert target_rec["mounted_dom_position"] == 6
-        assert target_rec["row_current_query_membership"] == "UNPROVEN"
+        # Row 6 is target, absent from backend set -> UNPROVEN
+        rec6 = dom["mounted_row_records"][5]
+        assert rec6["mounted_dom_position"] == 6
+        assert rec6["is_target"] is True
+        assert rec6["row_current_query_membership"] == "UNPROVEN"
+
+    def test_surface_correlation_true_does_not_upgrade_unmatched_row(self, sample_backend_set):
+        unmatched = ("C042WS25QAX", "1788000000.777777", None)
+        mem = mdr1.evaluate_row_current_query_membership(
+            row_connected=True,
+            surface_correlated=True,
+            row_identity=unmatched,
+            backend_identity_set=sample_backend_set,
+        )
+        assert mem == "UNPROVEN"
+
+    def test_no_executable_position_based_membership_heuristic(self):
+        runner_content = RUNNER_PATH.read_text(encoding="utf-8")
+        tree = ast.parse(runner_content)
+
+        # Walk AST and ensure no comparison between position and len(raw_results)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Compare):
+                # Check for patterns like `r_pos <= len(...)`
+                left_str = ast.unparse(node.left) if hasattr(ast, "unparse") else ""
+                comparators_str = [ast.unparse(c) for c in node.comparators] if hasattr(ast, "unparse") else []
+                for comp in comparators_str:
+                    if "len(raw_results)" in comp and ("pos" in left_str.lower() or "rank" in left_str.lower()):
+                        pytest.fail(f"Forbidden position-based comparison found: {left_str} <= {comp}")
+                    if "len(raw_results)" in left_str and ("pos" in comp.lower() or "rank" in comp.lower()):
+                        pytest.fail(f"Forbidden position-based comparison found: {left_str} >= {comp}")
+
+    def test_row_membership_stale_when_disconnected(self, sample_backend_set):
+        ident = ("C042WS25QAX", "1788000000.000001", "1788000000.000001")
+        mem = mdr1.evaluate_row_current_query_membership(
+            row_connected=False,
+            surface_correlated=True,
+            row_identity=ident,
+            backend_identity_set=sample_backend_set,
+        )
+        assert mem == "STALE_OR_RECYCLED_POSSIBLE"
+
+    def test_row_membership_stale_when_surface_uncorrelated(self, sample_backend_set):
+        ident = ("C042WS25QAX", "1788000000.000001", "1788000000.000001")
+        mem = mdr1.evaluate_row_current_query_membership(
+            row_connected=True,
+            surface_correlated=False,
+            row_identity=ident,
+            backend_identity_set=sample_backend_set,
+        )
+        assert mem == "STALE_OR_RECYCLED_POSSIBLE"
 
     def test_target_found_in_connected_mounted_dom(self):
         dom = {"ok": True, "search_view_connected": True, "target_match_count": 1, "mounted_row_count": 20}
