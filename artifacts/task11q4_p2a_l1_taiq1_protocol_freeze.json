@@ -114,7 +114,7 @@
     "evaluation_model": "ONE_ATOMIC_GUARD_AND_CLICK_EVALUATION",
     "toctou_prevention": "single JS evaluation resolves row, validates anchor, clicks same DOM node reference",
     "max_guarded_clicks": 1,
-    "click_invocation": "qualifiedAnchor.click()",
+    "click_invocation": "anchorToClick.click()",
     "fallback_clicks": 0
   },
   "anchor_cardinality_contract": {
@@ -132,6 +132,18 @@
     "expected_thread_ts": "1718058683.912369",
     "required_qualified_anchor_count": 1,
     "cardinality_failure_verdict": "ANCHOR_IDENTITY_NOT_UNIQUE"
+  },
+  "anchor_hit_test_contract": {
+    "required": true,
+    "element_from_point_required": true,
+    "allowed_hit_relations": [
+      "hit === anchor",
+      "anchor.contains(hit)"
+    ],
+    "occlusion_failure_verdict": "ANCHOR_HIT_TEST_OCCLUDED",
+    "null_hit_failure_verdict": "ANCHOR_HIT_TEST_NULL",
+    "diagnostic_failure_verdict": "ANCHOR_HIT_TEST_FAILED",
+    "computed_style_interactable_required": true
   },
   "url_safety_contract": {
     "required_protocol": "https:",
@@ -169,10 +181,25 @@
     "persisted_telemetry_fields": [
       "target_self_safe",
       "download_attribute_absent",
-      "origin_allowed"
+      "origin_allowed",
+      "anchor_hit_test_passed"
     ],
     "raw_target_or_href_persisted": false,
     "new_window_safety_failure_verdict": "ANCHOR_NEW_WINDOW_GUARD_FAILED"
+  },
+  "location_baseline_contract": {
+    "pre_click_capture_required": true,
+    "fail_closed_if_unavailable_or_untrusted": true,
+    "failure_verdict": "PRE_CLICK_LOCATION_BASELINE_UNAVAILABLE",
+    "counted_in_pure_read_dom_extractions": true,
+    "pre_click_location_reads_budget": 1
+  },
+  "dry_run_action_contract": {
+    "search_submissions": 0,
+    "guarded_anchor_clicks": 0,
+    "pure_read_dom_extractions": 0,
+    "pre_click_location_reads": 0,
+    "diagnostic_verdict": "DRY_RUN_PASS"
   },
   "action_contracts": {
     "MAX_SLACK_SEARCH_OPERATIONS": 1,
@@ -209,8 +236,12 @@
       "search_view_connected": true,
       "search_surface_query_still_matches_requested": true,
       "threads_flexpane_connected": true,
+      "root_message_container_count": 1,
       "target_root_identity_observable": true,
+      "reply_message_container_count": ">= 1",
       "target_reply_identity_observable": true,
+      "root_reply_distinct_dom_nodes": true,
+      "composer_focus_observed": false,
       "write_capable_actions": 0,
       "composer_interaction": 0
     },
@@ -254,7 +285,7 @@
     "delete_marker_permitted": false
   },
   "dependency_hashes": {
-    "taiq1_runner": "298c8112fc3b7ae665c2b4735a0c6af94ad5b4f54f20756479eef9d24bf0233d",
+    "taiq1_runner": "7969358c009dce7b9b59266883f94b4610cb12ba1347c893e9f4031c4e6785cd",
     "slack_search": "d214bb7a845e965c8c364a932a074ee73036098b91869242f0b2459a70780f5c",
     "models": "4ec38c787923b668aa530a1e4edbd434f90821abd510ff2af332472db9e39064",
     "webview_thread_reader": "01fecd9934227742329af0de782f0170c3cce2527f66d32f98f075bf268f0d87",
@@ -318,7 +349,7 @@
     }
   },
   "runtime_closure_hashes": {
-    "scripts/diagnose_task11q4_p2a_l1_thread_anchor_interaction_taiq1.py": "298c8112fc3b7ae665c2b4735a0c6af94ad5b4f54f20756479eef9d24bf0233d",
+    "scripts/diagnose_task11q4_p2a_l1_thread_anchor_interaction_taiq1.py": "7969358c009dce7b9b59266883f94b4610cb12ba1347c893e9f4031c4e6785cd",
     "src/pesu_agent/__init__.py": "d1ae8793964867c74ef4628e2776faef093c59f23c635e2b6ab9837e042cd4bd",
     "src/pesu_agent/adapters/__init__.py": "3153bd5a614bb98e5efedd0178add069aa78236f8c001e55698ce1671438d975",
     "src/pesu_agent/adapters/slack_cdp.py": "cfa7b1a52c7443746941738c5dd281f8439f0bcd2b1ba94ca503ba05905c0a8d",

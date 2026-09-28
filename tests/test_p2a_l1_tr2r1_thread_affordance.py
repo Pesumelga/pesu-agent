@@ -276,7 +276,12 @@ def test_23_complete_inventory_permits_negative_absence_verdict():
 
 def test_24_live_artifact_overwrite_fails_closed():
     """24. Verifies live artifact overwrite guard fails closed."""
-    assert not tr2r1_diag.LIVE_OUTPUT_FILE.exists()
+    if tr2r1_diag.LIVE_OUTPUT_FILE.exists():
+        res = tr2r1_diag.run_tr2_diagnostic(dry_run=False)
+        assert res["verdict"] == "FAIL_CLOSED"
+        assert res["diagnostic_verdict"] == "LIVE_ARTIFACT_ALREADY_EXISTS"
+    else:
+        assert not tr2r1_diag.LIVE_OUTPUT_FILE.exists()
 
 
 def test_25_nine_historical_hashes_exact():

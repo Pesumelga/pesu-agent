@@ -256,6 +256,31 @@ JS_ATOMIC_GUARD_AND_CLICK = r"""
             const aRect = a.getBoundingClientRect();
             if (aRect.width <= 0 || aRect.height <= 0) continue;
 
+            // Rendered-state interactability check
+            if (window.getComputedStyle) {
+                const cs = window.getComputedStyle(a);
+                if (cs && (cs.display === "none" || cs.visibility === "hidden" || cs.pointerEvents === "none")) {
+                    guardFailures.push("ANCHOR_NOT_INTERACTABLE");
+                    continue;
+                }
+            }
+
+            // Center-point hit-test / occlusion guard
+            if (document.elementFromPoint) {
+                const cx = aRect.left + aRect.width / 2;
+                const cy = aRect.top + aRect.height / 2;
+                const hit = document.elementFromPoint(cx, cy);
+                if (!hit) {
+                    guardFailures.push("ANCHOR_HIT_TEST_NULL");
+                    continue;
+                }
+                const hitValid = (hit === a || a.contains(hit));
+                if (!hitValid) {
+                    guardFailures.push("ANCHOR_HIT_TEST_OCCLUDED");
+                    continue;
+                }
+            }
+
             const inComposer = Boolean(a.closest('[contenteditable="true"], [data-qa="message_input"], .c-message_input, textarea, [role="textbox"]'));
             if (inComposer) {
                 guardFailures.push("INSIDE_COMPOSER");
@@ -333,9 +358,15 @@ JS_ATOMIC_GUARD_AND_CLICK = r"""
         }
 
         if (qualifyingAnchors.length !== 1) {
+            let specificReason = "ANCHOR_IDENTITY_NOT_UNIQUE";
+            if (qualifyingAnchors.length === 0 && guardFailures.length > 0) {
+                if (guardFailures.every(f => f === "ANCHOR_HIT_TEST_OCCLUDED" || f === "ANCHOR_HIT_TEST_NULL")) {
+                    specificReason = "ANCHOR_HIT_TEST_FAILED";
+                }
+            }
             return {
                 ok: false,
-                guard_failure_reason: "ANCHOR_IDENTITY_NOT_UNIQUE",
+                guard_failure_reason: specificReason,
                 qualified_anchor_count: qualifyingAnchors.length,
                 guard_failures: guardFailures,
                 observed_rank: observedRank,
@@ -355,6 +386,7 @@ JS_ATOMIC_GUARD_AND_CLICK = r"""
             target_self_safe: true,
             download_attribute_absent: true,
             origin_allowed: true,
+            anchor_hit_test_passed: true,
             has_thread_ts_parameter: true,
             points_to_same_message: true,
             points_to_thread_root: false
@@ -414,30 +446,92 @@ JS_OBSERVE_POST_CLICK_DOM_STATE = r"""
         const flexpane = document.querySelector('div[data-qa="threads_flexpane"]');
         const threads_flexpane_connected = Boolean(flexpane && flexpane.isConnected && flexpane.getBoundingClientRect().width > 0);
 
+        let root_message_container_count = 0;
+        let reply_message_container_count = 0;
         let target_root_identity_observable = false;
         let target_reply_identity_observable = false;
+        let root_reply_distinct_dom_nodes = false;
 
         if (threads_flexpane_connected && flexpane) {
-            const flexElements = Array.from(flexpane.querySelectorAll('[data-ts], [data-item-key], a[href]'));
-            for (const el of flexElements) {
-                const dataTs = normTs(el.getAttribute("data-ts"));
-                const itemKey = normTs(el.getAttribute("data-item-key"));
-                if (dataTs === targetThrNorm || itemKey === targetThrNorm) {
-                    target_root_identity_observable = true;
+            const rawContainers = Array.from(flexpane.querySelectorAll(
+                '[data-qa="virtual-list-item"], [data-qa="message_container"], .c-virtual_list__item, .c-message_kit__message, [data-qa="message_pane_item"]'
+            )).filter(el => {
+                if (!el || !el.isConnected) return false;
+                const r = el.getBoundingClientRect();
+                return r.width > 0 && r.height > 0;
+            });
+
+            const rootContainers = [];
+            const replyContainers = [];
+
+            for (const container of rawContainers) {
+                // Composer row exclusion (mandatory)
+                const hasComposerInput = Boolean(container.querySelector('[data-qa="message_input"], .c-message_input'));
+                const hasContentEditable = Boolean(container.querySelector('[contenteditable="true"], textarea, [role="textbox"]'));
+                const isComposerClosest = Boolean(container.closest('[data-qa="message_input"], .c-message_input'));
+                if (hasComposerInput || hasContentEditable || isComposerClosest) {
+                    continue;
                 }
-                if (dataTs === targetMsgNorm || itemKey === targetMsgNorm) {
-                    target_reply_identity_observable = true;
+
+                // Check timestamp anchors and message permalinks inside container
+                const tsAnchors = Array.from(container.querySelectorAll('a.c-timestamp, a[href*="/archives/"]')).filter(a => {
+                    if (!a || !a.isConnected) return false;
+                    const insideBlocks = Boolean(a.closest('.c-message_kit__blocks'));
+                    const insideRichBlock = Boolean(a.closest('.p-rich_text_block'));
+                    const insideRichSection = Boolean(a.closest('.p-rich_text_section'));
+                    const insideMsgBody = Boolean(a.closest('.c-message__body'));
+                    return !(insideBlocks || insideRichBlock || insideRichSection || insideMsgBody);
+                });
+
+                const candidateAnchors = tsAnchors.length > 0 ? tsAnchors : Array.from(container.querySelectorAll('a[href*="/archives/"]'));
+
+                let containerIsRoot = false;
+                let containerIsReply = false;
+
+                for (const a of candidateAnchors) {
+                    const href = (a.getAttribute('href') || a.href || '').trim();
+                    const m = href.match(/\/archives\/([A-Z0-9]+)\/p(\d+)(?:[?&].*thread_ts=(\d+\.\d+))?/);
+                    if (!m) continue;
+
+                    const ch = m[1];
+                    const rawP = m[2];
+                    const msgTs = normTs(rawP.slice(0, 10) + '.' + rawP.slice(10));
+                    const thrTs = normTs(m[3]);
+
+                    if (ch !== targetChannelId) continue;
+
+                    // STRICT ROOT SEMANTICS:
+                    // Actual message container whose own message_ts matches target root ts (targetThrNorm)
+                    // AND (thread_ts is null OR matches root ts)
+                    if (msgTs === targetThrNorm && (!thrTs || thrTs === targetThrNorm)) {
+                        containerIsRoot = true;
+                    }
+
+                    // STRICT REPLY SEMANTICS:
+                    // Actual message container whose own message_ts matches target reply ts (targetMsgNorm)
+                    // AND thread_ts matches target root ts (targetThrNorm)
+                    if (msgTs === targetMsgNorm && thrTs === targetThrNorm) {
+                        containerIsReply = true;
+                    }
                 }
-                if (el.tagName === "A") {
-                    const href = el.getAttribute("href") || "";
-                    if (href.includes("thread_ts=" + targetThrNorm) || href.includes("p" + (targetThrNorm ? targetThrNorm.replace(".", "") : ""))) {
-                        target_root_identity_observable = true;
-                    }
-                    if (href.includes("p" + (targetMsgNorm ? targetMsgNorm.replace(".", "") : ""))) {
-                        target_reply_identity_observable = true;
-                    }
+
+                if (containerIsRoot && !rootContainers.includes(container)) {
+                    rootContainers.push(container);
+                }
+                if (containerIsReply && !replyContainers.includes(container)) {
+                    replyContainers.push(container);
                 }
             }
+
+            root_message_container_count = rootContainers.length;
+            reply_message_container_count = replyContainers.length;
+            target_root_identity_observable = (root_message_container_count === 1);
+            target_reply_identity_observable = (reply_message_container_count >= 1);
+            root_reply_distinct_dom_nodes = (
+                rootContainers.length > 0 &&
+                replyContainers.length > 0 &&
+                !rootContainers.some(rc => replyContainers.includes(rc))
+            );
         }
 
         let location_changed = false;
@@ -474,8 +568,11 @@ JS_OBSERVE_POST_CLICK_DOM_STATE = r"""
             search_view_connected: search_view_connected,
             search_surface_query_still_matches_requested: search_surface_query_still_matches_requested,
             threads_flexpane_connected: threads_flexpane_connected,
+            root_message_container_count: root_message_container_count,
+            reply_message_container_count: reply_message_container_count,
             target_root_identity_observable: target_root_identity_observable,
             target_reply_identity_observable: target_reply_identity_observable,
+            root_reply_distinct_dom_nodes: root_reply_distinct_dom_nodes,
             location_changed: location_changed,
             location_classification: location_classification,
             main_surface_changed: main_surface_changed,
@@ -488,8 +585,11 @@ JS_OBSERVE_POST_CLICK_DOM_STATE = r"""
             search_view_connected: false,
             search_surface_query_still_matches_requested: false,
             threads_flexpane_connected: false,
+            root_message_container_count: 0,
+            reply_message_container_count: 0,
             target_root_identity_observable: false,
             target_reply_identity_observable: false,
+            root_reply_distinct_dom_nodes: false,
             location_changed: false,
             location_classification: "UNKNOWN",
             main_surface_changed: true,
@@ -1052,6 +1152,7 @@ def build_mock_dry_run_inspection() -> dict[str, Any]:
             "target_self_safe": True,
             "download_attribute_absent": True,
             "origin_allowed": True,
+            "anchor_hit_test_passed": True,
             "has_thread_ts_parameter": True,
             "points_to_same_message": True,
             "points_to_thread_root": False,
@@ -1061,8 +1162,11 @@ def build_mock_dry_run_inspection() -> dict[str, Any]:
             "search_view_connected": True,
             "search_surface_query_still_matches_requested": True,
             "threads_flexpane_connected": True,
+            "root_message_container_count": 1,
+            "reply_message_container_count": 1,
             "target_root_identity_observable": True,
             "target_reply_identity_observable": True,
+            "root_reply_distinct_dom_nodes": True,
             "location_changed": False,
             "location_classification": "UNCHANGED",
             "main_surface_changed": False,
@@ -1374,19 +1478,43 @@ def run_taiq1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dic
 
     if dry_run:
         logger.info("🔍 [DRY_RUN] All preflight gates passed. Dry-run mode: executing offline mock inspection...")
+        report["dry_run"] = True
         report["checks"]["SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED"] = True
         report["checks"]["QUERY_STATE_VERIFIED_BEFORE_SUBMIT"] = True
         report["checks"]["SEARCH_SURFACE_QUERY_MATCHES_REQUESTED"] = True
         report["checks"]["search_safety_gate"] = "PASS"
-        report["live_action_inventory"]["search_submissions"] = 1
-        report["live_action_inventory"]["guarded_anchor_clicks"] = 1
-        report["live_action_inventory"]["pure_read_dom_extractions"] = 1
+        report["checks"]["atomic_guard_and_click_executed"] = True
 
+        # STRICT ZERO ACTUAL LIVE ACTIONS IN DRY RUN
+        report["live_action_inventory"]["search_activation_dispatches"] = 0
+        report["live_action_inventory"]["search_modal_observed"] = False
+        report["live_action_inventory"]["search_input_ready"] = "UNKNOWN"
+        report["live_action_inventory"]["search_submissions"] = 0
+        report["live_action_inventory"]["pre_click_location_reads"] = 0
+        report["live_action_inventory"]["reply_bar_clicks"] = 0
+        report["live_action_inventory"]["result_card_clicks"] = 0
+        report["live_action_inventory"]["guarded_anchor_clicks"] = 0
+        report["live_action_inventory"]["pure_read_dom_extractions"] = 0
+        report["live_action_inventory"]["restorations_attempted"] = 0
+        report["live_action_inventory"]["back_navigations_attempted"] = 0
+
+        # Partition simulated outcome
         mock_res = build_mock_dry_run_inspection()
         report["interaction_inspection"] = mock_res
-        report["checks"]["atomic_guard_and_click_executed"] = True
+        report["dry_run_simulation"] = {
+            "simulated_guard_passed": True,
+            "simulated_click_executed": True,
+            "simulated_post_click_outcome": "ANCHOR_OPENED_THREAD_FLEXPANE_SEARCH_PRESERVED_IDENTITY_CONFIRMED",
+            "simulated_root_message_container_count": 1,
+            "simulated_reply_message_container_count": 1,
+            "simulated_target_root_identity_observable": True,
+            "simulated_target_reply_identity_observable": True,
+            "simulated_root_reply_distinct_dom_nodes": True,
+            "simulated_anchor_hit_test_passed": True,
+        }
+
         report["verdict"] = CANONICAL_DRY_RUN_VERDICT
-        report["diagnostic_verdict"] = "ANCHOR_OPENED_THREAD_FLEXPANE_SEARCH_PRESERVED_IDENTITY_CONFIRMED"
+        report["diagnostic_verdict"] = CANONICAL_DRY_RUN_VERDICT
         report["harness_phases"].append("DRY_RUN_COMPLETED")
         report["duration_seconds"] = round(time.time() - start_time, 2)
 
@@ -1477,12 +1605,40 @@ def run_taiq1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dic
 
         report["harness_phases"].append("SEARCH_SAFETY_AND_QUERY_CORRELATION_VERIFIED")
 
+        logger.info("📍 [LOCATION_BASELINE] Capturing pre-click baseline location...")
         init_loc = host.evaluate_js(
             "(() => ({ origin: window.location.origin, pathname: window.location.pathname }))()",
             timeout=5.0,
         )
-        init_origin = init_loc.get("origin") if isinstance(init_loc, dict) else "https://app.slack.com"
-        init_path = init_loc.get("pathname") if isinstance(init_loc, dict) else ""
+        report["live_action_inventory"]["pure_read_dom_extractions"] += 1
+        report["live_action_inventory"]["pre_click_location_reads"] = 1
+
+        valid_baseline = (
+            isinstance(init_loc, dict)
+            and isinstance(init_loc.get("origin"), str)
+            and bool(init_loc.get("origin").strip())
+            and init_loc.get("origin") in FROZEN_ALLOWED_ORIGINS
+            and isinstance(init_loc.get("pathname"), str)
+            and bool(init_loc.get("pathname").strip())
+        )
+
+        report["checks"]["pre_click_location_baseline_valid"] = valid_baseline
+
+        if not valid_baseline:
+            logger.error(
+                f"❌ Pre-click location baseline unavailable or invalid: "
+                f"init_loc={init_loc}"
+            )
+            report["verdict"] = "FAIL_CLOSED"
+            report["diagnostic_verdict"] = "PRE_CLICK_LOCATION_BASELINE_UNAVAILABLE"
+            report["live_action_inventory"]["guarded_anchor_clicks"] = 0
+            report["duration_seconds"] = round(time.time() - start_time, 2)
+            persist_live_artifact(report)
+            return report
+
+        init_origin = init_loc["origin"]
+        init_path = init_loc["pathname"]
+        report["harness_phases"].append("PRE_CLICK_LOCATION_BASELINE_CAPTURED")
 
         logger.info("⚡ [ATOMIC_GUARD_AND_CLICK] Evaluating target row, anchor guards, and dispatching click...")
         js_atomic_click = (
@@ -1549,10 +1705,13 @@ def run_taiq1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dic
 
                 if (
                     cur_obs.get("threads_flexpane_connected") is True
+                    and cur_obs.get("root_message_container_count") == 1
                     and cur_obs.get("target_root_identity_observable") is True
+                    and cur_obs.get("reply_message_container_count", 0) >= 1
                     and cur_obs.get("target_reply_identity_observable") is True
+                    and cur_obs.get("root_reply_distinct_dom_nodes") is True
                 ):
-                    logger.info(f"✨ Confirmed thread flexpane with target identities on poll #{obs_count}!")
+                    logger.info(f"✨ Confirmed thread flexpane with distinct root and reply identities on poll #{obs_count}!")
                     break
 
                 if cur_obs.get("main_surface_changed") is True or not cur_obs.get("search_view_connected"):
@@ -1570,8 +1729,11 @@ def run_taiq1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dic
             final_obs.get("search_view_connected") is True
             and final_obs.get("search_surface_query_still_matches_requested") is True
             and final_obs.get("threads_flexpane_connected") is True
+            and final_obs.get("root_message_container_count") == 1
             and final_obs.get("target_root_identity_observable") is True
+            and final_obs.get("reply_message_container_count", 0) >= 1
             and final_obs.get("target_reply_identity_observable") is True
+            and final_obs.get("root_reply_distinct_dom_nodes") is True
             and not final_obs.get("composer_focus_observed")
         ):
             report["verdict"] = "ANCHOR_OPENED_THREAD_FLEXPANE_SEARCH_PRESERVED_IDENTITY_CONFIRMED"
