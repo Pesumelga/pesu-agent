@@ -316,25 +316,51 @@ JS_ATOMIC_READ_ONLY_MOUNTED_DOM_SNAPSHOT = r"""
 # Correlation & Classification Authorities
 # ---------------------------------------------------------------------------
 
-def evaluate_current_query_correlation_authority(
+def evaluate_search_surface_current_query_correlation(
     search_view_connected: bool,
-    surface_query_matches: bool,
+    surface_query_matches: Optional[bool],
     search_readiness: str,
-    mounted_row_count: int,
+) -> bool:
+    """Evaluates whether the active search surface is correlated with the requested query.
+
+    Authority A: True when connected search_view, RESULTS_READY, and surface query matches requested.
+    """
+    if not search_view_connected:
+        return False
+    if surface_query_matches is not True:
+        return False
+    if search_readiness != "RESULTS_READY":
+        return False
+    return True
+
+
+def evaluate_row_current_query_membership(
+    row_connected: bool,
+    surface_correlated: bool,
+    is_in_backend_top5: bool = False,
 ) -> str:
-    """Evaluates whether mounted rows can be reliably attributed to the current query."""
-    if not search_view_connected or mounted_row_count == 0:
-        return "STALE_OR_RECYCLED_ROW_POSSIBLE"
-    if not surface_query_matches or search_readiness != "RESULTS_READY":
-        return "MOUNTED_BUT_CURRENT_QUERY_CORRELATION_UNPROVEN"
-    return "CURRENT_SEARCH_SURFACE_CORRELATED"
+    """Classifies individual mounted row query membership.
+
+    Authority B:
+    PROVEN: Connected row on correlated surface matching backend-returned identity.
+    UNPROVEN: Connected row on correlated surface outside backend top 5.
+    STALE_OR_RECYCLED_POSSIBLE: Disconnected row or uncorrelated search surface.
+    """
+    if not row_connected or not surface_correlated:
+        return "STALE_OR_RECYCLED_POSSIBLE"
+    if is_in_backend_top5:
+        return "PROVEN"
+    return "UNPROVEN"
 
 
 def classify_mounted_dom_residency(
     dom_snapshot: Optional[dict[str, Any]],
-    correlation_authority: str,
 ) -> str:
-    """Classifies exact target residency based on atomic DOM snapshot and correlation authority."""
+    """Classifies exact target residency based on atomic DOM snapshot.
+
+    Answers strictly: Is the exact target resident in the connected search_view DOM?
+    Does not conflate physical DOM residency with production rank or query membership.
+    """
     if not dom_snapshot or not isinstance(dom_snapshot, dict):
         return "FAIL_CLOSED"
     if not dom_snapshot.get("ok") or not dom_snapshot.get("search_view_connected"):
@@ -344,17 +370,14 @@ def classify_mounted_dom_residency(
     mounted_count = dom_snapshot.get("mounted_row_count", 0)
 
     if target_matches > 1:
-        return "TARGET_IDENTITY_DUPLICATED_IN_MOUNTED_DOM"
+        return "TARGET_IDENTITY_DUPLICATED_IN_CONNECTED_MOUNTED_DOM"
     elif target_matches == 1:
-        if correlation_authority == "CURRENT_SEARCH_SURFACE_CORRELATED":
-            return "TARGET_FOUND_IN_MOUNTED_DOM_CURRENT_QUERY_CORRELATED"
-        else:
-            return "TARGET_FOUND_IN_MOUNTED_DOM_QUERY_CORRELATION_UNPROVEN"
+        return "TARGET_FOUND_IN_CONNECTED_MOUNTED_DOM"
     else:  # target_matches == 0
         if mounted_count == 0:
             return "MOUNTED_DOM_STATE_INSUFFICIENT"
         else:
-            return "TARGET_NOT_FOUND_IN_MOUNTED_DOM"
+            return "TARGET_NOT_FOUND_IN_CONNECTED_MOUNTED_DOM"
 
 
 def build_mock_dry_run_dom_snapshot(simulated_position: int = 6) -> dict[str, Any]:
@@ -372,6 +395,7 @@ def build_mock_dry_run_dom_snapshot(simulated_position: int = 6) -> dict[str, An
             "identity_parse_success": True,
             "is_thread_reply": True if is_target else False,
             "is_target": is_target,
+            "row_current_query_membership": "PROVEN" if (i <= 5) else "UNPROVEN",
         })
     return {
         "ok": True,
@@ -899,7 +923,8 @@ def run_mdr1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict
         },
         "dom_telemetry": None,
         "simulation_dom": None,
-        "current_query_correlation_authority": "UNKNOWN",
+        "search_surface_current_query_correlated": "UNKNOWN",
+        "target_row_current_query_membership": "UNKNOWN",
         "runtime_closure_audit": None,
         "provider_calls": 0,
         "retry_occurred": False,
@@ -1116,14 +1141,19 @@ def run_mdr1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict
         report["simulation_dom"] = mock_dom
         report["dom_telemetry"] = None
 
-        correlation_auth = evaluate_current_query_correlation_authority(
+        surface_correlated = evaluate_search_surface_current_query_correlation(
             search_view_connected=True,
             surface_query_matches=True,
             search_readiness="RESULTS_READY",
-            mounted_row_count=mock_dom["mounted_row_count"],
         )
-        report["current_query_correlation_authority"] = correlation_auth
-        classification = classify_mounted_dom_residency(mock_dom, correlation_auth)
+        report["search_surface_current_query_correlated"] = surface_correlated
+        target_membership = evaluate_row_current_query_membership(
+            row_connected=True,
+            surface_correlated=surface_correlated,
+            is_in_backend_top5=False,  # Position 6 is outside backend top 5
+        )
+        report["target_row_current_query_membership"] = target_membership
+        classification = classify_mounted_dom_residency(mock_dom)
         report["residency_classification"] = classification
 
         report["verdict"] = CANONICAL_DRY_RUN_VERDICT
@@ -1241,15 +1271,52 @@ def run_mdr1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dict
         readiness = str(st.get("SEARCH_RESULT_READINESS"))
         mounted_count = dom_res.get("mounted_row_count", 0)
 
-        correlation_auth = evaluate_current_query_correlation_authority(
+        surface_correlated = evaluate_search_surface_current_query_correlation(
             search_view_connected=bool(dom_res.get("search_view_connected")),
             surface_query_matches=surface_query_matches,
             search_readiness=readiness,
-            mounted_row_count=mounted_count,
         )
-        report["current_query_correlation_authority"] = correlation_auth
+        report["search_surface_current_query_correlated"] = surface_correlated
 
-        classification = classify_mounted_dom_residency(dom_res, correlation_auth)
+        target_in_backend_top5 = False
+        if raw_results:
+            for item in raw_results:
+                cid = getattr(item, "channel_id", None) or (item.get("channel_id") if isinstance(item, dict) else None)
+                mts = getattr(item, "message_ts", None) or (item.get("message_ts") if isinstance(item, dict) else None)
+                tts = getattr(item, "thread_ts", None) or (item.get("thread_ts") if isinstance(item, dict) else None)
+                if (
+                    cid == TARGET_CHANNEL_ID
+                    and normalize_ts(str(mts)) == normalize_ts(TARGET_MESSAGE_TS)
+                    and normalize_ts(str(tts or "")) == normalize_ts(TARGET_THREAD_TS)
+                ):
+                    target_in_backend_top5 = True
+                    break
+
+        target_matches = dom_res.get("target_match_count", 0)
+        target_connected = bool(dom_res.get("target_connected"))
+        if target_matches == 1:
+            target_membership = evaluate_row_current_query_membership(
+                row_connected=target_connected,
+                surface_correlated=surface_correlated,
+                is_in_backend_top5=target_in_backend_top5,
+            )
+        else:
+            target_membership = "NOT_APPLICABLE" if target_matches == 0 else "AMBIGUOUS_DUPLICATE"
+
+        report["target_row_current_query_membership"] = target_membership
+
+        if "mounted_row_records" in dom_res and isinstance(dom_res["mounted_row_records"], list):
+            for row_rec in dom_res["mounted_row_records"]:
+                r_pos = row_rec.get("mounted_dom_position", 0)
+                r_conn = bool(row_rec.get("connected"))
+                r_in_b5 = (r_pos <= (len(raw_results) if raw_results else 0))
+                row_rec["row_current_query_membership"] = evaluate_row_current_query_membership(
+                    row_connected=r_conn,
+                    surface_correlated=surface_correlated,
+                    is_in_backend_top5=r_in_b5,
+                )
+
+        classification = classify_mounted_dom_residency(dom_res)
         report["residency_classification"] = classification
         report["diagnostic_verdict"] = classification
         report["verdict"] = "DIAGNOSTIC_COMPLETED" if classification != "FAIL_CLOSED" else "FAIL_CLOSED"

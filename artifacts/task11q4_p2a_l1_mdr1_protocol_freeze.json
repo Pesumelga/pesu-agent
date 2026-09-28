@@ -49,18 +49,30 @@
     "wildcards_forbidden": true
   },
   "current_query_correlation_contract": {
-    "authorities": [
-      "CURRENT_SEARCH_SURFACE_CORRELATED",
-      "MOUNTED_BUT_CURRENT_QUERY_CORRELATION_UNPROVEN",
-      "STALE_OR_RECYCLED_ROW_POSSIBLE"
-    ],
-    "rationale": "Ensures that mounted rows are rigorously evaluated against search surface readiness and query matching before attributing them to current search."
+    "search_surface_authority": {
+      "field": "search_surface_current_query_correlated",
+      "values": [
+        true,
+        false,
+        "UNKNOWN"
+      ],
+      "rule": "True when connected search_view, RESULTS_READY, and surface query matches requested query"
+    },
+    "row_current_query_membership_authority": {
+      "field": "target_row_current_query_membership",
+      "values": [
+        "PROVEN",
+        "UNPROVEN",
+        "STALE_OR_RECYCLED_POSSIBLE"
+      ],
+      "rule": "Connected row on correlated surface is PROVEN only if present in backend results; otherwise UNPROVEN"
+    },
+    "rationale": "Separates search surface correlation from individual mounted-row query membership. Does not promote row query membership without explicit evidence."
   },
   "reachability_classifications": [
-    "TARGET_FOUND_IN_MOUNTED_DOM_CURRENT_QUERY_CORRELATED",
-    "TARGET_FOUND_IN_MOUNTED_DOM_QUERY_CORRELATION_UNPROVEN",
-    "TARGET_NOT_FOUND_IN_MOUNTED_DOM",
-    "TARGET_IDENTITY_DUPLICATED_IN_MOUNTED_DOM",
+    "TARGET_FOUND_IN_CONNECTED_MOUNTED_DOM",
+    "TARGET_NOT_FOUND_IN_CONNECTED_MOUNTED_DOM",
+    "TARGET_IDENTITY_DUPLICATED_IN_CONNECTED_MOUNTED_DOM",
     "MOUNTED_DOM_STATE_INSUFFICIENT",
     "FAIL_CLOSED"
   ],
@@ -199,10 +211,10 @@
     "vra1_protocol": "646004964e57d0fc6a5ee3fc70ef8517030763ebe1de5b02a17b8953f1a6ec5c",
     "vra1_marker": "cc19a73e2d2da7978218982443147cb890e504d851d945dd4087451195466c59",
     "vra1_live": "ae252ecdac609e366fc914a9f6a8645a5b3a108d005bc1600639bc54b48a1032",
-    "mdr1_runner": "9f92b38099dc84790407321ea805b455cddb93dddba207e7e574712eefec52c6"
+    "mdr1_runner": "7b8a5c4003298f04d25e1bd953f9ee2c4f791656940188ffb0b4129a80485129"
   },
   "runtime_closure_hashes": {
-    "scripts/diagnose_task11q4_p2a_l1_mounted_dom_residency_mdr1.py": "9f92b38099dc84790407321ea805b455cddb93dddba207e7e574712eefec52c6",
+    "scripts/diagnose_task11q4_p2a_l1_mounted_dom_residency_mdr1.py": "7b8a5c4003298f04d25e1bd953f9ee2c4f791656940188ffb0b4129a80485129",
     "src/pesu_agent/__init__.py": "d1ae8793964867c74ef4628e2776faef093c59f23c635e2b6ab9837e042cd4bd",
     "src/pesu_agent/adapters/__init__.py": "3153bd5a614bb98e5efedd0178add069aa78236f8c001e55698ce1671438d975",
     "src/pesu_agent/adapters/slack_cdp.py": "cfa7b1a52c7443746941738c5dd281f8439f0bcd2b1ba94ca503ba05905c0a8d",
