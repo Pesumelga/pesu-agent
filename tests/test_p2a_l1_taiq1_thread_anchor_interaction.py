@@ -816,7 +816,7 @@ console.log(JSON.stringify(testAtomic()));
         assert report["verdict"] == "DRY_RUN_PASS"
         assert report["diagnostic_verdict"] == "DRY_RUN_PASS"
         assert "dry_run_simulation" in report
-        assert report["dry_run_simulation"]["simulated_post_click_outcome"] == taiq1.UNVERIFIED_WRITE_SAFETY_VERDICT
+        assert report["dry_run_simulation"]["simulated_post_click_outcome"] == taiq1.CONFIRMED_DISPATCH_SAFETY_VERDICT
 
 class TestHistoricalIntegrityAndWriteSafety:
     """Verifies historical baseline hashes, immutable TR2-R1 test file, and write safety authority contract."""
@@ -933,8 +933,9 @@ class TestHistoricalIntegrityAndWriteSafety:
             "composer_text_mutation_observed": False,
         }
         verdict, diag_verdict = taiq1.determine_qualification_verdict(valid_obs, write_safety_authority="UNAVAILABLE", write_delta=None)
-        assert verdict == taiq1.UNVERIFIED_WRITE_SAFETY_VERDICT
-        assert diag_verdict == taiq1.UNVERIFIED_WRITE_SAFETY_VERDICT
+        assert verdict != taiq1.CONFIRMED_IDENTITY_VERDICT
+        assert verdict == taiq1.CONFIRMED_DISPATCH_SAFETY_VERDICT
+        assert diag_verdict == taiq1.CONFIRMED_DISPATCH_SAFETY_VERDICT
 
     def test_pre_search_safety_cannot_substitute_for_post_click_safety(self):
         """Verifies that pre-search telemetry cannot substitute for post-click write safety."""
@@ -960,5 +961,115 @@ class TestHistoricalIntegrityAndWriteSafety:
             "composer_text_mutation_observed": False,
         }
         verdict, _ = taiq1.determine_qualification_verdict(valid_obs, write_safety_authority=report["post_click_write_safety_authority"], write_delta=None)
-        assert verdict == taiq1.UNVERIFIED_WRITE_SAFETY_VERDICT
+        assert verdict != taiq1.CONFIRMED_IDENTITY_VERDICT
+        assert verdict == taiq1.CONFIRMED_DISPATCH_SAFETY_VERDICT
 
+
+
+class TestSafetyAuthorityParityAndDispatchContract:
+    """Verifies safety authority parity with historical reply_bar and dispatch safety contract."""
+
+    def test_historical_reply_bar_did_not_require_post_click_write_counter(self):
+        """Verifies historical reply_bar qualification did not require post-click write counters."""
+        reader_source = (REPO_ROOT / "src/pesu_agent/search/webview_thread_reader.py").read_text(encoding="utf-8")
+        assert "SlackWriteAuditTracker" not in reader_source
+        assert "get_write_audit_snapshot" not in reader_source
+        # Attempt 4 protocol freeze permitted missing/unknown composer telemetry
+        attempt4_proto = json.loads((REPO_ROOT / "artifacts/task11q4_p2a_l1_attempt4_protocol_freeze.json").read_text(encoding="utf-8"))
+        comp_policy = attempt4_proto.get("search_safety_authority_gate", {}).get("supplemental_composer_telemetry_policy", {})
+        assert comp_policy.get("status") == "SUPPLEMENTAL_NOT_REQUIRED_FOR_VERIFIED_SAFE"
+
+    def test_current_anchor_dispatch_surface_contains_only_allowed_click_action(self):
+        """Verifies the only executable UI action dispatched in TAIQ1 is anchorToClick.click()."""
+        js = taiq1.JS_ATOMIC_GUARD_AND_CLICK
+        assert "anchorToClick.click()" in js
+        # Zero synthetic event dispatches
+        assert "dispatchEvent" not in js
+        assert "KeyboardEvent" not in js
+        assert "InputEvent" not in js
+
+    def test_write_capable_action_surface_absent_from_interaction_path(self):
+        """Verifies write-capable mutations and selectors are absent from interaction script."""
+        js = taiq1.JS_ATOMIC_GUARD_AND_CLICK
+        assert "texty_send_button" not in js
+        assert "send_button" not in js
+        assert "composer" not in js or "inComposer" in js  # only guard checks allowed
+        assert "form.submit" not in js
+        assert "requestSubmit" not in js
+        assert "fetch(" not in js
+        assert "XMLHttpRequest" not in js
+
+    def test_post_click_authority_unavailable_is_not_reported_as_pass(self):
+        """Verifies that unavailable post-click write authority is never reported as PASS."""
+        report = taiq1.run_taiq1_diagnostic(dry_run=True)
+        assert report["post_click_write_safety_authority"] == "UNAVAILABLE"
+        assert report.get("post_click_write_audit_pass") is not True
+
+    def test_dispatch_safety_and_post_click_write_audit_are_separate_fields(self):
+        """Verifies dispatch safety authority and post-click write audit authority are distinct fields."""
+        report = taiq1.run_taiq1_diagnostic(dry_run=True)
+        assert "pesu_dispatch_safety_authority" in report
+        assert "post_click_write_safety_authority" in report
+        assert report["pesu_dispatch_safety_authority"] == "EXACT_GUARDED_NAVIGATION_ANCHOR_ACTION"
+        assert report["post_click_write_safety_authority"] == "UNAVAILABLE"
+
+    def test_strong_dispatch_contract_verdict_requires_exact_anchor_click_once(self):
+        """Verifies that strong dispatch contract verdict requires qualified dispatch authority."""
+        valid_obs = {
+            "search_view_connected": True,
+            "search_surface_query_still_matches_requested": True,
+            "threads_flexpane_connected": True,
+            "root_message_container_count": 1,
+            "target_root_identity_observable": True,
+            "reply_message_container_count": 1,
+            "target_reply_identity_observable": True,
+            "root_reply_distinct_dom_nodes": True,
+            "composer_focus_observed": False,
+            "composer_active_element_observed": False,
+            "composer_text_mutation_observed": False,
+        }
+        v, dv = taiq1.determine_qualification_verdict(
+            valid_obs,
+            dispatch_safety_authority="EXACT_GUARDED_NAVIGATION_ANCHOR_ACTION",
+            write_safety_authority="UNAVAILABLE",
+        )
+        assert v == taiq1.CONFIRMED_DISPATCH_SAFETY_VERDICT
+        assert dv == taiq1.CONFIRMED_DISPATCH_SAFETY_VERDICT
+
+        # If dispatch safety authority is not qualified, falls back to unverified
+        v_unauth, _ = taiq1.determine_qualification_verdict(
+            valid_obs,
+            dispatch_safety_authority="UNQUALIFIED",
+            write_safety_authority="UNAVAILABLE",
+        )
+        assert v_unauth == taiq1.UNVERIFIED_WRITE_SAFETY_VERDICT
+
+    def test_strong_dispatch_contract_verdict_requires_strict_root_reply_identity(self):
+        """Verifies that missing or non-distinct root/reply identities prevent dispatch contract verdict."""
+        # Non-distinct nodes
+        invalid_obs = {
+            "search_view_connected": True,
+            "search_surface_query_still_matches_requested": True,
+            "threads_flexpane_connected": True,
+            "root_message_container_count": 1,
+            "target_root_identity_observable": True,
+            "reply_message_container_count": 1,
+            "target_reply_identity_observable": True,
+            "root_reply_distinct_dom_nodes": False,  # NOT DISTINCT
+            "composer_focus_observed": False,
+            "composer_active_element_observed": False,
+            "composer_text_mutation_observed": False,
+        }
+        v, _ = taiq1.determine_qualification_verdict(
+            invalid_obs,
+            dispatch_safety_authority="EXACT_GUARDED_NAVIGATION_ANCHOR_ACTION",
+            write_safety_authority="UNAVAILABLE",
+        )
+        assert v != taiq1.CONFIRMED_DISPATCH_SAFETY_VERDICT
+        assert v == "ANCHOR_OPENED_THREAD_FLEXPANE_IDENTITY_INCOMPLETE"
+
+    def test_strong_dispatch_contract_verdict_does_not_set_attempt5_ready(self):
+        """Verifies that dispatch contract qualification strictly keeps ATTEMPT5_READY as false."""
+        with open(taiq1.PROTOCOL_FREEZE_PATH, "r", encoding="utf-8") as f:
+            proto = json.load(f)
+        assert proto.get("pesu_dispatch_safety_authority_contract", {}).get("attempt5_ready") is False

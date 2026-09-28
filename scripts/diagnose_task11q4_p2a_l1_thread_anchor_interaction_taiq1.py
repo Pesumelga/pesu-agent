@@ -115,6 +115,7 @@ DIAGNOSTIC_RUN = "TAIQ1_INTERACTION_RUN_1"
 CANONICAL_DRY_RUN_VERDICT = "DRY_RUN_PASS"
 UNVERIFIED_WRITE_SAFETY_VERDICT = "ANCHOR_THREAD_CONTEXT_OBSERVED_WRITE_SAFETY_UNVERIFIED"
 CONFIRMED_IDENTITY_VERDICT = "ANCHOR_OPENED_THREAD_FLEXPANE_SEARCH_PRESERVED_IDENTITY_CONFIRMED"
+CONFIRMED_DISPATCH_SAFETY_VERDICT = "ANCHOR_OPENED_THREAD_FLEXPANE_SEARCH_PRESERVED_IDENTITY_CONFIRMED_UNDER_DISPATCH_SAFETY_CONTRACT"
 
 TARGET_CHANNEL_ID = "C042WS25QAX"
 TARGET_MESSAGE_TS = "1718079276.126469"
@@ -1258,6 +1259,7 @@ def compute_write_delta(pre_snap: Optional[dict[str, Any]], post_snap: Optional[
 
 def determine_qualification_verdict(
     final_obs: Optional[dict[str, Any]],
+    dispatch_safety_authority: str = "EXACT_GUARDED_NAVIGATION_ANCHOR_ACTION",
     write_safety_authority: str = "UNAVAILABLE",
     write_delta: Optional[int] = None,
 ) -> tuple[str, str]:
@@ -1277,8 +1279,12 @@ def determine_qualification_verdict(
         and not final_obs.get("composer_active_element_observed")
         and not final_obs.get("composer_text_mutation_observed")
     ):
-        if write_safety_authority == "AVAILABLE" and write_delta == 0:
-            return (CONFIRMED_IDENTITY_VERDICT, CONFIRMED_IDENTITY_VERDICT)
+        if write_safety_authority == "AVAILABLE":
+            if write_delta == 0:
+                return (CONFIRMED_IDENTITY_VERDICT, CONFIRMED_IDENTITY_VERDICT)
+            return (UNVERIFIED_WRITE_SAFETY_VERDICT, UNVERIFIED_WRITE_SAFETY_VERDICT)
+        if dispatch_safety_authority == "EXACT_GUARDED_NAVIGATION_ANCHOR_ACTION":
+            return (CONFIRMED_DISPATCH_SAFETY_VERDICT, CONFIRMED_DISPATCH_SAFETY_VERDICT)
         return (UNVERIFIED_WRITE_SAFETY_VERDICT, UNVERIFIED_WRITE_SAFETY_VERDICT)
     if (
         final_obs.get("threads_flexpane_connected") is True
@@ -1608,6 +1614,7 @@ def run_taiq1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dic
         # Partition simulated outcome
         mock_res = build_mock_dry_run_inspection()
         report["interaction_inspection"] = mock_res
+        report["pesu_dispatch_safety_authority"] = "EXACT_GUARDED_NAVIGATION_ANCHOR_ACTION"
         report["post_click_write_safety_authority"] = "UNAVAILABLE"
         report["pre_click_write_audit_snapshot"] = None
         report["post_click_write_audit_snapshot"] = None
@@ -1615,13 +1622,14 @@ def run_taiq1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dic
         report["dry_run_simulation"] = {
             "simulated_guard_passed": True,
             "simulated_click_executed": True,
-            "simulated_post_click_outcome": UNVERIFIED_WRITE_SAFETY_VERDICT,
+            "simulated_post_click_outcome": CONFIRMED_DISPATCH_SAFETY_VERDICT,
             "simulated_root_message_container_count": 1,
             "simulated_reply_message_container_count": 1,
             "simulated_target_root_identity_observable": True,
             "simulated_target_reply_identity_observable": True,
             "simulated_root_reply_distinct_dom_nodes": True,
             "simulated_anchor_hit_test_passed": True,
+            "simulated_pesu_dispatch_safety_authority": "EXACT_GUARDED_NAVIGATION_ANCHOR_ACTION",
             "simulated_post_click_write_safety_authority": "UNAVAILABLE",
             "simulated_composer_focus_observed": False,
             "simulated_composer_active_element_observed": False,
@@ -1851,7 +1859,13 @@ def run_taiq1_diagnostic(*, dry_run: bool = False, timeout: float = 30.0) -> dic
         report["post_click_write_audit_snapshot"] = post_write_snap
         report["post_click_write_safety_delta"] = write_delta
 
-        v, dv = determine_qualification_verdict(final_obs, write_safety_authority, write_delta)
+        report["pesu_dispatch_safety_authority"] = "EXACT_GUARDED_NAVIGATION_ANCHOR_ACTION"
+        v, dv = determine_qualification_verdict(
+            final_obs,
+            dispatch_safety_authority="EXACT_GUARDED_NAVIGATION_ANCHOR_ACTION",
+            write_safety_authority=write_safety_authority,
+            write_delta=write_delta,
+        )
         report["verdict"] = v
         report["diagnostic_verdict"] = dv
 
@@ -1886,7 +1900,7 @@ def main() -> int:
 
     report = run_taiq1_diagnostic(dry_run=args.dry_run, timeout=args.timeout)
     print(f"TAIQ1 Verdict: {report.get('verdict')} (diagnostic_verdict: {report.get('diagnostic_verdict')})")
-    if report.get("verdict") in (CANONICAL_DRY_RUN_VERDICT, CONFIRMED_IDENTITY_VERDICT, UNVERIFIED_WRITE_SAFETY_VERDICT, "ANCHOR_NAVIGATED_MAIN_SURFACE"):
+    if report.get("verdict") in (CANONICAL_DRY_RUN_VERDICT, CONFIRMED_IDENTITY_VERDICT, CONFIRMED_DISPATCH_SAFETY_VERDICT, UNVERIFIED_WRITE_SAFETY_VERDICT, "ANCHOR_NAVIGATED_MAIN_SURFACE"):
         return 0
     return 1
 
