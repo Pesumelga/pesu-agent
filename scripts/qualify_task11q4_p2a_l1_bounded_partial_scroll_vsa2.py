@@ -171,7 +171,7 @@ DIAGNOSTIC_OUTCOMES = [
     "TARGET_ANCHOR_INVALID_PRE_SCROLL",
     "SCROLL_CONTAINER_NOT_FOUND",
     "PARTIAL_SCROLL_NOT_REQUIRED_TARGET_ALREADY_VISIBLE",
-    "FULL_REVEAL_NOW_WITHIN_VSA1_BOUND",
+    "SENTINEL_SCROLL_NOT_REQUIRED_FULL_REVEAL_WITHIN_ONE_VIEWPORT",
     "PARTIAL_SCROLL_DELTA_INVALID",
     "PARTIAL_SCROLL_POSITION_NOT_APPLIED_AS_REQUESTED",
     "TARGET_LOST_AFTER_PARTIAL_SCROLL",
@@ -917,20 +917,25 @@ def compute_bounded_partial_scroll_target(
        full_reveal_required_delta = anchor_rect_bottom - visible_bottom
        full_reveal_requested_scroll_top = current_scroll_top + full_reveal_required_delta
 
-    2. Frozen 3-viewport absolute outer safety bound:
+    2. Frozen 3-viewport absolute outer safety ceiling:
        absolute_max_scroll_delta = max_delta_multiplier * client_height
-       full_reveal_fits_within_bound = (full_reveal_required_delta <= absolute_max_scroll_delta)
 
     3. One-viewport sentinel qualified step limit:
        qualified_step_limit = step_multiplier * client_height
 
-    4. Partial scroll target calculation:
+    4. Applicability threshold:
+       Sentinel scroll is applicable if and only if full_reveal_required_delta > qualified_step_limit (1.0 * clientHeight).
+       If full_reveal_required_delta <= qualified_step_limit:
+           sentinel_scroll_required = False
+           (term: SENTINEL_SCROLL_NOT_REQUIRED_FULL_REVEAL_WITHIN_ONE_VIEWPORT)
+
+    5. Partial scroll target calculation:
        max_scroll_top = max(0.0, scroll_height - client_height)
        partial_requested_scroll_top = current_scroll_top + qualified_step_limit
        partial_target_scroll_top = min(partial_requested_scroll_top, max_scroll_top)
        partial_scroll_delta = partial_target_scroll_top - current_scroll_top
 
-    5. Delta validation:
+    6. Delta validation:
        is_valid_partial_delta = (
            0.0 < partial_scroll_delta <= qualified_step_limit and
            partial_scroll_delta <= absolute_max_scroll_delta
@@ -941,14 +946,15 @@ def compute_bounded_partial_scroll_target(
     full_reveal_requested_scroll_top = current_scroll_top + full_reveal_required_delta
 
     absolute_max_scroll_delta = max_delta_multiplier * client_height
-    full_reveal_fits_within_bound = (full_reveal_required_delta <= absolute_max_scroll_delta)
+    qualified_step_limit = step_multiplier * client_height
+    sentinel_scroll_required = (full_reveal_required_delta > qualified_step_limit)
+    full_reveal_within_one_viewport = not sentinel_scroll_required
 
     is_already_visible = (
         anchor_rect_top >= scroll_container_rect_top and
         anchor_rect_bottom <= scroll_container_rect_bottom
     )
 
-    qualified_step_limit = step_multiplier * client_height
     max_scroll_top = max(0.0, scroll_height - client_height)
     partial_requested_scroll_top = current_scroll_top + qualified_step_limit
     partial_target_scroll_top = min(partial_requested_scroll_top, max_scroll_top)
@@ -965,7 +971,9 @@ def compute_bounded_partial_scroll_target(
         "qualified_step_limit": qualified_step_limit,
         "absolute_max_scroll_delta": absolute_max_scroll_delta,
         "max_scroll_delta": absolute_max_scroll_delta,
-        "full_reveal_fits_within_bound": full_reveal_fits_within_bound,
+        "sentinel_scroll_required": sentinel_scroll_required,
+        "full_reveal_within_one_viewport": full_reveal_within_one_viewport,
+        "full_reveal_fits_within_one_viewport": full_reveal_within_one_viewport,
         "is_already_visible": is_already_visible,
         "max_scroll_top": max_scroll_top,
         "partial_requested_scroll_top": partial_requested_scroll_top,
@@ -2409,11 +2417,18 @@ def run_vsa2_qualification(*, dry_run: bool = False, timeout: float = 30.0) -> d
             )
             report["partial_scroll_calculation"] = partial_calc
 
-            if partial_calc["full_reveal_fits_within_bound"]:
-                logger.info("ℹ️ Full reveal delta fits within original 3-viewport bound. VSA2 not applicable.")
+            if not partial_calc["sentinel_scroll_required"]:
+                logger.info(
+                    "ℹ️ Full reveal delta <= 1.0 viewport. Sentinel scroll not required: "
+                    f"delta={partial_calc['full_reveal_required_delta']} <= step_limit={partial_calc['qualified_step_limit']}"
+                )
                 report["verdict"] = "FAIL_CLOSED"
-                report["diagnostic_verdict"] = "FULL_REVEAL_NOW_WITHIN_VSA1_BOUND"
-                report["error"] = f"Full reveal required delta {partial_calc['full_reveal_required_delta']} <= max {partial_calc['max_scroll_delta']}"
+                report["diagnostic_verdict"] = "SENTINEL_SCROLL_NOT_REQUIRED_FULL_REVEAL_WITHIN_ONE_VIEWPORT"
+                report["error"] = (
+                    f"Full reveal required delta {partial_calc['full_reveal_required_delta']} <= "
+                    f"qualified step limit {partial_calc['qualified_step_limit']}"
+                )
+                report["live_action_inventory"]["scroll_actions"] = 0
                 persist_live_artifact(report)
                 return report
 

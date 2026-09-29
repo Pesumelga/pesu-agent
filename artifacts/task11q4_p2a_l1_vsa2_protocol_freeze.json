@@ -57,7 +57,7 @@
     "TARGET_ANCHOR_INVALID_PRE_SCROLL",
     "SCROLL_CONTAINER_NOT_FOUND",
     "PARTIAL_SCROLL_NOT_REQUIRED_TARGET_ALREADY_VISIBLE",
-    "FULL_REVEAL_NOW_WITHIN_VSA1_BOUND",
+    "SENTINEL_SCROLL_NOT_REQUIRED_FULL_REVEAL_WITHIN_ONE_VIEWPORT",
     "PARTIAL_SCROLL_DELTA_INVALID",
     "PARTIAL_SCROLL_POSITION_NOT_APPLIED_AS_REQUESTED",
     "TARGET_LOST_AFTER_PARTIAL_SCROLL",
@@ -188,7 +188,7 @@
     }
   },
   "dependency_hashes": {
-    "vsa2_runner": "6fb1377ace4e6399a6815dcf4fb97274eca24ee0d82f452944c07f931023485d",
+    "vsa2_runner": "089d417f2dd79bfaced813dfba90ced2625c823db85668c932c3a304d4c8d367",
     "vsa1_runner": "33b6d735f2f38dbfa11c3016d2b492db9d227297f46cbc132f677ee3d064dab9",
     "mgr1r1_runner": "15f43947dcfbd615fbf68f2cb81d8f6a6759b5c4e26dfc7daf20ccb1c0a6f249",
     "attempt4_runner": "b2f4c6972e1e1297045c7fe7d7f1e50492225d3bd073b311ee1dcadd967a905d",
@@ -197,7 +197,7 @@
     "slack_permalink_parser": "f46137cd074e6f9f98e3831e87a2504d056c93596bde8ef564fb87cf3738c5ab"
   },
   "runtime_closure_hashes": {
-    "scripts/qualify_task11q4_p2a_l1_bounded_partial_scroll_vsa2.py": "6fb1377ace4e6399a6815dcf4fb97274eca24ee0d82f452944c07f931023485d",
+    "scripts/qualify_task11q4_p2a_l1_bounded_partial_scroll_vsa2.py": "089d417f2dd79bfaced813dfba90ced2625c823db85668c932c3a304d4c8d367",
     "src/pesu_agent/__init__.py": "d1ae8793964867c74ef4628e2776faef093c59f23c635e2b6ab9837e042cd4bd",
     "src/pesu_agent/lifecycle/slack_lifecycle.py": "f70b6c91e4186452f790a73e9f24debb4f2ccc2821231b59608f1dd2677bf249",
     "src/pesu_agent/lifecycle/__init__.py": "fc09d0190d0bf22f2177f0deee0350f9dd384468081bf6c2f0cfce98f96adfc5",

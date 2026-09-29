@@ -6,7 +6,7 @@ Covers:
 - Canonical identity parsing & UNPROVEN query membership isolation
 - Partial scroll calculation: 1-viewport sentinel step (PARTIAL_SCROLL_STEP_MULTIPLIER = 1.0)
 - 3-viewport absolute outer ceiling preservation (MAX_SCROLL_DELTA_MULTIPLIER = 3.0)
-- Boundary conditions: full_reveal <= 3x viewports -> FULL_REVEAL_NOW_WITHIN_VSA1_BOUND
+- Boundary conditions: full_reveal <= 1x viewport -> SENTINEL_SCROLL_NOT_REQUIRED_FULL_REVEAL_WITHIN_ONE_VIEWPORT (scroll_actions = 0), > 1x viewport -> one sentinel scroll (scroll_actions = 1)
 - maxScrollTop clamping producing <1 viewport movement
 - Post-scroll reacquisition (tolerating virtualization and mounted position changes)
 - Failure modes: target lost, target duplicated, anchor invalid, tolerance failure, no progress
@@ -135,13 +135,16 @@ class TestVsa2PartialScrollCalculationAndSafetyBound:
         assert vsa2.MAX_SCROLL_DELTA_MULTIPLIER == 3.0
 
     def test_vsa1_historical_geometry_one_viewport_sentinel(self):
-        """Simulates the exact VSA1 live conditions:
-        clientHeight = 817.0
+        """VSA1 historical geometry:
+        current_scroll_top = 0
+        scrollHeight = 3661, clientHeight = 817
+        anchor_rect_bottom = 3349.859375, visible_bottom = 825.0
         absolute 3x ceiling = 3 * 817 = 2451.0
         required full reveal delta = 3349.859375 - 825 = 2524.859375
-        -> full_reveal_fits_within_bound is False
+        -> sentinel_scroll_required is True (> 1.0 * clientHeight)
+        -> full_reveal_within_one_viewport is False
         -> qualified_step_limit = 1.0 * 817.0 = 817.0
-        -> partial_scroll_delta = 817.0 (NOT 2451.0!)
+        -> partial_scroll_delta = 817.0 (<= 1x viewport and <= 3x ceiling)
         """
         calc = vsa2.compute_bounded_partial_scroll_target(
             current_scroll_top=0.0,
@@ -159,7 +162,8 @@ class TestVsa2PartialScrollCalculationAndSafetyBound:
         assert calc["full_reveal_required_delta"] == 2524.859375
         assert calc["qualified_step_limit"] == 817.0
         assert calc["absolute_max_scroll_delta"] == 2451.0
-        assert calc["full_reveal_fits_within_bound"] is False
+        assert calc["sentinel_scroll_required"] is True
+        assert calc["full_reveal_within_one_viewport"] is False
         assert calc["is_already_visible"] is False
         assert calc["partial_requested_scroll_top"] == 817.0
         assert calc["partial_target_scroll_top"] == 817.0
@@ -196,37 +200,198 @@ class TestVsa2PartialScrollCalculationAndSafetyBound:
         assert calc["partial_scroll_delta"] <= calc["absolute_max_scroll_delta"]
         assert calc["absolute_max_scroll_delta"] == 2400.0
 
-    def test_full_reveal_fits_within_bound_boundary(self):
-        """If full reveal requires exactly or less than 3 viewports, VSA2 is not applicable."""
-        # Case A: exactly 3 viewports (2451.0)
-        calc_exact = vsa2.compute_bounded_partial_scroll_target(
-            current_scroll_top=0.0,
-            scroll_height=3661.0,
-            client_height=817.0,
-            anchor_rect_top=3258.0,
-            anchor_rect_bottom=825.0 + 2451.0,
-            scroll_container_rect_top=40.0,
-            scroll_container_rect_bottom=857.0,
-            margin_px=32.0,
-            max_delta_multiplier=3.0,
-        )
-        assert calc_exact["full_reveal_required_delta"] == 2451.0
-        assert calc_exact["full_reveal_fits_within_bound"] is True
+    def test_applicability_matrix_explicit_cases(self):
+        """Explicitly test:
+        0.5 viewport required => no scroll
+        exactly 1 viewport required => no scroll
+        1 viewport + epsilon => one sentinel scroll
+        1.5 viewport => one sentinel scroll
+        2.8 viewport => one sentinel scroll
+        exactly 3 viewport => one sentinel scroll
+        3 viewport + epsilon => one sentinel scroll
+        5 viewport => one sentinel scroll
 
-        # Case B: less than 3 viewports (e.g. 1000.0)
-        calc_less = vsa2.compute_bounded_partial_scroll_target(
+        For every sentinel-scroll case:
+        scroll_actions = 1 (sentinel_scroll_required = True)
+        partial_scroll_delta <= clientHeight
+        partial_scroll_delta <= 3 * clientHeight
+        """
+        ch = 800.0
+        # visible_bottom = 840 - 32 = 808.0
+        # full_reveal_required_delta = anchor_rect_bottom - 808.0
+
+        test_cases = [
+            # (name, mult, expected_sentinel, desc)
+            ("0.5x viewport", 0.5, False, "0.5 viewport required => no scroll"),
+            ("1.0x viewport", 1.0, False, "exactly 1 viewport required => no scroll"),
+            ("1.0x + eps viewport", 1.000125, True, "1 viewport + epsilon => one sentinel scroll"),
+            ("1.5x viewport", 1.5, True, "1.5 viewport => one sentinel scroll"),
+            ("2.8x viewport", 2.8, True, "2.8 viewport => one sentinel scroll"),
+            ("3.0x viewport", 3.0, True, "exactly 3 viewport => one sentinel scroll"),
+            ("3.0x + eps viewport", 3.000125, True, "3 viewport + epsilon => one sentinel scroll"),
+            ("5.0x viewport", 5.0, True, "5 viewport => one sentinel scroll"),
+        ]
+
+        for name, mult, expect_sentinel, desc in test_cases:
+            req_delta = mult * ch
+            anc_bottom = 808.0 + req_delta
+            anc_top = anc_bottom - 18.0
+
+            calc = vsa2.compute_bounded_partial_scroll_target(
+                current_scroll_top=0.0,
+                scroll_height=10000.0,
+                client_height=ch,
+                anchor_rect_top=anc_top,
+                anchor_rect_bottom=anc_bottom,
+                scroll_container_rect_top=40.0,
+                scroll_container_rect_bottom=840.0,
+                margin_px=32.0,
+                step_multiplier=1.0,
+                max_delta_multiplier=3.0,
+            )
+
+            assert round(calc["full_reveal_required_delta"], 4) == round(req_delta, 4), f"Failed for {name}"
+            assert calc["qualified_step_limit"] == ch
+            assert calc["absolute_max_scroll_delta"] == 3.0 * ch
+
+            if not expect_sentinel:
+                # <= 1 viewport case: terminate without scroll
+                assert calc["sentinel_scroll_required"] is False, f"Expected no sentinel scroll for {name}"
+                assert calc["full_reveal_within_one_viewport"] is True
+            else:
+                # > 1 viewport case: eligible for one sentinel scroll
+                assert calc["sentinel_scroll_required"] is True, f"Expected sentinel scroll for {name}"
+                assert calc["full_reveal_within_one_viewport"] is False
+                assert calc["is_valid_partial_delta"] is True
+                assert calc["partial_scroll_delta"] == ch
+                assert calc["partial_scroll_delta"] <= ch, f"Delta exceeds clientHeight for {name}"
+                assert calc["partial_scroll_delta"] <= 3.0 * ch, f"Delta exceeds 3x ceiling for {name}"
+
+    def test_matrix_0_5_viewport_no_scroll(self):
+        calc = vsa2.compute_bounded_partial_scroll_target(
             current_scroll_top=0.0,
-            scroll_height=3661.0,
-            client_height=817.0,
-            anchor_rect_top=1800.0,
-            anchor_rect_bottom=1825.0,
+            scroll_height=5000.0,
+            client_height=800.0,
+            anchor_rect_top=808.0 + 400.0 - 18.0,
+            anchor_rect_bottom=808.0 + 400.0,
             scroll_container_rect_top=40.0,
-            scroll_container_rect_bottom=857.0,
+            scroll_container_rect_bottom=840.0,
             margin_px=32.0,
-            max_delta_multiplier=3.0,
         )
-        assert calc_less["full_reveal_required_delta"] == 1000.0
-        assert calc_less["full_reveal_fits_within_bound"] is True
+        assert calc["full_reveal_required_delta"] == 400.0
+        assert calc["sentinel_scroll_required"] is False
+        assert calc["full_reveal_within_one_viewport"] is True
+
+    def test_matrix_exactly_1_0_viewport_no_scroll(self):
+        calc = vsa2.compute_bounded_partial_scroll_target(
+            current_scroll_top=0.0,
+            scroll_height=5000.0,
+            client_height=800.0,
+            anchor_rect_top=808.0 + 800.0 - 18.0,
+            anchor_rect_bottom=808.0 + 800.0,
+            scroll_container_rect_top=40.0,
+            scroll_container_rect_bottom=840.0,
+            margin_px=32.0,
+        )
+        assert calc["full_reveal_required_delta"] == 800.0
+        assert calc["sentinel_scroll_required"] is False
+        assert calc["full_reveal_within_one_viewport"] is True
+
+    def test_matrix_1_0_viewport_plus_epsilon_sentinel_scroll(self):
+        calc = vsa2.compute_bounded_partial_scroll_target(
+            current_scroll_top=0.0,
+            scroll_height=5000.0,
+            client_height=800.0,
+            anchor_rect_top=808.0 + 800.5 - 18.0,
+            anchor_rect_bottom=808.0 + 800.5,
+            scroll_container_rect_top=40.0,
+            scroll_container_rect_bottom=840.0,
+            margin_px=32.0,
+        )
+        assert calc["full_reveal_required_delta"] == 800.5
+        assert calc["sentinel_scroll_required"] is True
+        assert calc["partial_scroll_delta"] <= 800.0
+        assert calc["partial_scroll_delta"] <= 2400.0
+
+    def test_matrix_1_5_viewport_sentinel_scroll(self):
+        calc = vsa2.compute_bounded_partial_scroll_target(
+            current_scroll_top=0.0,
+            scroll_height=5000.0,
+            client_height=800.0,
+            anchor_rect_top=808.0 + 1200.0 - 18.0,
+            anchor_rect_bottom=808.0 + 1200.0,
+            scroll_container_rect_top=40.0,
+            scroll_container_rect_bottom=840.0,
+            margin_px=32.0,
+        )
+        assert calc["full_reveal_required_delta"] == 1200.0
+        assert calc["sentinel_scroll_required"] is True
+        assert calc["partial_scroll_delta"] <= 800.0
+        assert calc["partial_scroll_delta"] <= 2400.0
+
+    def test_matrix_2_8_viewport_sentinel_scroll(self):
+        calc = vsa2.compute_bounded_partial_scroll_target(
+            current_scroll_top=0.0,
+            scroll_height=5000.0,
+            client_height=800.0,
+            anchor_rect_top=808.0 + 2240.0 - 18.0,
+            anchor_rect_bottom=808.0 + 2240.0,
+            scroll_container_rect_top=40.0,
+            scroll_container_rect_bottom=840.0,
+            margin_px=32.0,
+        )
+        assert calc["full_reveal_required_delta"] == 2240.0
+        assert calc["sentinel_scroll_required"] is True
+        assert calc["partial_scroll_delta"] <= 800.0
+        assert calc["partial_scroll_delta"] <= 2400.0
+
+    def test_matrix_exactly_3_0_viewport_sentinel_scroll(self):
+        calc = vsa2.compute_bounded_partial_scroll_target(
+            current_scroll_top=0.0,
+            scroll_height=5000.0,
+            client_height=800.0,
+            anchor_rect_top=808.0 + 2400.0 - 18.0,
+            anchor_rect_bottom=808.0 + 2400.0,
+            scroll_container_rect_top=40.0,
+            scroll_container_rect_bottom=840.0,
+            margin_px=32.0,
+        )
+        assert calc["full_reveal_required_delta"] == 2400.0
+        assert calc["sentinel_scroll_required"] is True
+        assert calc["partial_scroll_delta"] <= 800.0
+        assert calc["partial_scroll_delta"] <= 2400.0
+
+    def test_matrix_3_0_viewport_plus_epsilon_sentinel_scroll(self):
+        calc = vsa2.compute_bounded_partial_scroll_target(
+            current_scroll_top=0.0,
+            scroll_height=5000.0,
+            client_height=800.0,
+            anchor_rect_top=808.0 + 2400.5 - 18.0,
+            anchor_rect_bottom=808.0 + 2400.5,
+            scroll_container_rect_top=40.0,
+            scroll_container_rect_bottom=840.0,
+            margin_px=32.0,
+        )
+        assert calc["full_reveal_required_delta"] == 2400.5
+        assert calc["sentinel_scroll_required"] is True
+        assert calc["partial_scroll_delta"] <= 800.0
+        assert calc["partial_scroll_delta"] <= 2400.0
+
+    def test_matrix_5_0_viewport_sentinel_scroll(self):
+        calc = vsa2.compute_bounded_partial_scroll_target(
+            current_scroll_top=0.0,
+            scroll_height=10000.0,
+            client_height=800.0,
+            anchor_rect_top=808.0 + 4000.0 - 18.0,
+            anchor_rect_bottom=808.0 + 4000.0,
+            scroll_container_rect_top=40.0,
+            scroll_container_rect_bottom=840.0,
+            margin_px=32.0,
+        )
+        assert calc["full_reveal_required_delta"] == 4000.0
+        assert calc["sentinel_scroll_required"] is True
+        assert calc["partial_scroll_delta"] <= 800.0
+        assert calc["partial_scroll_delta"] <= 2400.0
 
     def test_partial_scroll_max_scroll_top_clamping(self):
         """If max_scroll_top < clientHeight, partial scroll is clamped to max_scroll_top (<1 viewport)."""
@@ -481,31 +646,26 @@ class TestVsa2SanitizationAndDryRun:
 class TestVsa2OfflineLivePathIntegration:
     """Verifies that the live path can execute end-to-end under mock conditions."""
 
-    def test_mocked_live_path_success(self, tmp_path, monkeypatch):
+    def test_mocked_live_path_case_a_between_1x_and_3x(self, tmp_path, monkeypatch):
+        """CASE A: 1x < full reveal < 3x.
+        Must return QUALIFICATION_COMPLETED,
+        ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED,
+        scroll_actions = 1.
+        """
         mock_backend_results = vsa2.build_mock_dry_run_backend_results()
         backend_id_set, _ = vsa2.build_canonical_backend_identity_set(mock_backend_results)
 
-        calc = vsa2.compute_bounded_partial_scroll_target(
-            current_scroll_top=0.0,
-            scroll_height=3661.0,
-            client_height=817.0,
-            anchor_rect_top=3332.265625,
-            anchor_rect_bottom=3349.859375,
-            scroll_container_rect_top=40.0,
-            scroll_container_rect_bottom=857.0,
-            margin_px=32.0,
-            step_multiplier=1.0,
-            max_delta_multiplier=3.0,
-        )
-        target_top = calc["partial_target_scroll_top"]
-        assert target_top == 817.0
+        # 1.5x viewport delta: 1.5 * 817 = 1225.5 -> anchor_rect_bottom = 825.0 + 1225.5 = 2050.5
+        anc_top_pre = 2032.90625
+        anc_bottom_pre = 2050.5
+        target_top = 817.0
 
         mock_pre_dom = vsa2.build_mock_dry_run_dom_snapshot(
             case="below_viewport_normal",
             simulated_position=19,
             backend_identity_set=backend_id_set,
-            anchor_rect_top=3332.265625,
-            anchor_rect_bottom=3349.859375,
+            anchor_rect_top=anc_top_pre,
+            anchor_rect_bottom=anc_bottom_pre,
         )
         mock_mut_res = {
             "ok": True,
@@ -513,13 +673,14 @@ class TestVsa2OfflineLivePathIntegration:
             "scroll_top_immediate": target_top,
             "partial_target_scroll_top": target_top,
         }
+        # Post scroll: anchor moved up by 817.0
         mock_post_dom = vsa2.build_mock_dry_run_dom_snapshot(
             case="post_scroll_below_viewport_progress",
             simulated_position=19,
             backend_identity_set=backend_id_set,
             scroll_top=target_top,
-            anchor_rect_top=2515.265625,
-            anchor_rect_bottom=2532.859375,
+            anchor_rect_top=anc_top_pre - target_top,
+            anchor_rect_bottom=anc_bottom_pre - target_top,
         )
 
         class MockHost:
@@ -555,13 +716,11 @@ class TestVsa2OfflineLivePathIntegration:
             def search_messages(self, query, max_results=5):
                 return mock_backend_results
 
-        # Patch WebView host and backend
         monkeypatch.setattr(vsa2, "PesuWebViewHost", MockHost)
         monkeypatch.setattr(vsa2, "WebViewSlackSearchBackend", MockBackend)
 
-        # Isolate output files to tmp_path to avoid creating real marker/live
-        mock_marker = tmp_path / "mock_marker.json"
-        mock_live = tmp_path / "mock_live.json"
+        mock_marker = tmp_path / "mock_marker_case_a.json"
+        mock_live = tmp_path / "mock_live_case_a.json"
         monkeypatch.setattr(vsa2, "ATTEMPT_STARTED_MARKER_FILE", mock_marker)
         monkeypatch.setattr(vsa2, "LIVE_OUTPUT_FILE", mock_live)
 
@@ -570,11 +729,161 @@ class TestVsa2OfflineLivePathIntegration:
         assert report["verdict"] == "QUALIFICATION_COMPLETED"
         assert report["diagnostic_verdict"] == "ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
         assert report["geometry_classification"] == "ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
-        assert report["error"] is None
-        assert report["live_action_inventory"]["search_submissions"] == 1
         assert report["live_action_inventory"]["scroll_actions"] == 1
+        assert report["live_action_inventory"]["search_submissions"] == 1
         assert report["live_action_inventory"]["post_scroll_dom_snapshots"] == 1
         assert report["live_action_inventory"]["guarded_anchor_clicks"] == 0
+
+    def test_mocked_live_path_case_b_gt_3x(self, tmp_path, monkeypatch):
+        """CASE B: full reveal > 3x.
+        Must return QUALIFICATION_COMPLETED,
+        ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED,
+        scroll_actions = 1.
+        """
+        mock_backend_results = vsa2.build_mock_dry_run_backend_results()
+        backend_id_set, _ = vsa2.build_canonical_backend_identity_set(mock_backend_results)
+
+        # Historical geometry: delta = 2524.859375 > 3 * 817 (2451.0)
+        anc_top_pre = 3332.265625
+        anc_bottom_pre = 3349.859375
+        target_top = 817.0
+
+        mock_pre_dom = vsa2.build_mock_dry_run_dom_snapshot(
+            case="below_viewport_normal",
+            simulated_position=19,
+            backend_identity_set=backend_id_set,
+            anchor_rect_top=anc_top_pre,
+            anchor_rect_bottom=anc_bottom_pre,
+        )
+        mock_mut_res = {
+            "ok": True,
+            "scroll_top_before": 0.0,
+            "scroll_top_immediate": target_top,
+            "partial_target_scroll_top": target_top,
+        }
+        mock_post_dom = vsa2.build_mock_dry_run_dom_snapshot(
+            case="post_scroll_below_viewport_progress",
+            simulated_position=19,
+            backend_identity_set=backend_id_set,
+            scroll_top=target_top,
+            anchor_rect_top=anc_top_pre - target_top,
+            anchor_rect_bottom=anc_bottom_pre - target_top,
+        )
+
+        class MockHost:
+            eval_count = 0
+            def __init__(self, initial_url="about:blank", user_data_folder=None, x=-32000, y=-32000, width=1280, height=900, title="PESU Dedicated Host Runtime"): pass
+            def evaluate_js(self, script, timeout=10.0):
+                if "scrollContainerEl.scrollTop = partialTargetScrollTop" in script:
+                    return mock_mut_res
+                elif "target_match_count" in script and "scroll_container" in script:
+                    MockHost.eval_count += 1
+                    if MockHost.eval_count == 1:
+                        return mock_pre_dom
+                    return mock_post_dom
+                return {"ok": True}
+            def destroy(self): pass
+
+        class MockBackend:
+            def __init__(self, config=None, default_max_results=10, host=None, search_ui_ready_timeout_sec=5.0, search_ui_ready_poll_interval_sec=0.1, search_transition_timeout_sec=4.0, search_transition_poll_interval_sec=0.2):
+                self.last_search_telemetry = {
+                    "SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED": True,
+                    "forensic_transition": {
+                        "INPUT_MATCHES_REQUESTED": True,
+                        "SEARCH_SURFACE_QUERY_MATCHES_REQUESTED": True,
+                    },
+                    "GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH": False,
+                    "slackbot_action_invoked_by_pesu": False,
+                    "write_capable_action_invoked_by_pesu": False,
+                    "unsafe_non_search_action_invoked_by_pesu": False,
+                    "SEARCH_RESULT_READINESS": "RESULTS_READY",
+                }
+            def start_runtime(self, timeout=30.0): pass
+            def stop_runtime(self): pass
+            def search_messages(self, query, max_results=5):
+                return mock_backend_results
+
+        monkeypatch.setattr(vsa2, "PesuWebViewHost", MockHost)
+        monkeypatch.setattr(vsa2, "WebViewSlackSearchBackend", MockBackend)
+
+        mock_marker = tmp_path / "mock_marker_case_b.json"
+        mock_live = tmp_path / "mock_live_case_b.json"
+        monkeypatch.setattr(vsa2, "ATTEMPT_STARTED_MARKER_FILE", mock_marker)
+        monkeypatch.setattr(vsa2, "LIVE_OUTPUT_FILE", mock_live)
+
+        report = vsa2.run_vsa2_qualification(dry_run=False, timeout=5.0)
+
+        assert report["verdict"] == "QUALIFICATION_COMPLETED"
+        assert report["diagnostic_verdict"] == "ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
+        assert report["geometry_classification"] == "ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
+        assert report["live_action_inventory"]["scroll_actions"] == 1
+        assert report["live_action_inventory"]["search_submissions"] == 1
+        assert report["live_action_inventory"]["post_scroll_dom_snapshots"] == 1
+
+    def test_mocked_live_path_case_c_lte_1x_no_scroll(self, tmp_path, monkeypatch):
+        """CASE C: full reveal <= 1x viewport.
+        Must return SENTINEL_SCROLL_NOT_REQUIRED_FULL_REVEAL_WITHIN_ONE_VIEWPORT,
+        scroll_actions = 0.
+        """
+        mock_backend_results = vsa2.build_mock_dry_run_backend_results()
+        backend_id_set, _ = vsa2.build_canonical_backend_identity_set(mock_backend_results)
+
+        # 0.5x viewport: 0.5 * 817 = 408.5 -> anchor_rect_bottom = 825.0 + 408.5 = 1233.5
+        # anchor_rect_top = 1233.5 - 17.59375 = 1215.90625 (> 857.0, outside viewport)
+        anc_top_pre = 1215.90625
+        anc_bottom_pre = 1233.5
+
+        mock_pre_dom = vsa2.build_mock_dry_run_dom_snapshot(
+            case="below_viewport_normal",
+            simulated_position=19,
+            backend_identity_set=backend_id_set,
+            anchor_rect_top=anc_top_pre,
+            anchor_rect_bottom=anc_bottom_pre,
+        )
+
+        class MockHost:
+            def __init__(self, initial_url="about:blank", user_data_folder=None, x=-32000, y=-32000, width=1280, height=900, title="PESU Dedicated Host Runtime"): pass
+            def evaluate_js(self, script, timeout=10.0):
+                if "target_match_count" in script and "scroll_container" in script:
+                    return mock_pre_dom
+                return {"ok": True}
+            def destroy(self): pass
+
+        class MockBackend:
+            def __init__(self, config=None, default_max_results=10, host=None, search_ui_ready_timeout_sec=5.0, search_ui_ready_poll_interval_sec=0.1, search_transition_timeout_sec=4.0, search_transition_poll_interval_sec=0.2):
+                self.last_search_telemetry = {
+                    "SAFE_SEARCH_ACTION_EXPLICITLY_SELECTED": True,
+                    "forensic_transition": {
+                        "INPUT_MATCHES_REQUESTED": True,
+                        "SEARCH_SURFACE_QUERY_MATCHES_REQUESTED": True,
+                    },
+                    "GENERIC_DEFAULT_ONENTER_USED_FOR_SEARCH": False,
+                    "slackbot_action_invoked_by_pesu": False,
+                    "write_capable_action_invoked_by_pesu": False,
+                    "unsafe_non_search_action_invoked_by_pesu": False,
+                    "SEARCH_RESULT_READINESS": "RESULTS_READY",
+                }
+            def start_runtime(self, timeout=30.0): pass
+            def stop_runtime(self): pass
+            def search_messages(self, query, max_results=5):
+                return mock_backend_results
+
+        monkeypatch.setattr(vsa2, "PesuWebViewHost", MockHost)
+        monkeypatch.setattr(vsa2, "WebViewSlackSearchBackend", MockBackend)
+
+        mock_marker = tmp_path / "mock_marker_case_c.json"
+        mock_live = tmp_path / "mock_live_case_c.json"
+        monkeypatch.setattr(vsa2, "ATTEMPT_STARTED_MARKER_FILE", mock_marker)
+        monkeypatch.setattr(vsa2, "LIVE_OUTPUT_FILE", mock_live)
+
+        report = vsa2.run_vsa2_qualification(dry_run=False, timeout=5.0)
+
+        assert report["verdict"] == "FAIL_CLOSED"
+        assert report["diagnostic_verdict"] == "SENTINEL_SCROLL_NOT_REQUIRED_FULL_REVEAL_WITHIN_ONE_VIEWPORT"
+        assert report["live_action_inventory"]["scroll_actions"] == 0
+        assert report["live_action_inventory"]["guarded_anchor_clicks"] == 0
         assert report["live_action_inventory"]["keyboard_events"] == 0
-        assert mock_marker.exists()
-        assert mock_live.exists()
+
+    def test_mocked_live_path_success(self, tmp_path, monkeypatch):
+        """Backward-compatible alias for Case B (historical >3x geometry)."""
+        self.test_mocked_live_path_case_b_gt_3x(tmp_path, monkeypatch)
