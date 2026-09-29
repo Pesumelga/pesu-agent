@@ -1,0 +1,308 @@
+{
+  "task_id": "Task 11 / P2A / MGR1",
+  "protocol": "task11q4_p2a_l1_mgr1_mounted_geometry_reachability",
+  "diagnostic_run": "MGR1_GEOMETRY_RUN_1",
+  "target_query": "26년 하반기 간담회",
+  "search_max_results": 5,
+  "max_mounted_rows_to_inspect": 20,
+  "canonical_dry_run_verdict": "DRY_RUN_PASS",
+  "live_output_file": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_mgr1_mounted_geometry_reachability.json",
+  "dry_run_output_file": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_mgr1_mounted_geometry_reachability_dry_run.json",
+  "attempt_started_marker_file": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_mgr1_attempt_started.json",
+  "target_identity": {
+    "channel_id": "C042WS25QAX",
+    "message_ts": "1718079276.126469",
+    "thread_ts": "1718058683.912369",
+    "is_thread_reply": true,
+    "exact_target_match_required": true
+  },
+  "production_row_enumeration": {
+    "search_view_selector": "[data-qa=\"search_view\"]",
+    "search_result_row_selectors": "[data-qa=\"search_result\"], [data-qa=\"search_message_result_item\"], .c-search_result",
+    "max_mounted_rows_to_inspect": 20
+  },
+  "mounted_row_residency_contract": {
+    "search_max_results": 5,
+    "max_mounted_rows_to_inspect": 20,
+    "target_selection_by_exact_semantic_identity": true,
+    "never_assume_dom_position": true,
+    "dom_position_is_observational_telemetry_only": true
+  },
+  "atomic_read_only_mounted_target_geometry_snapshot_contract": {
+    "single_snapshot_execution": true,
+    "pure_read_only": true,
+    "resolves_connected_search_view": true,
+    "enumerates_up_to_20_mounted_rows": true,
+    "parses_structural_semantic_identity": true,
+    "verifies_target_uniqueness": true,
+    "resolves_exact_target_anchor": true,
+    "captures_target_row_geometry": true,
+    "captures_target_anchor_geometry": true,
+    "captures_layout_viewport_metrics": true,
+    "captures_visual_viewport_metrics": true,
+    "captures_element_from_point": true,
+    "identifies_nearest_scroll_container": true,
+    "evaluates_scroll_viewport_relationship": true,
+    "evaluates_clipping_ancestors": true,
+    "zero_click": true,
+    "zero_scroll": true,
+    "zero_keyboard": true,
+    "zero_navigation": true,
+    "zero_mutation": true
+  },
+  "url_safety_contract": {
+    "allowed_origins": [
+      "https://app.slack.com",
+      "https://heumlabs.slack.com"
+    ],
+    "require_https": true,
+    "canonical_permalink_regex": "^/archives/([A-Z0-9]+)/p(\\d+)$"
+  },
+  "current_query_correlation_contract": {
+    "search_surface_correlated_requires_results_ready": true,
+    "search_surface_correlated_requires_query_match": true,
+    "row_membership_proven_requires_backend_identity_set_membership": true,
+    "row_membership_unproven_when_not_in_backend_set": true,
+    "target_membership_unproven_does_not_block_geometry_measurement": true
+  },
+  "reachability_classifications": [
+    "TARGET_NOT_FOUND_IN_CONNECTED_MOUNTED_DOM",
+    "TARGET_IDENTITY_DUPLICATED_IN_CONNECTED_MOUNTED_DOM",
+    "TARGET_ROW_FOUND_ANCHOR_NOT_FOUND",
+    "TARGET_ROW_FOUND_ANCHOR_NOT_UNIQUE",
+    "TARGET_ANCHOR_GEOMETRY_INVALID",
+    "TARGET_ANCHOR_BELOW_LAYOUT_VIEWPORT",
+    "TARGET_ANCHOR_ABOVE_LAYOUT_VIEWPORT",
+    "TARGET_ANCHOR_LEFT_OF_LAYOUT_VIEWPORT",
+    "TARGET_ANCHOR_RIGHT_OF_LAYOUT_VIEWPORT",
+    "TARGET_ANCHOR_OUTSIDE_SCROLL_CONTAINER_VIEWPORT",
+    "TARGET_ANCHOR_CLIPPED_BY_ANCESTOR",
+    "TARGET_ANCHOR_CENTER_IN_VIEWPORT_ELEMENT_FROM_POINT_NULL",
+    "TARGET_ANCHOR_OCCLUDED_WITHIN_VIEWPORT",
+    "TARGET_ANCHOR_VISIBLE_AND_HIT_TEST_REACHABLE",
+    "MOUNTED_DOM_STATE_INSUFFICIENT",
+    "FAIL_CLOSED"
+  ],
+  "dry_run_action_contract": {
+    "search_submissions": 0,
+    "read_only_dom_snapshots": 0,
+    "guarded_anchor_clicks": 0,
+    "scroll_actions": 0,
+    "keyboard_events": 0,
+    "provider_calls": 0,
+    "retries": 0
+  },
+  "action_contracts": {
+    "MAX_SLACK_SEARCH_OPERATIONS": 1,
+    "MAX_SEARCH_SUBMISSIONS": 1,
+    "MAX_READ_ONLY_DOM_SNAPSHOTS": 1,
+    "MAX_GUARDED_ANCHOR_CLICKS": 0,
+    "MAX_REPLY_BAR_CLICKS": 0,
+    "MAX_RESULT_CARD_CLICKS": 0,
+    "MAX_THREAD_EXPANSIONS": 0,
+    "MAX_SCROLL_ACTIONS": 0,
+    "MAX_KEYBOARD_EVENTS": 0,
+    "MAX_COMPOSER_INTERACTIONS": 0,
+    "MAX_WRITE_CAPABLE_ACTIONS": 0,
+    "MAX_PROVIDER_CALLS": 0,
+    "MAX_RETRIES": 0,
+    "MAX_RESTORATIONS": 0,
+    "MAX_BACK_NAVIGATIONS": 0
+  },
+  "sensitive_content_contract": {
+    "forbidden_in_persisted_artifact": [
+      "http://",
+      "https://",
+      "/archives/",
+      "canonical_permalink",
+      "result_url",
+      "raw_permalink",
+      "raw_href",
+      "sender_text",
+      "normalized_body",
+      "message_body"
+    ],
+    "allowed_in_persisted_artifact": [
+      "channel_id",
+      "message_ts",
+      "thread_ts",
+      "identity_parse_success",
+      "numeric_geometry",
+      "viewport_metrics",
+      "boolean_flags"
+    ]
+  },
+  "one_shot_governance": {
+    "attempt_marker_file": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_mgr1_attempt_started.json",
+    "live_output_file": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_mgr1_mounted_geometry_reachability.json",
+    "exclusive_creation_required": true,
+    "replay_forbidden": true
+  },
+  "historical_baselines": {
+    "attempt1": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_trace.json",
+      "sha256": "f6f17e06f94808bac15dea32748526a1d146dac69ef0a75cc8a4467c5c8fd28e"
+    },
+    "attempt2": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_attempt2_trace.json",
+      "sha256": "a6eacdb988306e610f446d65fd5eb56ae198d6ce976e62bd1937066eb834cd3a"
+    },
+    "rd1_run1": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_rd1_search_residency.json",
+      "sha256": "5a44f58616a5dac21ebeb596a10e8f55ba7a2263eb177b945485c2bdd2556846"
+    },
+    "rd1_run2": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_rd1_run2_search_residency.json",
+      "sha256": "fccfb28d380c81ad66e435ac43b63778184cb197da87d61eb304bf391c28f6a5"
+    },
+    "attempt3": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_attempt3_trace.json",
+      "sha256": "b00fa70ec84da9efe329afed4cc70b4c00765adf64e773c2c5624ad72c84b18e"
+    },
+    "attempt4": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_attempt4_trace.json",
+      "sha256": "e115b52de6b1ac1203d98e5a108fbe7b6a375fd708dc93233067d40a910a4965"
+    },
+    "rb1": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_rb1_reply_bar_structure.json",
+      "sha256": "6d94c2ef2bdc9b4eda4e68bf23737fe5e3280a014892ba0ffcb0cb1481dd76d5"
+    },
+    "rb2": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_rb2_reply_bar_structure.json",
+      "sha256": "fede0a42554c0fa6b3db029816e89a2fdbc63c4d11f380d4b61b4a9e05fd4565"
+    },
+    "tr1": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_tr1_target_affordance.json",
+      "sha256": "cf7e6682767c52515f82c6214fa6a27f27208322620d1768db26b2e622fb56ea"
+    },
+    "tr2_failed_live": {
+      "path": "artifacts/task11q4_p2a_l1_tr2_failed_live_evidence.json",
+      "sha256": "895748e464df6f97448fe805e7873f4c1b595186b880faabc34af718ca7a0bf4"
+    },
+    "tr2r1_live": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_tr2r1_thread_affordance.json",
+      "sha256": "6a3a4171219174c654ccad0c61456e8f99bd657b925ec7519df7249db2c4c75b"
+    },
+    "tr2r1_marker": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_tr2r1_attempt_started.json",
+      "sha256": "c780905190ff8e905a890ab4d2117eacb0a5b532b1721dff442441b5b7efa12e"
+    },
+    "taiq1_marker": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_taiq1_attempt_started.json",
+      "sha256": "48f6709bea9b8718fa5f9bf8dbebe5d5290d395e6d9eb59556a56a48ffc64c4e"
+    },
+    "taiq1_live": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_taiq1_anchor_interaction.json",
+      "sha256": "a59b7c5b2aa04fd137efea688d563a8c9a26afc03b770d6683b46ec4bbfc9037"
+    },
+    "vra1_marker": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_vra1_attempt_started.json",
+      "sha256": "cc19a73e2d2da7978218982443147cb890e504d851d945dd4087451195466c59"
+    },
+    "vra1_live": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_vra1_viewport_reachability.json",
+      "sha256": "ae252ecdac609e366fc914a9f6a8645a5b3a108d005bc1600639bc54b48a1032"
+    },
+    "mdr1_marker": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_mdr1_attempt_started.json",
+      "sha256": "47ab640493d3004638158cff89f302b2f4224b58f69ca187effbd400ff9b6d70"
+    },
+    "mdr1_live": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_mdr1_mounted_dom_residency.json",
+      "sha256": "5f6fb3baca00dff266e95db5cf69d69fefe186f9f754d0d4bb89f14a16545a6c"
+    },
+    "mdr1r1_marker": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_mdr1r1_attempt_started.json",
+      "sha256": "678cc3c76908b49e70cc6d85548bc51e48e0e7e4d7831e1fe10c270ebc75909c"
+    },
+    "mdr1r1_live": {
+      "path": "output/qualification_13_5d/live_trace/task11q4_p2a_l1_mdr1r1_mounted_dom_residency.json",
+      "sha256": "36d15d0657baa37f6d1bdd4817e1dff544dfb54d5fe654a60518b173d590e54d"
+    }
+  },
+  "dependency_hashes": {
+    "attempt4_runner": "MISSING",
+    "rb2_runner": "affb83a14725c587b219949681919771b6012463a029e3d79b2078a2a2039d64",
+    "tr1_runner": "MISSING",
+    "tr2_runner": "6cf4b96a84689aee7829199580d6dbb445bd8deac7b6831c338b200baea71338",
+    "tr2r1_runner": "4b45f9d7af5d6aadfd2a0ac1356b3ecc6925fa32eaa2e7560e8b746e72632eb8",
+    "taiq1_runner": "1c0974ce6b673648bdc8fa847137805e99331886d4b75ad3d19fc3127b54a1c4",
+    "taiq1_protocol": "0b01de3c10b0e5195932061536e67b7aa0f79dbfba707433f7cee1335b0e3665",
+    "taiq1_marker": "48f6709bea9b8718fa5f9bf8dbebe5d5290d395e6d9eb59556a56a48ffc64c4e",
+    "taiq1_live": "a59b7c5b2aa04fd137efea688d563a8c9a26afc03b770d6683b46ec4bbfc9037",
+    "vra1_runner": "f363fedc5353a894be6caf88c9f9cd0a811f55ab7e60fe09e6ae2a02af611737",
+    "vra1_protocol": "646004964e57d0fc6a5ee3fc70ef8517030763ebe1de5b02a17b8953f1a6ec5c",
+    "vra1_marker": "cc19a73e2d2da7978218982443147cb890e504d851d945dd4087451195466c59",
+    "vra1_live": "ae252ecdac609e366fc914a9f6a8645a5b3a108d005bc1600639bc54b48a1032",
+    "mdr1_runner": "ca6a63f2839c8337587e0d15d7f409cbb80f034c68511485d3cfb07d7ba55076",
+    "mdr1_protocol": "2afdc3449bd6a075d3cb038426461ec47051fe1f35b836171453f6051be22476",
+    "mdr1_marker": "47ab640493d3004638158cff89f302b2f4224b58f69ca187effbd400ff9b6d70",
+    "mdr1_live": "5f6fb3baca00dff266e95db5cf69d69fefe186f9f754d0d4bb89f14a16545a6c",
+    "mdr1r1_runner": "7df5c93fc292857706d8d77c5156330ab233cf420d6bb9b70b9e84135f52f012",
+    "mdr1r1_protocol": "955bb8bb3e7abcecb21775048cc3894732baf930b605b0f4feb6ef903fcca6b7",
+    "mdr1r1_marker": "678cc3c76908b49e70cc6d85548bc51e48e0e7e4d7831e1fe10c270ebc75909c",
+    "mdr1r1_live": "36d15d0657baa37f6d1bdd4817e1dff544dfb54d5fe654a60518b173d590e54d"
+  },
+  "runtime_closure_hashes": {
+    "scripts/diagnose_task11q4_p2a_l1_mounted_geometry_reachability_mgr1.py": "496e080f061fa2b61303a6b861c58bf0156791e7c0508e4bcf39f59236d46988",
+    "src/pesu_agent/__init__.py": "d1ae8793964867c74ef4628e2776faef093c59f23c635e2b6ab9837e042cd4bd",
+    "src/pesu_agent/adapters/__init__.py": "3153bd5a614bb98e5efedd0178add069aa78236f8c001e55698ce1671438d975",
+    "src/pesu_agent/adapters/slack_cdp.py": "cfa7b1a52c7443746941738c5dd281f8439f0bcd2b1ba94ca503ba05905c0a8d",
+    "src/pesu_agent/adapters/slack_desktop.py": "3d325fc0f0065195a618f85182f4a34a8d137df769d671f58a17c788d45272d0",
+    "src/pesu_agent/context/__init__.py": "28c97152dd3cca994a985863b1e44d73ad75c0abc3ce399dfddb9cc0a65e7594",
+    "src/pesu_agent/context/slack_context_collector.py": "cd250c8e782cc5468f528b484b5bdc45b45633aa1027428442f96e04df842e0f",
+    "src/pesu_agent/evidence/__init__.py": "b9bbd18a356246392c9d84337a4d96d221d4f8e92ae258f9047e8eae3b803456",
+    "src/pesu_agent/evidence/slack_evidence_collector.py": "ee1c2ec6b641f80f35c4848aee489c0e305b0d849b8768cc2cf8cea3f32acf79",
+    "src/pesu_agent/investigation/__init__.py": "97419d1c5f04316403237f953ceb23c880f3b9712fedf4febda6ae97a7f862c3",
+    "src/pesu_agent/investigation/analyzer.py": "1f7a360899649eccc8663a2f7c17754321005eea9ff41d907c9f9b93217cbf3d",
+    "src/pesu_agent/investigation/claim_verification.py": "1cb47ce10759993f5d88d002f1b37e4970b2d7cba61cd45c59b4d50388f26eeb",
+    "src/pesu_agent/investigation/context_expansion.py": "292eb4c432d8e27aa7402525f86a5e807c3ea930ae54d5576449fd6bcb440f8a",
+    "src/pesu_agent/investigation/exceptions.py": "7e8b45188c782bf7a31fdb913e832d7eb2ef4e97228977325b95ed17240afa55",
+    "src/pesu_agent/investigation/followup_retrieval.py": "94cdcb244cc28a62f2327cdd886f5714b0baf065a35da0c0c35e3fb613798702",
+    "src/pesu_agent/investigation/gap_assessment.py": "61126697a5835cfdb756adaeff47332377145a4853b22316eb89cad584a2fc0c",
+    "src/pesu_agent/investigation/graph_models.py": "14a87594e5cffe5bd78c138df73d3a3af20e5ce298e01679caaf31660705ff1b",
+    "src/pesu_agent/investigation/models.py": "4ec38c787923b668aa530a1e4edbd434f90821abd510ff2af332472db9e39064",
+    "src/pesu_agent/investigation/orchestrator.py": "99586075991f19177934007a6b63c9eb0abb834f599601c630b0b24e14f87dbe",
+    "src/pesu_agent/investigation/payload_builder.py": "840402a8cdaccdfa8b7832542879353ba50653dbb45c73de103ef1df4031fe02",
+    "src/pesu_agent/investigation/pipeline.py": "dfa8537ff5b37689226488c73c0c0d38a2703a5ddc9403f67b50f30caaaf82d9",
+    "src/pesu_agent/investigation/planner.py": "e086ef3b89f8221643d407e08b9b5579cf6082643833e63cb47144059a181293",
+    "src/pesu_agent/investigation/production_trace_coordinator.py": "ea1a4da92e16b276b8cf013df0801e9140c65126618fe20e1738b4c1a90b1193",
+    "src/pesu_agent/investigation/retrieval_coordinator.py": "cda149c2ae0d2c1e9759aaf5df0a3577d561f719ee0224b62dcb6581f0228ef5",
+    "src/pesu_agent/investigation/search_backend.py": "108778f57deb65a6e1e76db020f7447ce958b3560a502b8fc72a4fd01fef963b",
+    "src/pesu_agent/investigation/selector.py": "a439d7cbf09c9cfcc79187b25e3ae351af5858c468f19b8ab1d7974e43b02f0a",
+    "src/pesu_agent/investigation/synthetic_e2e_cases.py": "1effabd1bd4608104f77d25e79a549db24c66a2110be4180d30bad4a1f368227",
+    "src/pesu_agent/investigation/v2_orchestrator.py": "feb1a908f46b967a708bb8aa3845e68a51123797c4b7a28319e3ad9b5a6493d3",
+    "src/pesu_agent/investigation/workitem_synthesis.py": "e50bda50c2d47ee0e8f9a6a0268c44b9f9d03506e441215616eb27871fabe548",
+    "src/pesu_agent/lifecycle/__init__.py": "fc09d0190d0bf22f2177f0deee0350f9dd384468081bf6c2f0cfce98f96adfc5",
+    "src/pesu_agent/lifecycle/slack_agent_window.py": "a82c01578068c85e4c2bf12070171c0ae67556bc334b99c845bb9519d3c6180f",
+    "src/pesu_agent/lifecycle/slack_lifecycle.py": "f70b6c91e4186452f790a73e9f24debb4f2ccc2821231b59608f1dd2677bf249",
+    "src/pesu_agent/llm/__init__.py": "d4f3af22a04252525d3cc64f902bb44ab6c260081af0648b66fe2913ebf7e139",
+    "src/pesu_agent/llm/config.py": "1d319dab19780bce6ee899e175bb280be8c132bd0289ba84c22cdc749455c13e",
+    "src/pesu_agent/llm/models.py": "f489dad446a1d809093813cb2e9b6ecd374cc91ab8cbeef86340f21a8afa2bc3",
+    "src/pesu_agent/llm/openrouter.py": "2d01796b09e4ed568265f035740e6e19e26d66c33c711d314c980abebf563fcf",
+    "src/pesu_agent/llm/provider.py": "b6356b373b6fc6702469441fb3420862ed0891bffa46e2e810edb44b06366a07",
+    "src/pesu_agent/llm/schema.py": "1c5f322cab66d04514aec778e36854e339554bc7ff9c7daafebc61f40c7ca3f8",
+    "src/pesu_agent/llm/usage.py": "8f9ff5bde7eb1331161eefb8371defb46f0f7c96666ddac92d0652c936c90a4d",
+    "src/pesu_agent/parsers/__init__.py": "53ad149e92db9a096e4c4aac6f1338187a5f9537a4b7d2d3e95e93d513674527",
+    "src/pesu_agent/parsers/slack_message_parser.py": "532bb5f2e8953d2096c9cb28c0e42027737780ba03e1d3d1eefb40c390d0d7c1",
+    "src/pesu_agent/parsers/slack_permalink_parser.py": "f46137cd074e6f9f98e3831e87a2504d056c93596bde8ef564fb87cf3738c5ab",
+    "src/pesu_agent/runtime/__init__.py": "4b35e1f9e767d8beba168ddd9d38ef10b3ef436f05246a2f576a26712747753b",
+    "src/pesu_agent/runtime/login_setup.py": "74d8e6d6b0252d96b9a7a32b2584197bc444897fcd707b0140b40b05bdff5854",
+    "src/pesu_agent/runtime/pesu_webview_host.py": "831cebf43320fe7ff4fcca84a439e0daa30e18b3d74519970d5d529389691ea0",
+    "src/pesu_agent/runtime/resource_resolver.py": "bf66d36f6eec9c69d4ccfb7a5fdd426dffbf25a1f966ab6030c57447254e8d7d",
+    "src/pesu_agent/search/__init__.py": "5f1e2bb33d4a778fe263351804dc2b7cab52aad35253aa197ac2f312b8453ae5",
+    "src/pesu_agent/search/actor.py": "1f15b1d143066bc58c27239fab6292db23d9d5318e09c21700bfc50c336b0f83",
+    "src/pesu_agent/search/real_slack_backend.py": "2e15af2544fa6ad047c855ae9065b8544c2f8e6b771ede17c81a0d7bbf24b74c",
+    "src/pesu_agent/search/slack_backend_factory.py": "c0151d0b4e57b42f72fae543a4b8490e62aed62c28c3c980bc10c78bf9b6b3bf",
+    "src/pesu_agent/search/slack_query_compiler.py": "ab28b46188170a7d767fa574c2f1cec67cbf357b789c09bf25776da482becc47",
+    "src/pesu_agent/search/slack_search.py": "d214bb7a845e965c8c364a932a074ee73036098b91869242f0b2459a70780f5c",
+    "src/pesu_agent/search/slack_search_resolver.py": "556c1ac371061a15885d591529568e7ed6905f0bb8fa8cef37e37d609e0bb6b4",
+    "src/pesu_agent/search/temporal.py": "f14ba6bbf8d228c36a977c8e09b824ed70badf565f1a22c0d7a7a7a5fc8bcafb",
+    "src/pesu_agent/search/webview_slack_search.py": "0f23a7430fd77659e5e3559c9105f9ce5acddb2ef2a0260feabd66cb10b72c21",
+    "src/pesu_agent/search/webview_thread_reader.py": "01fecd9934227742329af0de782f0170c3cce2527f66d32f98f075bf268f0d87",
+    "src/pesu_agent/security/__init__.py": "e1caaa55637856ab61ba3185f207423816df861132b5a43f329a8cd835521ccc",
+    "src/pesu_agent/security/credential_store.py": "ce3d8e8d7dd911527e9cb45790dbc4c6a006f07d2e8ad108a0945f10343fcd0c",
+    "src/pesu_agent/security/read_only_barrier.py": "c42afe7ea78ff9b1e2e9fd922d0249508ea4b15ce280e3529665acc95c72646c",
+    "src/pesu_agent/security/write_audit.py": "5560ec12f85886b49c2bd40c3faa2b9271680e1a04abdd97e37e324d1fc6f09e"
+  }
+}
