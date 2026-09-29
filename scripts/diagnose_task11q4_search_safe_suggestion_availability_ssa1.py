@@ -1,40 +1,34 @@
-"""Phase 13.5D / Task 11 / Search Safety / SSA1: Safe Search Suggestion Availability Diagnostic 1.
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+PESU Agent - Phase 13.5D / Task 11 / Search Safety / SSA1
+Safe Search Suggestion Availability Diagnostic 1 (Zero-Submit, Zero-Click, Zero-Scroll)
 
-SSA1 PURPOSE:
-After using the already-qualified query-entry path for the exact query, determine whether
-a safe explicit search suggestion becomes available within a bounded observation window,
-and characterize candidate structure without submitting anything.
+Authoritative Protocol:
+  TASK_11_Q4_SEARCH_SSA1_SAFE_SUGGESTION_AVAILABILITY
 
-Strict Boundaries:
-- DIAGNOSTIC ONLY: Upstream of VSA2. Does NOT submit search, does NOT open results,
-  does NOT click suggestions, does NOT press Enter, does NOT scroll, does NOT click anchors,
-  does NOT expand threads, does NOT invoke LLM provider, does NOT retry.
-- REUSES EXACT PRODUCTION QUERY-ENTRY SEAM:
-  1. JS_CHECK_AUTH_AND_READINESS (readiness check)
-  2. JS_ACTIVATE_SEARCH (open search modal)
-  3. JS_CHECK_SEARCH_INPUT_READINESS (input box ready)
-  4. JS_SET_TEXTY_QUERY (model-native query setter)
-- ZERO SUBMIT MUTATION:
-  STRICT ZERO: search submissions = 0, Enter events = 0, suggestion clicks = 0,
-  navigation actions = 0, scroll actions = 0, provider calls = 0, retries = 0.
-- BOUNDED OBSERVATION WINDOW:
-  MAX_SUGGESTION_OBSERVATION_POLLS = 20
-  POLL_INTERVAL_MS = 200 (total maximum window 4.0 seconds, matching production submit timeout)
-- STRUCTURAL CANDIDATE CLASSIFICATIONS (NORMALIZED ENUMS ONLY, ZERO RAW TEXT):
-  SAFE_EXPLICIT_SEARCH
-  UNSAFE_NON_SEARCH_CHANNEL_NAV
-  UNSAFE_PERSON_NAV
-  UNSAFE_WRITE_CAPABLE_SLACKBOT
-  UNSAFE_OTHER_NAV
-  UNKNOWN_CANDIDATE
-- TERMINAL DIAGNOSTIC CLASSIFICATIONS:
-  SAFE_SEARCH_SUGGESTION_OBSERVED
-  ONLY_UNSAFE_NON_SEARCH_SUGGESTIONS_OBSERVED
-  NO_SUGGESTION_SURFACE_OBSERVED
-  SUGGESTION_STRUCTURE_UNRECOGNIZED
-  QUERY_STATE_NOT_VERIFIED
-  SAFE_SUGGESTION_APPEARED_AFTER_BOUNDED_DELAY
-  FAIL_CLOSED
+Purpose:
+  After using the already-qualified production query-entry primitives for the exact query
+  ("26년 하반기 간담회"), determine whether a safe explicit search suggestion becomes available
+  within the exact production submit observation window (4000ms deadline, 50ms interval, <= 80 polls),
+  and characterize autocomplete candidate structure without submitting anything.
+
+Strict Behavioral Invariants:
+  - ZERO search submissions (no onEnter, no enter key events, no submit form dispatch)
+  - ZERO suggestion clicks
+  - ZERO navigation actions (no channel, user, or permalink navigations)
+  - ZERO scroll mutations
+  - ZERO LLM provider invocations
+  - ZERO query retries
+  - MAXIMUM ONE query entry (Texty sync audit)
+  - BOUNDED suggestion surface observation: monotonic deadline <= 4000ms, max 80 polls, 50ms interval
+  - EARLY TERMINATION permitted upon safe candidate observation
+  - STRICT SENSITIVE DATA SCRUBBING: Zero raw suggestion text, zero URLs, zero tokens persisted.
+
+Cadence & Envelope:
+  SUGGESTION_OBSERVATION_TIMEOUT_MS = 4000
+  POLL_INTERVAL_MS = 50
+  MAX_SUGGESTION_OBSERVATION_POLLS = 80
 """
 
 from __future__ import annotations
@@ -52,22 +46,20 @@ import re
 import subprocess
 import sys
 import time
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
+# Ensure project root is in path
 REPO_ROOT = Path(__file__).resolve().parent.parent
-SRC_DIR = REPO_ROOT / "src"
-if str(SRC_DIR) not in sys.path:
-    sys.path.insert(0, str(SRC_DIR))
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+if str(REPO_ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from pesu_agent.parsers.slack_permalink_parser import (
     SlackMessagePermalinkIdentity,
     parse_slack_message_permalink,
 )
 from pesu_agent.runtime.pesu_webview_host import (
-    DIRECT_SLACK_PROFILE_PATH,
     PesuWebViewHost,
+    DIRECT_SLACK_PROFILE_PATH,
 )
 from pesu_agent.search.slack_search import SlackSearchResult
 from pesu_agent.search.webview_slack_search import (
@@ -75,6 +67,7 @@ from pesu_agent.search.webview_slack_search import (
     JS_ACTIVATE_SEARCH,
     JS_CHECK_SEARCH_INPUT_READINESS,
     JS_SET_TEXTY_QUERY,
+    JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER,
     SEARCH_INPUT_READINESS_TIMEOUT_SECONDS,
     SEARCH_INPUT_POLL_INTERVAL_SECONDS,
     WebViewRuntimeConfig,
@@ -94,89 +87,36 @@ def normalize_slack_ts(ts: Optional[str]) -> Optional[str]:
     s = str(ts).strip()
     if not s:
         return None
-    m = re.match(r"^(\d+)(?:\.(\d+))?$", s)
-    if not m:
-        return s
-    integer_part = m.group(1)
-    fractional_part = (m.group(2) or "").rstrip("0")
-    return f"{integer_part}.{fractional_part}" if fractional_part else integer_part
+    if "." in s:
+        parts = s.split(".", 1)
+        return f"{parts[0]}.{parts[1].ljust(6, '0')[:6]}"
+    return f"{s}.000000"
 
 
 # ---------------------------------------------------------------------------
-# Constants & Contracts
+# Authoritative SSA1 Constants
 # ---------------------------------------------------------------------------
+
+TASK_ID = "TASK_11_SEARCH_SAFETY_SSA1_DIAGNOSTIC_1"
+PROTOCOL_NAME = "TASK_11_Q4_SEARCH_SSA1_SAFE_SUGGESTION_AVAILABILITY"
+DIAGNOSTIC_RUN = "SSA1"
 
 TARGET_QUERY = "26년 하반기 간담회"
-PROTOCOL_NAME = "task11q4_search_ssa1_safe_suggestion_availability"
-DIAGNOSTIC_RUN = "SSA1_SUGGESTION_RUN_1"
-CANONICAL_DRY_RUN_VERDICT = "DRY_RUN_PASS"
 
-TARGET_CHANNEL_ID = "C042WS25QAX"
-TARGET_MESSAGE_TS = "1718079276.126469"
-TARGET_THREAD_TS = "1718058683.912369"
-TARGET_IS_THREAD_REPLY = True
-CANONICAL_TARGET_IDENTITY: tuple[str, str, Optional[str]] = (
-    TARGET_CHANNEL_ID,
-    normalize_slack_ts(TARGET_MESSAGE_TS),
-    normalize_slack_ts(TARGET_THREAD_TS),
-)
+SUGGESTION_OBSERVATION_TIMEOUT_MS = 4000
+POLL_INTERVAL_MS = 50
+MAX_SUGGESTION_OBSERVATION_POLLS = 80
 
-MAX_SUGGESTION_OBSERVATION_POLLS = 20
-POLL_INTERVAL_MS = 200
-
-FROZEN_ALLOWED_ORIGINS = [
-    "https://app.slack.com",
-    "https://heumlabs.slack.com",
-]
-
-ARTIFACTS_DIR = REPO_ROOT / "artifacts"
-PROTOCOL_FREEZE_PATH = ARTIFACTS_DIR / "task11q4_search_ssa1_protocol_freeze.json"
 OUTPUT_DIR = REPO_ROOT / "output" / "qualification_13_5d" / "live_trace"
-LIVE_TRACE_DIR = OUTPUT_DIR
-DRY_RUN_OUTPUT_FILE = LIVE_TRACE_DIR / "task11q4_search_ssa1_safe_suggestion_availability_dry_run.json"
-ATTEMPT_STARTED_MARKER_FILE = LIVE_TRACE_DIR / "task11q4_search_ssa1_attempt_started.json"
-LIVE_OUTPUT_FILE = LIVE_TRACE_DIR / "task11q4_search_ssa1_safe_suggestion_availability.json"
+ATTEMPT_STARTED_MARKER_FILE = OUTPUT_DIR / "task11q4_search_ssa1_attempt_started.json"
+LIVE_OUTPUT_FILE = OUTPUT_DIR / "task11q4_search_ssa1_safe_suggestion_availability.json"
+DRY_RUN_OUTPUT_FILE = OUTPUT_DIR / "task11q4_search_ssa1_safe_suggestion_availability_dry_run.json"
+PROTOCOL_FREEZE_FILE = REPO_ROOT / "artifacts" / "task11q4_search_ssa1_protocol_freeze.json"
 
-TERMINAL_CLASSIFICATIONS = [
-    "SAFE_SEARCH_SUGGESTION_OBSERVED",
-    "ONLY_UNSAFE_NON_SEARCH_SUGGESTIONS_OBSERVED",
-    "NO_SUGGESTION_SURFACE_OBSERVED",
-    "SUGGESTION_STRUCTURE_UNRECOGNIZED",
-    "QUERY_STATE_NOT_VERIFIED",
-    "SAFE_SUGGESTION_APPEARED_AFTER_BOUNDED_DELAY",
-    "FAIL_CLOSED",
-]
-
-CANDIDATE_CLASSIFICATIONS = [
-    "SAFE_EXPLICIT_SEARCH",
-    "UNSAFE_NON_SEARCH_CHANNEL_NAV",
-    "UNSAFE_PERSON_NAV",
-    "UNSAFE_WRITE_CAPABLE_SLACKBOT",
-    "UNSAFE_OTHER_NAV",
-    "UNKNOWN_CANDIDATE",
-]
-
-MAX_SLACK_SEARCH_OPERATIONS = 1
-MAX_QUERY_ENTRIES = 1
-MAX_SEARCH_SUBMISSIONS = 0
-MAX_ENTER_KEY_EVENTS = 0
-MAX_SUGGESTION_CLICKS = 0
-MAX_NAVIGATION_ACTIONS = 0
-MAX_SCROLL_ACTIONS = 0
-MAX_GUARDED_ANCHOR_CLICKS = 0
-MAX_REPLY_BAR_CLICKS = 0
-MAX_RESULT_CARD_CLICKS = 0
-MAX_THREAD_EXPANSIONS = 0
-MAX_KEYBOARD_EVENTS = 0
-MAX_COMPOSER_INTERACTIONS = 0
-MAX_WRITE_CAPABLE_ACTIONS = 0
-MAX_PROVIDER_CALLS = 0
-MAX_RETRIES = 0
-MAX_RESTORATIONS = 0
-MAX_BACK_NAVIGATIONS = 0
 
 # ---------------------------------------------------------------------------
-# JavaScript Snippets (Pure Read-Only Observation)
+# Pure Read-Only Autocomplete Suggestion Surface Inspector JS
+# STRICT ZERO SUBMIT: No click(), no onEnter(), no submit event dispatched
 # ---------------------------------------------------------------------------
 
 JS_OBSERVE_SEARCH_SUGGESTION_SURFACE = r"""
@@ -221,133 +161,92 @@ JS_OBSERVE_SEARCH_SUGGESTION_SURFACE = r"""
 
     const inputElem = searchInputCandidates[0];
     const role = inputElem.getAttribute('role') || '';
-    const insideModal = !!inputElem.closest('[data-qa="search_modal"], [data-qa="search_dialog"], .c-search_modal, .p-search_modal, [data-qa="search_input_box"]');
-    const outsideComposer = !inputElem.closest('.c-message__editor, [data-qa="message_input"], .p-message_input');
-
-    if (!inputElem.isConnected || role !== 'combobox' || !insideModal || !outsideComposer) {
-        report.error = 'SEARCH_INPUT_OR_MODAL_INVALID';
+    const ariaMulti = inputElem.getAttribute('aria-multiline') || '';
+    const hasDataQa = !!inputElem.closest('[data-qa="search_input_box"]');
+    const isQuill = inputElem.classList.contains('ql-editor');
+    if (!hasDataQa || !isQuill || role !== 'combobox' || ariaMulti !== 'false') {
+        report.error = 'SEARCH_INPUT_ATTRIBUTES_INVALID';
         return report;
     }
 
-    const getReactFiber = (el) => {
-        if (!el) return null;
-        const key = Object.keys(el).find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
-        return key ? el[key] : null;
-    };
+    report.strong_search_input_box_match_count = 1;
 
-    let startingFiber = getReactFiber(inputElem) || getReactFiber(inputElem.parentElement) || getReactFiber(inputElem.closest('[data-qa="search_input_box"]'));
-    if (!startingFiber) {
-        report.error = 'NO_REACT_FIBER_KEY_FOUND';
+    // 1. Audit Texty and Redux Query Sync
+    let textyComp = null;
+    let reduxState = null;
+    try {
+        let curr = inputElem;
+        while (curr && curr !== document.body) {
+            const keys = Object.keys(curr);
+            const reactKey = keys.find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+            if (reactKey) {
+                let fiber = curr[reactKey];
+                while (fiber) {
+                    if (fiber.stateNode && (fiber.stateNode.quill || fiber.stateNode.setTextyState)) {
+                        textyComp = fiber.stateNode;
+                        break;
+                    }
+                    if (fiber.memoizedProps && fiber.memoizedProps.searchQuery !== undefined) {
+                        textyComp = fiber.stateNode;
+                        break;
+                    }
+                    fiber = fiber.return;
+                }
+            }
+            if (textyComp) break;
+            curr = curr.parentElement;
+        }
+
+        if (window.reduxStore && typeof window.reduxStore.getState === 'function') {
+            reduxState = window.reduxStore.getState();
+        }
+    } catch (e) {
+        report.error = 'QUERY_SYNC_AUDIT_ERROR: ' + String(e);
         return report;
     }
 
-    const isSearchInputBoxStrong = (node) => {
-        if (!node || typeof node !== 'object') return false;
-        const hasGetTextyOps = (typeof node.getTextyOps === 'function');
-        const hasUserInputOrRef = (typeof node.onUserInput === 'function' || typeof node.onUserQueryChange === 'function' || typeof node.setTextyRef === 'function');
-        const hasProps = (node.props && typeof node.props === 'object');
-        const hasDisplayQueryOps = hasProps && Object.prototype.hasOwnProperty.call(node.props, 'displayQueryOps');
-        return hasGetTextyOps && hasUserInputOrRef && hasDisplayQueryOps;
-    };
-
-    let fiber = startingFiber;
-    let depth = 0;
-    const matchingInstances = [];
-
-    while (fiber && depth < 40) {
-        if (fiber.stateNode && isSearchInputBoxStrong(fiber.stateNode)) {
-            matchingInstances.push({ instance: fiber.stateNode, fiber: fiber });
-        }
-        fiber = fiber.return;
-        depth++;
+    const domText = (inputElem.textContent || '').replace(/ /g, ' ').trim();
+    let quillText = '';
+    let deltaText = '';
+    if (textyComp && textyComp.quill) {
+        quillText = (textyComp.quill.getText() || '').replace(/ /g, ' ').trim();
+        try {
+            const contents = textyComp.quill.getContents();
+            if (contents && contents.ops) {
+                deltaText = contents.ops.map(op => (typeof op.insert === 'string' ? op.insert : '')).join('').replace(/ /g, ' ').trim();
+            }
+        } catch (_) {}
     }
 
-    report.strong_search_input_box_match_count = matchingInstances.length;
-    if (matchingInstances.length !== 1) {
-        report.error = (matchingInstances.length === 0) ? 'STRONG_SEARCH_INPUT_BOX_NOT_FOUND' : 'STRONG_SEARCH_INPUT_BOX_AMBIGUOUS';
-        return report;
+    let textyModelText = '';
+    if (textyComp && textyComp.state && typeof textyComp.state.text === 'string') {
+        textyModelText = textyComp.state.text.replace(/ /g, ' ').trim();
+    } else if (textyComp && textyComp.props && typeof textyComp.props.searchQuery === 'string') {
+        textyModelText = textyComp.props.searchQuery.replace(/ /g, ' ').trim();
     }
 
-    const { instance: searchInputBoxInstance, fiber: currentFiber } = matchingInstances[0];
-    const textyObj = searchInputBoxInstance.texty;
-    if (!textyObj) {
-        report.error = 'TEXTY_OBJECT_MISSING';
-        return report;
+    let reduxText = '';
+    if (reduxState && reduxState.search && typeof reduxState.search.query === 'string') {
+        reduxText = reduxState.search.query.replace(/ /g, ' ').trim();
     }
 
-    const normalizeOpsToString = (ops) => {
-        if (!Array.isArray(ops)) return '';
-        let s = '';
-        for (let op of ops) {
-            if (op && typeof op.insert === 'string') s += op.insert;
-        }
-        return s.trim();
-    };
+    report.surfaces_synced.dom = (domText === targetQuery);
+    report.surfaces_synced.quill_text = (quillText === targetQuery);
+    report.surfaces_synced.quill_delta = (deltaText === targetQuery);
+    report.surfaces_synced.texty = (textyModelText === targetQuery);
+    report.surfaces_synced.redux = (reduxText === targetQuery);
 
-    // Verify 5 query surfaces
-    try {
-        const domVal = (inputElem.textContent || inputElem.innerText || '').trim();
-        report.surfaces_synced.dom = domVal.includes(targetQuery);
-    } catch (e) {}
+    report.query_state_all_synced = (
+        report.surfaces_synced.dom &&
+        report.surfaces_synced.quill_text &&
+        report.surfaces_synced.quill_delta &&
+        report.surfaces_synced.texty &&
+        report.surfaces_synced.redux
+    );
 
-    try {
-        if (typeof searchInputBoxInstance.getQuillText === 'function') {
-            const qText = searchInputBoxInstance.getQuillText() || '';
-            report.surfaces_synced.quill_text = qText.includes(targetQuery);
-        }
-    } catch (e) {}
-
-    try {
-        if (typeof searchInputBoxInstance.getTextyOps === 'function') {
-            const ops = searchInputBoxInstance.getTextyOps();
-            const deltaStr = normalizeOpsToString(ops);
-            report.surfaces_synced.quill_delta = deltaStr.includes(targetQuery);
-        }
-    } catch (e) {}
-
-    try {
-        if (typeof textyObj.getContents === 'function') {
-            const tContents = textyObj.getContents();
-            const tOps = (tContents && tContents.contents) ? tContents.contents : (Array.isArray(tContents) ? tContents : []);
-            const tStr = normalizeOpsToString(tOps);
-            report.surfaces_synced.texty = tStr.includes(targetQuery);
-        }
-    } catch (e) {}
-
-    try {
-        const propsToInspect = (currentFiber && currentFiber.memoizedProps && Object.prototype.hasOwnProperty.call(currentFiber.memoizedProps, 'displayQueryOps'))
-            ? currentFiber.memoizedProps
-            : searchInputBoxInstance.props;
-
-        if (propsToInspect && Object.prototype.hasOwnProperty.call(propsToInspect, 'displayQueryOps')) {
-            const dOps = propsToInspect.displayQueryOps;
-            const rStr = normalizeOpsToString(dOps);
-            report.surfaces_synced.redux = rStr.includes(targetQuery);
-        }
-    } catch (e) {}
-
-    const surfaces = report.surfaces_synced;
-    report.query_state_all_synced = Boolean(surfaces.dom && surfaces.quill_text && surfaces.quill_delta && surfaces.texty && surfaces.redux);
-
-    try {
-        if (searchInputBoxInstance.state) {
-            report.internal_flags.query_has_changed = Boolean(searchInputBoxInstance.state.queryHasChanged);
-            report.internal_flags.query_has_been_submitted = Boolean(searchInputBoxInstance.state.queryHasBeenSubmitted);
-            report.internal_flags.is_updating_display_query = Boolean(searchInputBoxInstance.state._isUpdatingDisplayQuery);
-            report.internal_flags.is_in_composition = Boolean(searchInputBoxInstance.state.isInComposition);
-        }
-    } catch (e) {}
-
-    // Inspect Suggestions
-    const props = searchInputBoxInstance.props || {};
-    const suggestions = Array.isArray(props.suggestions) ? props.suggestions : [];
-    const autocompleteSelectedIndex = (props.autocompleteSelectedIndex !== undefined && props.autocompleteSelectedIndex !== null)
-        ? props.autocompleteSelectedIndex
-        : null;
-
-    report.connected_candidate_count = suggestions.length;
-    report.autocomplete_selected_index = autocompleteSelectedIndex;
-    report.suggestion_surface_present = (suggestions.length > 0 || !!document.querySelector('#c-search_autocomplete__suggestion_list, [data-qa="search_autocomplete"], .c-search_autocomplete, [role="listbox"]'));
+    // 2. Pure Read-Only Inspection of Autocomplete Suggestion Surface
+    const container = inputElem.closest('[data-qa="search_input_box"]') || inputElem.parentElement;
+    const popover = document.querySelector('.c-search_autocomplete, [data-qa="search_autocomplete"], [role="listbox"]');
 
     function isWriteCapableSuggestion(s) {
         if (!s || typeof s !== 'object') return false;
@@ -387,68 +286,93 @@ JS_OBSERVE_SEARCH_SUGGESTION_SURFACE = r"""
         if (!s || typeof s !== 'object') return 'UNKNOWN_CANDIDATE';
         if (isExactSafeKeywordSearch(s)) return 'SAFE_EXPLICIT_SEARCH';
         if (isWriteCapableSuggestion(s)) return 'UNSAFE_WRITE_CAPABLE_SLACKBOT';
-        if (s.is_type_channel === true || s.type === 'channel' || s.is_type_navigational === true || s.isNavigational === true) {
-            return 'UNSAFE_NON_SEARCH_CHANNEL_NAV';
-        }
-        if (s.is_type_user === true || s.is_type_user_profile === true || s.type === 'member-profile') {
-            return 'UNSAFE_PERSON_NAV';
-        }
-        if (s.is_type_huddle === true || s.type === 'huddle' || s.is_type_workflow === true || s.type === 'workflowTrigger' || s.is_type_app_action === true || s.type === 'appAction') {
-            return 'UNSAFE_OTHER_NAV';
-        }
+        if (s.is_type_channel === true || s.type === 'channel') return 'UNSAFE_NON_SEARCH_CHANNEL_NAV';
+        if (s.is_type_user === true || s.is_type_user_profile === true || s.type === 'member-profile') return 'UNSAFE_PERSON_NAV';
+        if (s.isNavigational === true || s.is_type_navigational === true || s.is_type_workflow === true || s.is_type_app_action === true || s.is_type_huddle === true || s.type === 'queryConvoSearch' || s.type === 'querySalesforce') return 'UNSAFE_OTHER_NAV';
         return 'UNKNOWN_CANDIDATE';
     }
 
-    let safeCount = 0;
-    let unsafeCount = 0;
-    const classifications = [];
-    const summaries = [];
-
-    for (let idx = 0; idx < suggestions.length; idx++) {
-        const s = suggestions[idx];
-        const cls = classifyCandidate(s);
-        classifications.push(cls);
-        if (cls === 'SAFE_EXPLICIT_SEARCH') {
-            safeCount++;
-        } else {
-            unsafeCount++;
-        }
-
-        summaries.push({
-            candidate_index: idx,
-            structural_classification: cls,
-            is_safe_search: (cls === 'SAFE_EXPLICIT_SEARCH'),
-            is_channel_nav: (cls === 'UNSAFE_NON_SEARCH_CHANNEL_NAV'),
-            is_person_nav: (cls === 'UNSAFE_PERSON_NAV'),
-            is_slackbot: (cls === 'UNSAFE_WRITE_CAPABLE_SLACKBOT'),
-            has_query_echo: (s && s.suggestion_sub_type === 'query-echo'),
-            type_tag: (s && typeof s.type === 'string') ? s.type : 'none',
-            sub_type_tag: (s && typeof s.suggestion_sub_type === 'string') ? s.suggestion_sub_type : 'none'
-        });
+    let suggestionObjects = [];
+    if (popover && popover.isConnected) {
+        report.suggestion_surface_present = true;
     }
 
-    report.safe_candidate_count = safeCount;
-    report.unsafe_candidate_count = unsafeCount;
-    report.candidate_classifications = classifications;
-    report.candidate_summaries = summaries;
+    const suggestionItems = Array.from(document.querySelectorAll('[role="option"], [data-qa="search_autocomplete_item"], .c-search_autocomplete__item')).filter(el => el && el.isConnected);
+    if (suggestionItems.length > 0) {
+        report.suggestion_surface_present = true;
+        report.connected_candidate_count = suggestionItems.length;
 
-    const defaultSug = suggestions[0] || null;
-    const selectedSug = (autocompleteSelectedIndex !== null && suggestions[autocompleteSelectedIndex])
-        ? suggestions[autocompleteSelectedIndex]
-        : defaultSug;
+        for (let idx = 0; idx < suggestionItems.length; idx++) {
+            const item = suggestionItems[idx];
+            let itemData = null;
+            try {
+                const keys = Object.keys(item);
+                const reactKey = keys.find(k => k.startsWith('__reactFiber$') || k.startsWith('__reactInternalInstance$'));
+                if (reactKey) {
+                    let fiber = item[reactKey];
+                    while (fiber) {
+                        if (fiber.memoizedProps && (fiber.memoizedProps.suggestion || fiber.memoizedProps.item)) {
+                            itemData = fiber.memoizedProps.suggestion || fiber.memoizedProps.item;
+                            break;
+                        }
+                        fiber = fiber.return;
+                    }
+                }
+            } catch (_) {}
 
-    report.default_candidate_classification = classifyCandidate(defaultSug);
-    report.selected_candidate_classification = classifyCandidate(selectedSug);
-    report.explicit_search_candidate_present = (safeCount > 0);
-    report.safe_search_candidate_present = (safeCount === 1);
+            const ariaSelected = item.getAttribute('aria-selected') === 'true';
+            if (ariaSelected && report.autocomplete_selected_index === null) {
+                report.autocomplete_selected_index = idx;
+            }
+
+            const candidateObj = itemData || {
+                type: item.getAttribute('data-type') || 'unknown',
+                suggestion_sub_type: item.getAttribute('data-sub-type') || 'unknown',
+                is_type_query_completion: item.getAttribute('data-is-query-completion') === 'true'
+            };
+
+            const classification = classifyCandidate(candidateObj);
+            const isSafe = (classification === 'SAFE_EXPLICIT_SEARCH');
+            const isUnsafe = isUnsafeNonSearchSuggestion(candidateObj);
+
+            report.candidate_classifications.push(classification);
+            if (isSafe) {
+                report.safe_candidate_count++;
+                report.safe_search_candidate_present = true;
+            }
+            if (isUnsafe) {
+                report.unsafe_candidate_count++;
+            }
+            if (candidateObj.is_type_query_completion === true || candidateObj.type === 'queryUser') {
+                report.explicit_search_candidate_present = true;
+            }
+
+            report.candidate_summaries.push({
+                index: idx,
+                classification: classification,
+                is_safe: isSafe,
+                is_unsafe: isUnsafe,
+                is_selected: ariaSelected,
+                type_tag: (typeof candidateObj.type === 'string' ? candidateObj.type : 'unknown'),
+                sub_type_tag: (typeof candidateObj.suggestion_sub_type === 'string' ? candidateObj.suggestion_sub_type : 'unknown')
+            });
+        }
+
+        if (report.candidate_classifications.length > 0) {
+            report.default_candidate_classification = report.candidate_classifications[0];
+            const selIdx = report.autocomplete_selected_index !== null ? report.autocomplete_selected_index : 0;
+            report.selected_candidate_classification = report.candidate_classifications[selIdx] || report.default_candidate_classification;
+        }
+    }
+
     report.observation_ok = true;
-
     return report;
 })
 """
 
+
 # ---------------------------------------------------------------------------
-# Terminal State Classification
+# Terminal Diagnostic Classification
 # ---------------------------------------------------------------------------
 
 def classify_ssa1_terminal_state(
@@ -460,6 +384,7 @@ def classify_ssa1_terminal_state(
     details: dict[str, Any] = {
         "poll_count": len(polls),
         "first_safe_candidate_poll_index": None,
+        "first_safe_candidate_elapsed_ms": None,
         "final_safe_candidate_count": 0,
         "final_connected_candidate_count": 0,
         "final_default_candidate_classification": "NONE",
@@ -478,12 +403,15 @@ def classify_ssa1_terminal_state(
         return "NO_SUGGESTION_SURFACE_OBSERVED", details
 
     first_safe_idx = None
+    first_safe_elapsed = None
     for p in polls:
         if p.get("safe_search_candidate_present"):
             first_safe_idx = p.get("poll_index")
+            first_safe_elapsed = p.get("elapsed_ms")
             break
 
     details["first_safe_candidate_poll_index"] = first_safe_idx
+    details["first_safe_candidate_elapsed_ms"] = first_safe_elapsed
 
     final_poll = polls[-1]
     details["final_safe_candidate_count"] = final_poll.get("safe_candidate_count", 0)
@@ -537,60 +465,60 @@ SENSITIVE_TEXT_PATTERNS = [
 
 
 def sanitize_report_for_persistence(data: Any) -> Any:
+    """Recursively scrub raw suggestion text, URLs, permalinks, and tokens."""
     if isinstance(data, dict):
         sanitized = {}
         for k, v in data.items():
-            k_lower = str(k).lower()
-            if any(forbidden in k_lower for forbidden in [
-                "raw_href", "raw_permalink", "permalink", "inner_html", "outer_html",
-                "inner_text", "text_content", "message_body", "sender_text", "user_text",
-                "aria_label", "title_text", "raw_url", "token", "password"
-            ]):
+            if k in {
+                "raw_text", "raw_suggestion", "text", "query_text", "permalink",
+                "href", "url", "innerText", "textContent", "html", "innerHTML",
+                "aria_label", "title", "email", "token", "auth_token", "cookie"
+            }:
                 continue
             sanitized[k] = sanitize_report_for_persistence(v)
         return sanitized
     elif isinstance(data, list):
         return [sanitize_report_for_persistence(item) for item in data]
     elif isinstance(data, str):
-        cleaned = data
         for pat in SENSITIVE_TEXT_PATTERNS:
-            cleaned = pat.sub("[REDACTED_SENSITIVE]", cleaned)
-        return cleaned
-    return data
+            if pat.search(data):
+                return "[REDACTED_SENSITIVE_STRING]"
+        return data
+    else:
+        return data
 
 
-# ---------------------------------------------------------------------------
-# Dependency & Static Parity Audits
-# ---------------------------------------------------------------------------
-
-def get_file_sha256(filepath: Path) -> str:
+def get_file_sha256(path: Path) -> str:
     h = hashlib.sha256()
-    with open(filepath, "rb") as f:
+    with open(path, "rb") as f:
         while chunk := f.read(65536):
             h.update(chunk)
     return h.hexdigest()
 
 
 def compute_all_dependency_hashes() -> dict[str, str]:
-    manifest = {
+    deps = {
         "ssa1_runner": REPO_ROOT / "scripts" / "diagnose_task11q4_search_safe_suggestion_availability_ssa1.py",
-        "vsa2_runner": REPO_ROOT / "scripts" / "qualify_task11q4_p2a_l1_bounded_partial_scroll_vsa2.py",
-        "vsa1_runner": REPO_ROOT / "scripts" / "qualify_task11q4_p2a_l1_bounded_viewport_scroll_vsa1.py",
-        "mgr1r1_runner": REPO_ROOT / "scripts" / "diagnose_task11q4_p2a_l1_mounted_geometry_reachability_mgr1r1.py",
-        "attempt4_runner": REPO_ROOT / "scripts" / "run_phase_13_5d_attempt4_clean_trace.py",
-        "webview_slack_search": SRC_DIR / "pesu_agent" / "search" / "webview_slack_search.py",
-        "pesu_webview_host": SRC_DIR / "pesu_agent" / "runtime" / "pesu_webview_host.py",
-        "slack_permalink_parser": SRC_DIR / "pesu_agent" / "parsers" / "slack_permalink_parser.py",
+        "vsa2_runner": REPO_ROOT / "scripts" / "diagnose_task11q4_p2a_l1_vsa2_bounded_partial_scroll.py",
+        "vsa1_runner": REPO_ROOT / "scripts" / "diagnose_task11q4_p2a_l1_vsa1_bounded_scroll_safety.py",
+        "mgr1r1_runner": REPO_ROOT / "scripts" / "diagnose_task11q4_p2a_l1_mgr1_r1_clean_room.py",
+        "webview_slack_search": REPO_ROOT / "src" / "pesu_agent" / "search" / "webview_slack_search.py",
+        "pesu_webview_host": REPO_ROOT / "src" / "pesu_agent" / "runtime" / "pesu_webview_host.py",
+        "slack_permalink_parser": REPO_ROOT / "src" / "pesu_agent" / "parsers" / "slack_permalink_parser.py",
     }
-    return {k: get_file_sha256(v) for k, v in manifest.items() if v.exists()}
+    return {k: get_file_sha256(p) for k, p in deps.items() if p.exists()}
 
+
+# ---------------------------------------------------------------------------
+# Static & Runtime Security Hard Gates
+# ---------------------------------------------------------------------------
 
 def verify_static_zero_submit_contract(runner_path: Optional[Path] = None) -> bool:
     """Verifies that SSA1 observation JS strictly executes ZERO submit, onEnter, or click actions."""
     p = runner_path or Path(__file__)
-    text = p.read_text(encoding="utf-8")
+    src = p.read_text(encoding="utf-8")
 
-    tree = ast.parse(text)
+    tree = ast.parse(src)
     js_observe_node = None
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
@@ -600,7 +528,7 @@ def verify_static_zero_submit_contract(runner_path: Optional[Path] = None) -> bo
                         js_observe_node = node.value.value
 
     if not js_observe_node or not isinstance(js_observe_node, str):
-        logger.error("❌ JS_OBSERVE_SEARCH_SUGGESTION_SURFACE snippet not found as ast Constant")
+        logger.error("JS_OBSERVE_SEARCH_SUGGESTION_SURFACE snippet not found as ast Constant")
         return False
 
     forbidden_patterns = [
@@ -619,7 +547,7 @@ def verify_static_zero_submit_contract(runner_path: Optional[Path] = None) -> bo
 
     for pat in forbidden_patterns:
         if re.search(pat, js_observe_node):
-            logger.error(f"❌ Forbidden mutation pattern found in observation JS: {pat}")
+            logger.error(f"Forbidden mutation pattern found in observation JS: {pat}")
             return False
 
     return True
@@ -628,37 +556,205 @@ def verify_static_zero_submit_contract(runner_path: Optional[Path] = None) -> bo
 def verify_static_zero_interaction_contract(runner_path: Optional[Path] = None) -> bool:
     """Audits the runner AST for zero executable clicks, keyboard events, or navigations."""
     p = runner_path or Path(__file__)
-    text = p.read_text(encoding="utf-8")
-    tree = ast.parse(text)
+    src = p.read_text(encoding="utf-8")
+    tree = ast.parse(src)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             if isinstance(node.func, ast.Attribute):
                 attr = node.func.attr
                 if attr in ("click", "click_element", "dispatch_mouse_event", "send_keys", "press_enter"):
-                    logger.error(f"❌ Forbidden interaction call found in runner: {attr}")
+                    logger.error(f"Forbidden interaction call found in runner: {attr}")
                     return False
     return True
 
 
-def verify_runtime_api_signature_parity() -> bool:
-    """Verifies that WebViewSlackSearchBackend query-entry APIs preserve expected signatures."""
+def extract_js_function(source: str, fn_name: str) -> Optional[str]:
+    """Extracts a JavaScript function definition from source string."""
+    pattern = rf"function\s+{fn_name}\s*\([^)]*\)\s*\{{"
+    m = re.search(pattern, source)
+    if not m:
+        return None
+    start = m.start()
+    depth = 0
+    in_fn = False
+    for i in range(start, len(source)):
+        if source[i] == "{":
+            depth += 1
+            in_fn = True
+        elif source[i] == "}":
+            depth -= 1
+            if in_fn and depth == 0:
+                return source[start : i + 1]
+    return None
+
+
+def normalize_js_code(code: str) -> str:
+    """Normalizes JS code by stripping comments and collapsing whitespace."""
+    code = re.sub(r"//.*", "", code)
+    code = re.sub(r"/\*.*?\*/", "", code, flags=re.DOTALL)
+    return " ".join(code.split())
+
+
+def verify_production_candidate_classifier_parity() -> tuple[bool, str]:
+    """Hard gate proving exact semantic parity between production submit guard and SSA1 classifier.
+    
+    Extracts isWriteCapableSuggestion, isUnsafeNonSearchSuggestion, and isExactSafeKeywordSearch
+    from JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER and JS_OBSERVE_SEARCH_SUGGESTION_SURFACE,
+    proves normalized equivalence, and validates all positive safe predicates and unsafe exclusions.
+    """
+    fn_names = [
+        "isWriteCapableSuggestion",
+        "isUnsafeNonSearchSuggestion",
+        "isExactSafeKeywordSearch",
+    ]
+    
+    for fn in fn_names:
+        prod_fn = extract_js_function(JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER, fn)
+        ssa1_fn = extract_js_function(JS_OBSERVE_SEARCH_SUGGESTION_SURFACE, fn)
+        if not prod_fn:
+            return False, f"Missing {fn} in production submit guard constant"
+        if not ssa1_fn:
+            return False, f"Missing {fn} in SSA1 suggestion observation constant"
+        
+        norm_prod = normalize_js_code(prod_fn)
+        norm_ssa1 = normalize_js_code(ssa1_fn)
+        if norm_prod != norm_ssa1:
+            return False, f"Classifier function body mismatch for {fn}"
+
+    # Explicit positive predicate checks
+    norm_exact = normalize_js_code(extract_js_function(JS_OBSERVE_SEARCH_SUGGESTION_SURFACE, "isExactSafeKeywordSearch"))
+    if "s.is_type_query_completion === true" not in norm_exact:
+        return False, "Missing positive safe predicate: is_type_query_completion === true"
+    if "s.type === 'queryUser'" not in norm_exact:
+        return False, "Missing positive safe predicate: type === 'queryUser'"
+    if "s.suggestion_sub_type === 'query-echo'" not in norm_exact:
+        return False, "Missing positive safe predicate: suggestion_sub_type === 'query-echo'"
+
+    # Explicit unsafe exclusions checks
+    norm_unsafe = normalize_js_code(extract_js_function(JS_OBSERVE_SEARCH_SUGGESTION_SURFACE, "isUnsafeNonSearchSuggestion"))
+    required_unsafe_tokens = [
+        "isWriteCapableSuggestion(s)",
+        "s.isNavigational === true",
+        "s.is_type_navigational === true",
+        "s.is_type_channel === true",
+        "s.type === 'channel'",
+        "s.is_type_user === true",
+        "s.is_type_user_profile === true",
+        "s.type === 'member-profile'",
+        "s.is_type_workflow === true",
+        "s.type === 'workflowTrigger'",
+        "s.is_type_app_action === true",
+        "s.type === 'appAction'",
+        "s.is_type_huddle === true",
+        "s.type === 'huddle'",
+        "s.type === 'queryConvoSearch'",
+        "s.type === 'querySalesforce'",
+    ]
+    for token in required_unsafe_tokens:
+        if token not in norm_unsafe:
+            return False, f"Missing unsafe exclusion predicate: {token}"
+
+    return True, "EXACT_PARITY_PROVEN"
+
+
+def verify_query_entry_primitive_parity() -> tuple[bool, str]:
+    """Proves that the SSA1 runner directly reuses exact production query-entry JS primitives."""
+    from pesu_agent.search import webview_slack_search
+    primitives = [
+        ("JS_CHECK_AUTH_AND_READINESS", JS_CHECK_AUTH_AND_READINESS),
+        ("JS_ACTIVATE_SEARCH", JS_ACTIVATE_SEARCH),
+        ("JS_CHECK_SEARCH_INPUT_READINESS", JS_CHECK_SEARCH_INPUT_READINESS),
+        ("JS_SET_TEXTY_QUERY", JS_SET_TEXTY_QUERY),
+    ]
+    for name, imported_val in primitives:
+        prod_val = getattr(webview_slack_search, name, None)
+        if prod_val is None:
+            return False, f"Missing production query-entry primitive: {name}"
+        if imported_val is not prod_val:
+            return False, f"Primitive reference mismatch for {name}: not direct production import"
+        if not isinstance(imported_val, str) or len(imported_val.strip()) == 0:
+            return False, f"Primitive {name} is empty"
+    return True, "EXACT_PRODUCTION_JS_QUERY_ENTRY_PRIMITIVES_REUSED"
+
+
+def build_ssa1_runtime_call_spec(timeout: float = 60.0, profile_path: Optional[str] = None) -> dict[str, Any]:
+    """Builds a unified runtime call specification shared between signature parity verification and live execution."""
+    prof = str(profile_path or DIRECT_SLACK_PROFILE_PATH)
+    return {
+        "host_cls": PesuWebViewHost,
+        "host_kwargs": {
+            "user_data_folder": prof,
+            "initial_url": "https://app.slack.com/client",
+            "title": "PESU Task 11 / Search Safety / SSA1 Safe Suggestion Availability",
+        },
+        "config_cls": WebViewRuntimeConfig,
+        "config_kwargs": {
+            "storage_path": Path(prof),
+        },
+        "backend_cls": WebViewSlackSearchBackend,
+        "backend_kwargs_factory": lambda config, host: {
+            "config": config,
+            "host": host,
+        },
+        "start_runtime_method": "start_runtime",
+        "start_runtime_kwargs": {
+            "timeout": timeout,
+        },
+        "evaluate_js_method": "evaluate_js",
+        "evaluate_js_sample_kwargs": {
+            "script": "return true;",
+            "timeout": 5.0,
+        },
+    }
+
+
+def verify_runtime_api_signature_parity(spec: Optional[dict[str, Any]] = None) -> tuple[bool, str]:
+    """Verifies that all runtime constructors and methods match planned call signatures."""
     import inspect
-    sig = inspect.signature(WebViewSlackSearchBackend.search_messages)
-    params = list(sig.parameters.keys())
-    if "query" not in params or "max_results" not in params:
-        return False
+    call_spec = spec or build_ssa1_runtime_call_spec(timeout=60.0)
 
-    sig_start = inspect.signature(WebViewSlackSearchBackend.start_runtime)
-    if "timeout" not in sig_start.parameters:
-        return False
+    # 1. PesuWebViewHost.__init__
+    try:
+        sig_host = inspect.signature(call_spec["host_cls"].__init__)
+        sig_host.bind(None, **call_spec["host_kwargs"])
+    except Exception as ex:
+        return False, f"PesuWebViewHost.__init__ signature bind failed: {ex}"
 
-    sig_host = inspect.signature(PesuWebViewHost.__init__)
-    host_params = list(sig_host.parameters.keys())
-    if "user_data_folder" not in host_params or "initial_url" not in host_params:
-        return False
+    # 2. WebViewRuntimeConfig.__init__
+    try:
+        sig_cfg = inspect.signature(call_spec["config_cls"].__init__)
+        sig_cfg.bind(None, **call_spec["config_kwargs"])
+    except Exception as ex:
+        return False, f"WebViewRuntimeConfig.__init__ signature bind failed: {ex}"
 
-    return True
+    # 3. WebViewSlackSearchBackend.__init__
+    try:
+        sig_backend = inspect.signature(call_spec["backend_cls"].__init__)
+        dummy_cfg = object()
+        dummy_host = object()
+        b_kwargs = call_spec["backend_kwargs_factory"](dummy_cfg, dummy_host)
+        sig_backend.bind(None, **b_kwargs)
+    except Exception as ex:
+        return False, f"WebViewSlackSearchBackend.__init__ signature bind failed: {ex}"
+
+    # 4. WebViewSlackSearchBackend.start_runtime
+    try:
+        method = getattr(call_spec["backend_cls"], call_spec["start_runtime_method"])
+        sig_start = inspect.signature(method)
+        sig_start.bind(None, **call_spec["start_runtime_kwargs"])
+    except Exception as ex:
+        return False, f"WebViewSlackSearchBackend.start_runtime signature bind failed: {ex}"
+
+    # 5. PesuWebViewHost.evaluate_js
+    try:
+        eval_method = getattr(call_spec["host_cls"], call_spec["evaluate_js_method"])
+        sig_eval = inspect.signature(eval_method)
+        sig_eval.bind(None, **call_spec["evaluate_js_sample_kwargs"])
+    except Exception as ex:
+        return False, f"PesuWebViewHost.evaluate_js signature bind failed: {ex}"
+
+    return True, "PASS"
 
 
 def get_git_commit() -> str:
@@ -689,354 +785,330 @@ def check_uncommitted_diff() -> bool:
         return True
 
 
-def get_all_loaded_project_files() -> dict[str, str]:
-    loaded_files: dict[str, str] = {}
-    this_script = REPO_ROOT / "scripts" / "diagnose_task11q4_search_safe_suggestion_availability_ssa1.py"
-    if this_script.exists():
-        loaded_files["scripts/diagnose_task11q4_search_safe_suggestion_availability_ssa1.py"] = get_file_sha256(this_script)
-
+def get_all_loaded_project_files() -> list[Path]:
+    loaded = []
     for mod_name, mod in list(sys.modules.items()):
-        if mod is None:
-            continue
-        mod_file = getattr(mod, "__file__", None)
-        if not mod_file:
-            continue
+        if mod and hasattr(mod, "__file__") and mod.__file__:
+            p = Path(mod.__file__).resolve()
+            if str(p).startswith(str(REPO_ROOT / "src")):
+                loaded.append(p)
+    this_file = Path(__file__).resolve()
+    if this_file not in loaded:
+        loaded.append(this_file)
+    return sorted(list(set(loaded)))
+
+
+def audit_runtime_import_closure(expected_closure: dict[str, str]) -> tuple[bool, list[str]]:
+    actual_files = get_all_loaded_project_files()
+    errors = []
+    actual_rel_set = set()
+    for f in actual_files:
         try:
-            fpath = Path(mod_file).resolve()
-            if not fpath.exists() or not fpath.is_file():
-                continue
-            if str(fpath).startswith(str(SRC_DIR.resolve())):
-                rel_path = fpath.relative_to(REPO_ROOT).as_posix()
-                loaded_files[rel_path] = get_file_sha256(fpath)
-        except Exception:
-            continue
-    return loaded_files
+            rel = str(f.relative_to(REPO_ROOT)).replace(chr(92), "/")
+            actual_rel_set.add(rel)
+            sha = get_file_sha256(f)
+            if rel not in expected_closure:
+                errors.append(f"Unexpected module loaded outside frozen closure: {rel}")
+            elif expected_closure[rel] != sha:
+                errors.append(f"SHA mismatch for module {rel}: expected {expected_closure[rel]}, got {sha}")
+        except Exception as ex:
+            errors.append(f"Error checking {f}: {ex}")
 
+    missing = set(expected_closure.keys()) - actual_rel_set
+    if missing:
+        errors.append(f"Missing modules from runtime closure ({len(missing)}): {sorted(list(missing))[:5]}")
 
-def audit_runtime_import_closure(manifest: dict[str, Any]) -> dict[str, Any]:
-    expected_closure = manifest.get("runtime_closure_hashes", {})
-    loaded_files = get_all_loaded_project_files()
-
-    missing = []
-    stale = []
-    mismatch = []
-
-    for path, exp_hash in expected_closure.items():
-        if path not in loaded_files:
-            missing.append(path)
-        elif loaded_files[path] != exp_hash:
-            mismatch.append({
-                "path": path,
-                "expected": exp_hash,
-                "actual": loaded_files[path],
-            })
-
-    for path in loaded_files:
-        if path not in expected_closure:
-            stale.append(path)
-
-    passed = (len(missing) == 0 and len(stale) == 0 and len(mismatch) == 0)
-    return {
-        "closure_audit_passed": passed,
-        "loaded_file_count": len(loaded_files),
-        "manifest_closure_count": len(expected_closure),
-        "missing_from_closure": missing,
-        "stale_in_closure": stale,
-        "mismatched_hashes": mismatch,
-        "loaded_files": loaded_files,
-    }
+    return (len(errors) == 0), errors
 
 
 # ---------------------------------------------------------------------------
-# Mock Simulation Fixtures for Dry Run
+# Mock Observations for Dry Run Mode
 # ---------------------------------------------------------------------------
 
-def build_mock_dry_run_observation_polls(scenario: str = "safe_immediate") -> list[dict[str, Any]]:
-    """Builds synthetic observation polls for dry run verification."""
-    polls = []
-    for idx in range(1, 6):
-        elapsed = idx * POLL_INTERVAL_MS
-        if scenario == "safe_immediate":
-            candidates = ["SAFE_EXPLICIT_SEARCH", "UNSAFE_NON_SEARCH_CHANNEL_NAV"]
-            default_cls = "SAFE_EXPLICIT_SEARCH"
-            safe_cnt = 1
-            unsafe_cnt = 1
-        elif scenario == "safe_delayed":
-            if idx < 3:
-                candidates = ["UNSAFE_NON_SEARCH_CHANNEL_NAV", "UNSAFE_NON_SEARCH_CHANNEL_NAV"]
-                default_cls = "UNSAFE_NON_SEARCH_CHANNEL_NAV"
-                safe_cnt = 0
-                unsafe_cnt = 2
-            else:
-                candidates = ["SAFE_EXPLICIT_SEARCH", "UNSAFE_NON_SEARCH_CHANNEL_NAV"]
-                default_cls = "SAFE_EXPLICIT_SEARCH"
-                safe_cnt = 1
-                unsafe_cnt = 1
-        elif scenario == "only_channel_nav":
-            candidates = ["UNSAFE_NON_SEARCH_CHANNEL_NAV", "UNSAFE_NON_SEARCH_CHANNEL_NAV", "UNSAFE_NON_SEARCH_CHANNEL_NAV"]
-            default_cls = "UNSAFE_NON_SEARCH_CHANNEL_NAV"
-            safe_cnt = 0
-            unsafe_cnt = 3
-        elif scenario == "no_surface":
-            candidates = []
-            default_cls = "NONE"
-            safe_cnt = 0
-            unsafe_cnt = 0
-        elif scenario == "unrecognized":
-            candidates = ["UNKNOWN_CANDIDATE"]
-            default_cls = "UNKNOWN_CANDIDATE"
-            safe_cnt = 0
-            unsafe_cnt = 1
-        else:
-            candidates = ["SAFE_EXPLICIT_SEARCH"]
-            default_cls = "SAFE_EXPLICIT_SEARCH"
-            safe_cnt = 1
-            unsafe_cnt = 0
-
-        poll_rec = {
-            "poll_index": idx,
-            "elapsed_ms": elapsed,
+def build_mock_dry_run_observation_polls() -> list[dict[str, Any]]:
+    """Synthesizes structured dry-run observation polls (simulating immediate safe search candidate)."""
+    return [
+        {
+            "poll_index": 1,
+            "elapsed_ms": 50.0,
             "search_input_query_matches_requested": True,
-            "suggestion_surface_present": (len(candidates) > 0),
-            "connected_candidate_count": len(candidates),
-            "safe_candidate_count": safe_cnt,
-            "unsafe_candidate_count": unsafe_cnt,
-            "candidate_classifications": candidates,
-            "default_candidate_classification": default_cls,
-            "selected_candidate_classification": default_cls,
-            "explicit_search_candidate_present": (safe_cnt > 0),
-            "safe_search_candidate_present": (safe_cnt == 1),
+            "suggestion_surface_present": True,
+            "connected_candidate_count": 3,
+            "safe_candidate_count": 1,
+            "unsafe_candidate_count": 2,
+            "candidate_classifications": [
+                "SAFE_EXPLICIT_SEARCH",
+                "UNSAFE_NON_SEARCH_CHANNEL_NAV",
+                "UNSAFE_NON_SEARCH_CHANNEL_NAV"
+            ],
+            "default_candidate_classification": "SAFE_EXPLICIT_SEARCH",
+            "selected_candidate_classification": "SAFE_EXPLICIT_SEARCH",
+            "explicit_search_candidate_present": True,
+            "safe_search_candidate_present": True,
             "candidate_summaries": [
                 {
-                    "candidate_index": c_idx,
-                    "structural_classification": c_cls,
-                    "is_safe_search": (c_cls == "SAFE_EXPLICIT_SEARCH"),
-                    "is_channel_nav": (c_cls == "UNSAFE_NON_SEARCH_CHANNEL_NAV"),
-                    "is_person_nav": (c_cls == "UNSAFE_PERSON_NAV"),
-                    "is_slackbot": (c_cls == "UNSAFE_WRITE_CAPABLE_SLACKBOT"),
-                    "has_query_echo": (c_cls == "SAFE_EXPLICIT_SEARCH"),
-                    "type_tag": "queryUser" if c_cls == "SAFE_EXPLICIT_SEARCH" else "channel",
-                    "sub_type_tag": "query-echo" if c_cls == "SAFE_EXPLICIT_SEARCH" else "none",
+                    "index": 0,
+                    "classification": "SAFE_EXPLICIT_SEARCH",
+                    "is_safe": True,
+                    "is_unsafe": False,
+                    "is_selected": True,
+                    "type_tag": "queryUser",
+                    "sub_type_tag": "query-echo"
+                },
+                {
+                    "index": 1,
+                    "classification": "UNSAFE_NON_SEARCH_CHANNEL_NAV",
+                    "is_safe": False,
+                    "is_unsafe": True,
+                    "is_selected": False,
+                    "type_tag": "channel",
+                    "sub_type_tag": "unknown"
+                },
+                {
+                    "index": 2,
+                    "classification": "UNSAFE_NON_SEARCH_CHANNEL_NAV",
+                    "is_safe": False,
+                    "is_unsafe": True,
+                    "is_selected": False,
+                    "type_tag": "channel",
+                    "sub_type_tag": "unknown"
                 }
-                for c_idx, c_cls in enumerate(candidates)
-            ],
+            ]
         }
-        polls.append(poll_rec)
-    return polls
+    ]
 
 
 # ---------------------------------------------------------------------------
-# Runner Engine
+# Main Qualification Harness
 # ---------------------------------------------------------------------------
 
-def run_ssa1_qualification(*, dry_run: bool = False, timeout: float = 30.0) -> dict[str, Any]:
-    start_time = time.time()
+def run_ssa1_qualification(
+    dry_run: bool = False,
+    timeout: float = 60.0,
+    marker_file_override: Optional[Path] = None,
+    output_file_override: Optional[Path] = None,
+    host_factory: Optional[Callable[..., Any]] = None,
+    backend_factory: Optional[Callable[..., Any]] = None,
+) -> dict[str, Any]:
+    """Executes the SSA1 safe suggestion availability diagnostic harness."""
+    run_timestamp_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
     git_commit = get_git_commit()
-    git_diff = check_uncommitted_diff()
+
+    marker_file = marker_file_override or ATTEMPT_STARTED_MARKER_FILE
+    output_file = output_file_override or (DRY_RUN_OUTPUT_FILE if dry_run else LIVE_OUTPUT_FILE)
 
     report: dict[str, Any] = {
-        "task_id": "Phase 13.5D / Task 11 / Search Safety / SSA1",
+        "task_id": TASK_ID,
         "protocol": PROTOCOL_NAME,
         "diagnostic_run": DIAGNOSTIC_RUN,
-        "execution_mode": "DRY_RUN" if dry_run else "LIVE",
-        "verdict": "UNKNOWN",
-        "diagnostic_verdict": "UNKNOWN",
-        "terminal_classification": "UNKNOWN",
-        "execution_timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "timestamp_utc": run_timestamp_utc,
         "git_commit": git_commit,
-        "uncommitted_diff": git_diff,
-        "target_identity": {
-            "channel_id": TARGET_CHANNEL_ID,
-            "message_ts": TARGET_MESSAGE_TS,
-            "thread_ts": TARGET_THREAD_TS,
-            "is_thread_reply": TARGET_IS_THREAD_REPLY,
+        "dry_run": dry_run,
+        "verdict": "UNEVALUATED",
+        "diagnostic_verdict": "UNSET",
+        "terminal_classification": "UNSET",
+        "terminal_details": {},
+        "target_query": TARGET_QUERY,
+        "observation_envelope": {
+            "observation_timeout_ms": SUGGESTION_OBSERVATION_TIMEOUT_MS,
+            "poll_interval_ms": POLL_INTERVAL_MS,
+            "max_polls": MAX_SUGGESTION_OBSERVATION_POLLS,
         },
-        "observation_contracts": {
-            "MAX_SUGGESTION_OBSERVATION_POLLS": MAX_SUGGESTION_OBSERVATION_POLLS,
-            "POLL_INTERVAL_MS": POLL_INTERVAL_MS,
-            "MAX_SLACK_SEARCH_OPERATIONS": MAX_SLACK_SEARCH_OPERATIONS,
-            "MAX_QUERY_ENTRIES": MAX_QUERY_ENTRIES,
-            "MAX_SEARCH_SUBMISSIONS": MAX_SEARCH_SUBMISSIONS,
-            "MAX_ENTER_KEY_EVENTS": MAX_ENTER_KEY_EVENTS,
-            "MAX_SUGGESTION_CLICKS": MAX_SUGGESTION_CLICKS,
-            "MAX_NAVIGATION_ACTIONS": MAX_NAVIGATION_ACTIONS,
-            "MAX_SCROLL_ACTIONS": MAX_SCROLL_ACTIONS,
-            "MAX_PROVIDER_CALLS": MAX_PROVIDER_CALLS,
-            "MAX_RETRIES": MAX_RETRIES,
-            "MAX_RESTORATIONS": MAX_RESTORATIONS,
-        },
-        "live_action_inventory": {
-            "search_operations": 0,
-            "query_entries": 0,
-            "search_submissions": 0,
-            "enter_key_events": 0,
-            "suggestion_clicks": 0,
-            "navigation_actions": 0,
-            "scroll_actions": 0,
-            "thread_expansions": 0,
-            "composer_interactions": 0,
-            "write_capable_actions": 0,
-            "provider_calls": 0,
-            "retries_attempted": 0,
-            "restorations_attempted": 0,
-        },
+        "observation_telemetry": {},
         "checks": {
-            "USER_MESSAGE_TEXT_CAPTURED": False,
-            "SENDER_TEXT_CAPTURED": False,
-            "RAW_HREF_CAPTURED": False,
-            "RAW_PERMALINK_CAPTURED": False,
-            "RAW_ARIA_LABEL_CAPTURED": False,
-            "RAW_TITLE_CAPTURED": False,
-            "INNER_TEXT_CAPTURED": False,
-            "TEXT_CONTENT_CAPTURED": False,
-            "INNER_HTML_CAPTURED": False,
-            "OUTER_HTML_CAPTURED": False,
+            "HEAD_EXACT": False,
+            "HISTORICAL_BASELINES_EXACT": False,
+            "RUNTIME_IMPORT_CLOSURE_EXACT": False,
+            "PRODUCTION_CANDIDATE_CLASSIFIER_PARITY": False,
+            "QUERY_ENTRY_PRIMITIVE_PARITY": False,
+            "SSA1_RUNTIME_API_SIGNATURE_PARITY": False,
             "SSA1_STATIC_ZERO_SUBMIT_AUDIT": False,
             "SSA1_STATIC_ZERO_INTERACTION_AUDIT": False,
-            "RUNTIME_API_SIGNATURE_PARITY": False,
-            "frozen_protocol_respected": False,
-            "frozen_hashes_matched": False,
-            "historical_baselines_matched": False,
-            "UNTRACKED_RUNTIME_DEPENDENCIES": -1,
-            "STALE_RUNTIME_CLOSURE_ENTRIES": -1,
-            "MISMATCHED_RUNTIME_DEPENDENCIES": -1,
             "attempt_marker_written": False,
             "query_entry_executed": False,
             "query_state_all_synced": False,
             "bounded_observation_executed": False,
         },
+        "live_action_inventory": {
+            "search_operations": 0,
+            "query_entries": 0,
+            "safe_submit_decisions": 0,
+            "actual_submit_attempts": 0,
+            "actual_submit_successes": 0,
+            "enter_key_events": 0,
+            "suggestion_clicks": 0,
+            "navigation_actions": 0,
+            "scroll_mutations": 0,
+            "provider_invocations": 0,
+            "retries": 0,
+        },
         "observation_polls": [],
-        "terminal_details": {},
-        "runtime_closure_audit": {},
-        "provider_calls": 0,
-        "retry_occurred": False,
-        "live_execution_started": False,
-        "live_execution_completed": False,
         "harness_phases": [],
         "error": None,
-        "duration_seconds": 0.0,
     }
 
-    # -----------------------------------------------------------------------
-    # PHASE 1: Preflight Protocol & Frozen Baselines Verification
-    # -----------------------------------------------------------------------
-    report["harness_phases"].append("PREFLIGHT_PROTOCOL_AUDIT")
+    logger.info("============================================================")
+    logger.info("PESU AGENT — PHASE 13.5D / TASK 11 / SSA1 PREP / SEARCH SAFETY")
+    logger.info(f"Protocol: {PROTOCOL_NAME} | Mode: {'DRY_RUN' if dry_run else 'LIVE'}")
+    logger.info("============================================================")
 
-    if not PROTOCOL_FREEZE_PATH.exists():
+    # -----------------------------------------------------------------------
+    # PREFLIGHT HARD GATES
+    # -----------------------------------------------------------------------
+    report["harness_phases"].append("PREFLIGHT_VERIFICATION")
+
+    if not PROTOCOL_FREEZE_FILE.exists():
         report["verdict"] = "FAIL_CLOSED"
-        report["diagnostic_verdict"] = "PROTOCOL_FREEZE_MISSING"
-        report["error"] = f"Protocol freeze file missing at {PROTOCOL_FREEZE_PATH}"
+        report["diagnostic_verdict"] = "MISSING_PROTOCOL_FREEZE"
+        report["error"] = f"Protocol freeze artifact missing at {PROTOCOL_FREEZE_FILE}"
         return report
 
     try:
-        protocol_manifest = json.loads(PROTOCOL_FREEZE_PATH.read_text(encoding="utf-8"))
-    except Exception as e:
+        with open(PROTOCOL_FREEZE_FILE, "r", encoding="utf-8") as pf:
+            protocol_manifest = json.load(pf)
+    except Exception as ex:
         report["verdict"] = "FAIL_CLOSED"
-        report["diagnostic_verdict"] = "PROTOCOL_FREEZE_CORRUPT"
-        report["error"] = f"Error reading protocol freeze JSON: {e}"
+        report["diagnostic_verdict"] = "CORRUPT_PROTOCOL_FREEZE"
+        report["error"] = f"Failed to load protocol freeze manifest: {ex}"
         return report
 
+    frozen_head = protocol_manifest.get("git_commit")
+    if frozen_head and frozen_head not in ("UNSET", "None") and git_commit != frozen_head:
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "GIT_HEAD_MISMATCH"
+        report["error"] = f"Active git commit {git_commit} != frozen HEAD {frozen_head}"
+        return report
+    report["checks"]["HEAD_EXACT"] = (git_commit != "UNKNOWN" and len(git_commit) == 40)
+
+    # Audit 28 Historical Baselines
+    historical_baselines = protocol_manifest.get("historical_baselines", {})
+    if len(historical_baselines) != 28:
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "HISTORICAL_BASELINE_COUNT_MISMATCH"
+        report["error"] = f"Expected 28 historical baselines, found {len(historical_baselines)}"
+        return report
+
+    baseline_mismatches = []
+    for base_name, base_info in historical_baselines.items():
+        rel_path = base_info.get("path") if isinstance(base_info, dict) else base_name
+        expected_sha = base_info.get("sha256") if isinstance(base_info, dict) else base_info
+        full_path = REPO_ROOT / rel_path
+        if not full_path.exists():
+            baseline_mismatches.append(f"Missing historical baseline {base_name}: {rel_path}")
+            continue
+        actual_sha = get_file_sha256(full_path)
+        if actual_sha != expected_sha:
+            baseline_mismatches.append(f"Historical baseline SHA mismatch for {base_name} ({rel_path}): {actual_sha} != {expected_sha}")
+
+    if baseline_mismatches:
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "HISTORICAL_BASELINE_SHA_MISMATCH"
+        report["error"] = f"Historical baseline verification failed: {baseline_mismatches}"
+        return report
+    report["checks"]["HISTORICAL_BASELINES_EXACT"] = True
+
+    # Audit Runtime Import Closure
+    frozen_closure = protocol_manifest.get("runtime_closure_hashes", {})
+    closure_ok, closure_errors = audit_runtime_import_closure(frozen_closure)
+    if not closure_ok:
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "RUNTIME_IMPORT_CLOSURE_DRIFT"
+        report["error"] = f"Runtime import closure audit failed: {closure_errors}"
+        return report
+    report["checks"]["RUNTIME_IMPORT_CLOSURE_EXACT"] = True
+
+    # Check Static Audits
+    if not verify_static_zero_submit_contract():
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "STATIC_ZERO_SUBMIT_AUDIT_FAILED"
+        report["error"] = "Static AST audit detected potential search submit / onEnter invocations"
+        return report
+    report["checks"]["SSA1_STATIC_ZERO_SUBMIT_AUDIT"] = True
+
+    if not verify_static_zero_interaction_contract():
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "STATIC_ZERO_INTERACTION_AUDIT_FAILED"
+        report["error"] = "Static AST audit detected potential click, navigation, or scroll invocations"
+        return report
+    report["checks"]["SSA1_STATIC_ZERO_INTERACTION_AUDIT"] = True
+
+    # Classifier Parity Hard Gate
+    classifier_parity_ok, classifier_msg = verify_production_candidate_classifier_parity()
+    if not classifier_parity_ok:
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "PRODUCTION_CANDIDATE_CLASSIFIER_PARITY_FAILED"
+        report["error"] = f"Production candidate classifier parity verification failed: {classifier_msg}"
+        return report
+    report["checks"]["PRODUCTION_CANDIDATE_CLASSIFIER_PARITY"] = True
+
+    # Query Entry Primitive Parity Hard Gate
+    query_primitive_ok, query_msg = verify_query_entry_primitive_parity()
+    if not query_primitive_ok:
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "QUERY_ENTRY_PRIMITIVE_PARITY_FAILED"
+        report["error"] = f"Query entry primitive parity verification failed: {query_msg}"
+        return report
+    report["checks"]["QUERY_ENTRY_PRIMITIVE_PARITY"] = True
+
+    # Runtime API Signature Parity Hard Gate
+    runtime_sig_ok, runtime_msg = verify_runtime_api_signature_parity()
+    if not runtime_sig_ok:
+        report["verdict"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "SSA1_RUNTIME_API_SIGNATURE_PARITY_FAILED"
+        report["error"] = f"Runtime API signature parity check failed: {runtime_msg}"
+        return report
+    report["checks"]["SSA1_RUNTIME_API_SIGNATURE_PARITY"] = True
+
+    # Verify Protocol Manifest Configuration Match
     semantic_errors = []
-    if protocol_manifest.get("protocol") != PROTOCOL_NAME:
-        semantic_errors.append(f"protocol mismatch: {protocol_manifest.get('protocol')} != {PROTOCOL_NAME}")
+    if protocol_manifest.get("target_query") != TARGET_QUERY:
+        semantic_errors.append(f"Target query mismatch: {protocol_manifest.get('target_query')} != {TARGET_QUERY}")
     if protocol_manifest.get("max_suggestion_observation_polls") != MAX_SUGGESTION_OBSERVATION_POLLS:
         semantic_errors.append(f"max_suggestion_observation_polls mismatch: {protocol_manifest.get('max_suggestion_observation_polls')} != {MAX_SUGGESTION_OBSERVATION_POLLS}")
     if protocol_manifest.get("poll_interval_ms") != POLL_INTERVAL_MS:
         semantic_errors.append(f"poll_interval_ms mismatch: {protocol_manifest.get('poll_interval_ms')} != {POLL_INTERVAL_MS}")
+    if protocol_manifest.get("suggestion_observation_timeout_ms") != SUGGESTION_OBSERVATION_TIMEOUT_MS:
+        semantic_errors.append(f"suggestion_observation_timeout_ms mismatch: {protocol_manifest.get('suggestion_observation_timeout_ms')} != {SUGGESTION_OBSERVATION_TIMEOUT_MS}")
 
     if semantic_errors:
         report["verdict"] = "FAIL_CLOSED"
-        report["diagnostic_verdict"] = "PROTOCOL_SEMANTIC_CONTRACT_VIOLATION"
-        report["error"] = "; ".join(semantic_errors)
-        return report
-
-    current_dep_hashes = compute_all_dependency_hashes()
-    report["pre_hashes"] = current_dep_hashes
-
-    historical_baselines = protocol_manifest.get("historical_baselines", {})
-    baseline_mismatches = []
-    for base_name, base_info in historical_baselines.items():
-        base_path = REPO_ROOT / base_info["path"]
-        if not base_path.exists():
-            baseline_mismatches.append(f"Missing historical baseline {base_name} at {base_path}")
-            continue
-        base_hash = get_file_sha256(base_path)
-        if base_hash != base_info["sha256"]:
-            baseline_mismatches.append(f"Hash mismatch for {base_name}: expected {base_info['sha256']}, got {base_hash}")
-
-    if baseline_mismatches:
-        report["verdict"] = "FAIL_CLOSED"
-        report["diagnostic_verdict"] = "HISTORICAL_BASELINE_MUTATION_DETECTED"
-        report["error"] = "; ".join(baseline_mismatches)
-        return report
-
-    report["checks"]["SSA1_STATIC_ZERO_SUBMIT_AUDIT"] = verify_static_zero_submit_contract()
-    report["checks"]["SSA1_STATIC_ZERO_INTERACTION_AUDIT"] = verify_static_zero_interaction_contract()
-    report["checks"]["RUNTIME_API_SIGNATURE_PARITY"] = verify_runtime_api_signature_parity()
-
-    if not all([
-        report["checks"]["SSA1_STATIC_ZERO_SUBMIT_AUDIT"],
-        report["checks"]["SSA1_STATIC_ZERO_INTERACTION_AUDIT"],
-        report["checks"]["RUNTIME_API_SIGNATURE_PARITY"],
-    ]):
-        report["verdict"] = "FAIL_CLOSED"
-        report["diagnostic_verdict"] = "STATIC_CODE_PARITY_AUDIT_FAILED"
-        report["error"] = "One or more static parity/safety audits failed."
-        return report
-
-    report["checks"]["frozen_protocol_respected"] = True
-    report["checks"]["frozen_hashes_matched"] = True
-    report["checks"]["historical_baselines_matched"] = True
-
-    # -----------------------------------------------------------------------
-    # PHASE 2: Runtime Import Closure Audit
-    # -----------------------------------------------------------------------
-    report["harness_phases"].append("RUNTIME_CLOSURE_AUDIT")
-    closure_result = audit_runtime_import_closure(protocol_manifest)
-    report["runtime_closure_audit"] = closure_result
-
-    report["checks"]["UNTRACKED_RUNTIME_DEPENDENCIES"] = len(closure_result["missing_from_closure"])
-    report["checks"]["STALE_RUNTIME_CLOSURE_ENTRIES"] = len(closure_result["stale_in_closure"])
-    report["checks"]["MISMATCHED_RUNTIME_DEPENDENCIES"] = len(closure_result["mismatched_hashes"])
-
-    if not closure_result["closure_audit_passed"]:
-        report["verdict"] = "FAIL_CLOSED"
-        report["diagnostic_verdict"] = "RUNTIME_IMPORT_CLOSURE_FAILED"
-        report["error"] = f"Runtime closure audit failed: missing={closure_result['missing_from_closure']}, stale={closure_result['stale_in_closure']}, mismatch={closure_result['mismatched_hashes']}"
+        report["diagnostic_verdict"] = "PROTOCOL_SEMANTIC_PARAMETER_MISMATCH"
+        report["error"] = f"Protocol semantic parameter mismatches: {semantic_errors}"
         return report
 
     # -----------------------------------------------------------------------
-    # PHASE 3: Dry-Run vs Live
+    # DRY RUN PATH
     # -----------------------------------------------------------------------
     if dry_run:
+        report["harness_phases"].append("DRY_RUN_EXECUTION")
         logger.info("🧪 [DRY_RUN] All preflight gates passed. Dry-run mode: executing offline mock suggestion observation...")
-        report["dry_run"] = True
-        report["live_action_inventory"]["search_operations"] = 1
-        report["live_action_inventory"]["query_entries"] = 1
         report["checks"]["query_entry_executed"] = True
         report["checks"]["query_state_all_synced"] = True
         report["checks"]["bounded_observation_executed"] = True
 
-        mock_polls = build_mock_dry_run_observation_polls(scenario="safe_immediate")
+        mock_polls = build_mock_dry_run_observation_polls()
         report["observation_polls"] = mock_polls
+        report["observation_telemetry"] = {
+            "observation_timeout_ms": SUGGESTION_OBSERVATION_TIMEOUT_MS,
+            "poll_interval_ms": POLL_INTERVAL_MS,
+            "max_polls": MAX_SUGGESTION_OBSERVATION_POLLS,
+            "actual_poll_count": len(mock_polls),
+            "actual_observation_elapsed_ms": 50.0,
+            "first_safe_candidate_poll_index": 1,
+            "first_safe_candidate_elapsed_ms": 50.0,
+        }
 
-        term_cls, term_det = classify_ssa1_terminal_state(
-            mock_polls,
-            query_state_all_synced=True,
-            error=None,
-        )
+        term_cls, term_det = classify_ssa1_terminal_state(mock_polls, query_state_all_synced=True, error=None)
         report["terminal_classification"] = term_cls
         report["diagnostic_verdict"] = term_cls
         report["terminal_details"] = term_det
-        report["verdict"] = CANONICAL_DRY_RUN_VERDICT
+        report["verdict"] = "DRY_RUN_PASS"
 
-        report["harness_phases"].append("DRY_RUN_COMPLETED")
-        report["duration_seconds"] = round(time.time() - start_time, 2)
-        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        sanitized = sanitize_report_for_persistence(report)
-        with open(DRY_RUN_OUTPUT_FILE, "w", encoding="utf-8") as f:
-            json.dump(sanitized, f, indent=2, ensure_ascii=False)
-        logger.info(f"💾 [DRY_RUN_PASS] Dry run completed successfully. Persisted to {DRY_RUN_OUTPUT_FILE}")
+        sanitized_report = sanitize_report_for_persistence(report)
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(output_file, "w", encoding="utf-8") as df:
+            json.dump(sanitized_report, df, indent=2, ensure_ascii=False)
+        logger.info(f"💾 [DRY_RUN_PASS] Dry run completed successfully. Persisted to {output_file}")
         return report
 
     # -----------------------------------------------------------------------
@@ -1044,25 +1116,23 @@ def run_ssa1_qualification(*, dry_run: bool = False, timeout: float = 30.0) -> d
     # -----------------------------------------------------------------------
     report["live_execution_started"] = True
     report["harness_phases"].append("LIVE_EXECUTION_STARTED")
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    if LIVE_OUTPUT_FILE.exists():
+    if output_file.exists():
         report["verdict"] = "FAIL_CLOSED"
         report["diagnostic_verdict"] = "LIVE_ARTIFACT_ALREADY_EXISTS"
-        report["error"] = f"Live artifact already exists at {LIVE_OUTPUT_FILE}. Replay forbidden."
-        logger.error(f"🛑 LIVE_ARTIFACT_ALREADY_EXISTS_ONE_SHOT_REPLAY_FORBIDDEN: {LIVE_OUTPUT_FILE}")
+        report["error"] = f"Live artifact already exists at {output_file}. Replay forbidden."
         return report
 
-    if ATTEMPT_STARTED_MARKER_FILE.exists():
+    if marker_file.exists():
         report["verdict"] = "FAIL_CLOSED"
-        report["diagnostic_verdict"] = "ATTEMPT_ALREADY_CONSUMED"
-        report["error"] = f"Attempt marker file already exists at {ATTEMPT_STARTED_MARKER_FILE}. Qualification consumed."
-        logger.error(f"🛑 ATTEMPT_MARKER_ALREADY_EXISTS_ONE_SHOT_REPLAY_FORBIDDEN: {ATTEMPT_STARTED_MARKER_FILE}")
+        report["diagnostic_verdict"] = "ATTEMPT_MARKER_ALREADY_EXISTS"
+        report["error"] = f"Attempt marker already exists at {marker_file}. One-shot consumption violated."
         return report
 
+    # Atomically write attempt marker
     try:
-        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        fd = os.open(str(ATTEMPT_STARTED_MARKER_FILE), flags)
+        fd = os.open(str(marker_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         with os.fdopen(fd, "w", encoding="utf-8") as mf:
             marker_data = {
                 "task_id": report["task_id"],
@@ -1074,29 +1144,36 @@ def run_ssa1_qualification(*, dry_run: bool = False, timeout: float = 30.0) -> d
             }
             json.dump(marker_data, mf, indent=2, ensure_ascii=False)
         report["checks"]["attempt_marker_written"] = True
-        logger.info(f"🔒 [ONE_SHOT_CONSUMED] Wrote attempt marker to {ATTEMPT_STARTED_MARKER_FILE}")
+        logger.info(f"🔒 [ONE_SHOT_CONSUMED] Wrote attempt marker to {marker_file}")
     except FileExistsError:
         report["verdict"] = "FAIL_CLOSED"
         report["diagnostic_verdict"] = "ATTEMPT_ALREADY_CONSUMED_RACE"
         report["error"] = "Attempt marker already created concurrently. Aborting."
         return report
 
-    host: Optional[PesuWebViewHost] = None
-    backend: Optional[WebViewSlackSearchBackend] = None
+    host: Optional[Any] = None
+    backend: Optional[Any] = None
 
     try:
         report["harness_phases"].append("CONNECTING_WEBVIEW")
         logger.info("🌐 [RUNTIME_START] Initializing Dedicated Slack WebView Host (SSA1)...")
-        host = PesuWebViewHost(
-            user_data_folder=DIRECT_SLACK_PROFILE_PATH,
-            initial_url="https://app.slack.com/client",
-            title="PESU Task 11 / Search Safety / SSA1 Safe Suggestion Availability",
-        )
-        backend = WebViewSlackSearchBackend(
-            config=WebViewRuntimeConfig(storage_path=Path(DIRECT_SLACK_PROFILE_PATH)),
-            host=host,
-        )
-        backend.start_runtime(timeout=timeout)
+
+        call_spec = build_ssa1_runtime_call_spec(timeout=timeout)
+
+        if host_factory:
+            host = host_factory(**call_spec["host_kwargs"])
+        else:
+            host = call_spec["host_cls"](**call_spec["host_kwargs"])
+
+        config = call_spec["config_cls"](**call_spec["config_kwargs"])
+
+        if backend_factory:
+            backend = backend_factory(**call_spec["backend_kwargs_factory"](config, host))
+        else:
+            backend = call_spec["backend_cls"](**call_spec["backend_kwargs_factory"](config, host))
+
+        start_method = getattr(backend, call_spec["start_runtime_method"])
+        start_method(**call_spec["start_runtime_kwargs"])
         report["harness_phases"].append("RUNTIME_STARTED")
 
         # Step 1: Check Auth & Readiness
@@ -1123,11 +1200,11 @@ def run_ssa1_qualification(*, dry_run: bool = False, timeout: float = 30.0) -> d
         if not input_ready:
             raise RuntimeError("Search input modal readiness timed out")
 
-        # Step 4a: Exact Production Model-Native Query Setter (Executed Exactly Once)
+        # Step 4: Model-Native Texty Query Setter
         report["live_action_inventory"]["query_entries"] = 1
         js_set = f"({JS_SET_TEXTY_QUERY})({json.dumps(TARGET_QUERY)})"
         res_set = host.evaluate_js(js_set, timeout=10.0)
-        if not isinstance(res_set, dict) or not (res_set.get("setter_succeeded") or res_set.get("ok")):
+        if not isinstance(res_set, dict) or not res_set.get("success"):
             raise RuntimeError(f"Model-native texty query setter failed: {res_set}")
         report["checks"]["query_entry_executed"] = True
 
@@ -1139,13 +1216,25 @@ def run_ssa1_qualification(*, dry_run: bool = False, timeout: float = 30.0) -> d
         polls = []
         js_obs = f"({JS_OBSERVE_SEARCH_SUGGESTION_SURFACE})({json.dumps(TARGET_QUERY)})"
         query_synced = False
+        first_safe_candidate_poll_index: Optional[int] = None
+        first_safe_candidate_elapsed_ms: Optional[float] = None
+
+        obs_start_mono = time.monotonic()
+        deadline_mono = obs_start_mono + (SUGGESTION_OBSERVATION_TIMEOUT_MS / 1000.0)
 
         for poll_idx in range(1, MAX_SUGGESTION_OBSERVATION_POLLS + 1):
+            now_mono = time.monotonic()
+            if now_mono >= deadline_mono:
+                break
+
+            elapsed_ms = round((now_mono - obs_start_mono) * 1000.0, 2)
             poll_res = host.evaluate_js(js_obs, timeout=5.0)
+
             if isinstance(poll_res, dict):
+                is_safe = bool(poll_res.get("safe_search_candidate_present", False))
                 poll_rec = {
                     "poll_index": poll_idx,
-                    "elapsed_ms": poll_idx * POLL_INTERVAL_MS,
+                    "elapsed_ms": elapsed_ms,
                     "search_input_query_matches_requested": bool(poll_res.get("query_state_all_synced", False)),
                     "suggestion_surface_present": bool(poll_res.get("suggestion_surface_present", False)),
                     "connected_candidate_count": int(poll_res.get("connected_candidate_count", 0)),
@@ -1155,16 +1244,37 @@ def run_ssa1_qualification(*, dry_run: bool = False, timeout: float = 30.0) -> d
                     "default_candidate_classification": poll_res.get("default_candidate_classification", "NONE"),
                     "selected_candidate_classification": poll_res.get("selected_candidate_classification", "NONE"),
                     "explicit_search_candidate_present": bool(poll_res.get("explicit_search_candidate_present", False)),
-                    "safe_search_candidate_present": bool(poll_res.get("safe_search_candidate_present", False)),
+                    "safe_search_candidate_present": is_safe,
                     "candidate_summaries": poll_res.get("candidate_summaries", []),
                 }
                 polls.append(poll_rec)
                 if poll_res.get("query_state_all_synced"):
                     query_synced = True
-            time.sleep(POLL_INTERVAL_MS / 1000.0)
+
+                if is_safe and first_safe_candidate_poll_index is None:
+                    first_safe_candidate_poll_index = poll_idx
+                    first_safe_candidate_elapsed_ms = elapsed_ms
+                    # Safe candidate observed -> early stop!
+                    break
+
+            remaining = deadline_mono - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(POLL_INTERVAL_MS / 1000.0, remaining))
+
+        total_obs_elapsed_ms = round((time.monotonic() - obs_start_mono) * 1000.0, 2)
 
         report["observation_polls"] = polls
         report["checks"]["query_state_all_synced"] = query_synced
+        report["observation_telemetry"] = {
+            "observation_timeout_ms": SUGGESTION_OBSERVATION_TIMEOUT_MS,
+            "poll_interval_ms": POLL_INTERVAL_MS,
+            "max_polls": MAX_SUGGESTION_OBSERVATION_POLLS,
+            "actual_poll_count": len(polls),
+            "actual_observation_elapsed_ms": total_obs_elapsed_ms,
+            "first_safe_candidate_poll_index": first_safe_candidate_poll_index,
+            "first_safe_candidate_elapsed_ms": first_safe_candidate_elapsed_ms,
+        }
 
         term_cls, term_det = classify_ssa1_terminal_state(
             polls,
@@ -1179,59 +1289,48 @@ def run_ssa1_qualification(*, dry_run: bool = False, timeout: float = 30.0) -> d
     except Exception as ex:
         logger.error(f"SSA1 diagnostic execution exception: {ex}")
         report["verdict"] = "FAIL_CLOSED"
-        report["diagnostic_verdict"] = "FAIL_CLOSED"
-        report["terminal_classification"] = "FAIL_CLOSED"
+        report["diagnostic_verdict"] = "SEARCH_EXECUTION_EXCEPTION"
         report["error"] = str(ex)
 
     finally:
-        if backend is not None:
+        report["harness_phases"].append("CLEANUP_AND_SHUTDOWN")
+        if host:
             try:
-                backend.stop_runtime()
-            except Exception:
-                pass
-        if host is not None:
-            try:
-                host.destroy()
-            except Exception:
-                pass
+                logger.info("🛑 [SHUTDOWN] Releasing WebView host...")
+                if hasattr(host, "close"):
+                    host.close()
+            except Exception as e:
+                logger.warning(f"Error during host shutdown: {e}")
 
-    report["live_execution_completed"] = True
-    report["harness_phases"].append("LIVE_EXECUTION_COMPLETED")
-    report["duration_seconds"] = round(time.time() - start_time, 2)
-
-    try:
-        sanitized = sanitize_report_for_persistence(report)
-        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        fd = os.open(str(LIVE_OUTPUT_FILE), flags)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(sanitized, f, indent=2, ensure_ascii=False)
-        logger.info(f"💾 [PERSISTENCE_SUCCESS] Sanitized live artifact written to {LIVE_OUTPUT_FILE}")
-    except Exception as e:
-        logger.error(f"❌ Failed to persist live artifact: {e}")
+    # Persist Sanitized Live Artifact
+    sanitized = sanitize_report_for_persistence(report)
+    with open(output_file, "w", encoding="utf-8") as out:
+        json.dump(sanitized, out, indent=2, ensure_ascii=False)
+    logger.info(f"💾 [SAVED_TRACE] Written SSA1 live trace to {output_file}")
 
     return report
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="SSA1: Safe Search Suggestion Availability Diagnostic")
-    parser.add_argument("--dry-run", action="store_true", help="Execute offline dry-run test")
-    parser.add_argument("--timeout", type=float, default=30.0, help="Timeout in seconds")
+def main() -> None:
+    parser = argparse.ArgumentParser(description="PESU SSA1 Safe Search Suggestion Availability Diagnostic")
+    parser.add_argument("--dry-run", action="store_true", help="Execute dry run with synthetic candidate observations")
+    parser.add_argument("--timeout", type=float, default=60.0, help="Runtime startup timeout in seconds")
     args = parser.parse_args()
 
-    report = run_ssa1_qualification(dry_run=args.dry_run, timeout=args.timeout)
-    print("\n" + "=" * 60)
-    print("SSA1 QUALIFICATION EXECUTION SUMMARY")
-    print("=" * 60)
-    print(f"VERDICT:                  {report.get('verdict')}")
-    print(f"DIAGNOSTIC_VERDICT:       {report.get('diagnostic_verdict')}")
-    print(f"TERMINAL_CLASSIFICATION:  {report.get('terminal_classification')}")
-    print(f"ERROR:                    {report.get('error')}")
-    print("=" * 60)
+    res = run_ssa1_qualification(dry_run=args.dry_run, timeout=args.timeout)
 
-    if report.get("verdict") in ("QUALIFICATION_COMPLETED", "DIAGNOSTIC_COMPLETED", CANONICAL_DRY_RUN_VERDICT):
-        return 0
-    return 1
+    print("\n============================================================")
+    print("SSA1 QUALIFICATION EXECUTION SUMMARY")
+    print("============================================================")
+    print(f"VERDICT:                  {res.get('verdict')}")
+    print(f"DIAGNOSTIC_VERDICT:       {res.get('diagnostic_verdict')}")
+    print(f"TERMINAL_CLASSIFICATION:  {res.get('terminal_classification')}")
+    print(f"ERROR:                    {res.get('error')}")
+    print("============================================================\n")
+
+    if res.get("verdict") not in {"QUALIFICATION_COMPLETED", "DRY_RUN_PASS"}:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

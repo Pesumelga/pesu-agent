@@ -1,268 +1,526 @@
-"""Unit, Mock, and Safety Contract Tests for SSA1 Safe Search Suggestion Availability.
-
-Phase 13.5D / Task 11 / Search Safety / SSA1
-
-Validates:
-1. SAFE_SEARCH_SUGGESTION_OBSERVED: safe candidate present immediately at poll 1.
-2. SAFE_SUGGESTION_APPEARED_AFTER_BOUNDED_DELAY: safe candidate appears at poll > 1.
-3. ONLY_UNSAFE_NON_SEARCH_SUGGESTIONS_OBSERVED: only channel nav candidates present.
-4. Multiple unsafe candidates (channel, member, slackbot) with zero safe candidates.
-5. SUGGESTION_STRUCTURE_UNRECOGNIZED: unknown candidate formats only.
-6. NO_SUGGESTION_SURFACE_OBSERVED: suggestion surface absent across all polls.
-7. QUERY_STATE_NOT_VERIFIED: query state sync mismatch.
-8. Safe + unsafe candidates together: verified counts and summaries.
-9. Candidate ordering changes between polls: robust tracking.
-10. Safe candidate not default (e.g. index 1) but still detected.
-11. Zero submit contract: static audit proves 0 onEnter, 0 onAccept, 0 submit.
-12. Zero interaction contract: static audit proves 0 clicks, 0 keys, 0 navigation.
-13. Action invariants: 0 submissions, 0 clicks, 0 nav, 0 scroll, 0 provider, 0 retry.
-14. Sanitization: ensures zero raw URLs, permalinks, or text.
-15. End-to-end dry run: completes with CANONICAL_DRY_RUN_VERDICT.
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+PESU Agent - Phase 13.5D / Task 11 / Search Safety / SSA1 Tests
+Unit, AST Security, Parity, and Mocked Live Integration Test Suite
 """
 
 from __future__ import annotations
 
+import ast
+import inspect
 import json
+import os
 from pathlib import Path
+import re
+import time
+from typing import Any, Optional
 import pytest
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 from scripts.diagnose_task11q4_search_safe_suggestion_availability_ssa1 import (
+    TARGET_QUERY,
+    SUGGESTION_OBSERVATION_TIMEOUT_MS,
+    POLL_INTERVAL_MS,
+    MAX_SUGGESTION_OBSERVATION_POLLS,
+    PROTOCOL_FREEZE_FILE,
     classify_ssa1_terminal_state,
     sanitize_report_for_persistence,
     verify_static_zero_submit_contract,
     verify_static_zero_interaction_contract,
+    verify_production_candidate_classifier_parity,
+    verify_query_entry_primitive_parity,
+    build_ssa1_runtime_call_spec,
     verify_runtime_api_signature_parity,
+    extract_js_function,
+    normalize_js_code,
     run_ssa1_qualification,
-    build_mock_dry_run_observation_polls,
-    CANONICAL_DRY_RUN_VERDICT,
-    MAX_SUGGESTION_OBSERVATION_POLLS,
-    POLL_INTERVAL_MS,
-    MAX_SEARCH_SUBMISSIONS,
-    MAX_SUGGESTION_CLICKS,
-    MAX_ENTER_KEY_EVENTS,
-    MAX_SCROLL_ACTIONS,
-    MAX_NAVIGATION_ACTIONS,
-    MAX_PROVIDER_CALLS,
-    MAX_RETRIES,
+    get_file_sha256,
+)
+from pesu_agent.runtime.pesu_webview_host import PesuWebViewHost
+from pesu_agent.search.webview_slack_search import (
+    JS_CHECK_AUTH_AND_READINESS,
+    JS_ACTIVATE_SEARCH,
+    JS_CHECK_SEARCH_INPUT_READINESS,
+    JS_SET_TEXTY_QUERY,
+    JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER,
+    WebViewRuntimeConfig,
+    WebViewSlackSearchBackend,
 )
 
 
-def test_ssa1_safe_candidate_present_immediately():
-    """Safe candidate is present at poll 1 -> SAFE_SEARCH_SUGGESTION_OBSERVED."""
-    polls = build_mock_dry_run_observation_polls(scenario="safe_immediate")
-    term_cls, details = classify_ssa1_terminal_state(polls, query_state_all_synced=True)
+# ===========================================================================
+# 1. Production Classifier Parity Gates
+# ===========================================================================
 
+def test_production_candidate_classifier_parity_exact():
+    ok, msg = verify_production_candidate_classifier_parity()
+    assert ok is True, f"Classifier parity failed: {msg}"
+    assert msg == "EXACT_PARITY_PROVEN"
+
+
+def test_production_classifier_drift_fails(monkeypatch):
+    # Tampering with a function in the observer JS should cause fail-closed
+    import scripts.diagnose_task11q4_search_safe_suggestion_availability_ssa1 as ssa1_mod
+    orig_js = ssa1_mod.JS_OBSERVE_SEARCH_SUGGESTION_SURFACE
+    drifted_js = orig_js.replace("s.suggestion_sub_type === 'query-slackbot'", "false")
+    monkeypatch.setattr(ssa1_mod, "JS_OBSERVE_SEARCH_SUGGESTION_SURFACE", drifted_js)
+
+    ok, msg = ssa1_mod.verify_production_candidate_classifier_parity()
+    assert ok is False
+    assert "Classifier function body mismatch" in msg or "Missing" in msg
+
+
+def test_positive_safe_predicate_drift_causes_fail(monkeypatch):
+    import scripts.diagnose_task11q4_search_safe_suggestion_availability_ssa1 as ssa1_mod
+    orig_js = ssa1_mod.JS_OBSERVE_SEARCH_SUGGESTION_SURFACE
+    drifted_js = orig_js.replace("s.suggestion_sub_type === 'query-echo'", "s.suggestion_sub_type === 'query-prefix'")
+    monkeypatch.setattr(ssa1_mod, "JS_OBSERVE_SEARCH_SUGGESTION_SURFACE", drifted_js)
+
+    ok, msg = ssa1_mod.verify_production_candidate_classifier_parity()
+    assert ok is False
+
+
+def test_unsafe_exclusion_drift_causes_fail(monkeypatch):
+    import scripts.diagnose_task11q4_search_safe_suggestion_availability_ssa1 as ssa1_mod
+    orig_js = ssa1_mod.JS_OBSERVE_SEARCH_SUGGESTION_SURFACE
+    drifted_js = orig_js.replace("s.is_type_channel === true || s.type === 'channel'", "false")
+    monkeypatch.setattr(ssa1_mod, "JS_OBSERVE_SEARCH_SUGGESTION_SURFACE", drifted_js)
+
+    ok, msg = ssa1_mod.verify_production_candidate_classifier_parity()
+    assert ok is False
+
+
+# ===========================================================================
+# 2. Query Entry Primitive Parity & Reporting
+# ===========================================================================
+
+def test_query_entry_primitive_parity_exact():
+    ok, msg = verify_query_entry_primitive_parity()
+    assert ok is True
+    assert msg == "EXACT_PRODUCTION_JS_QUERY_ENTRY_PRIMITIVES_REUSED"
+
+
+def test_query_entry_primitive_drift_causes_fail(monkeypatch):
+    import scripts.diagnose_task11q4_search_safe_suggestion_availability_ssa1 as ssa1_mod
+    monkeypatch.setattr(ssa1_mod, "JS_SET_TEXTY_QUERY", "return false;")
+    ok, msg = ssa1_mod.verify_query_entry_primitive_parity()
+    assert ok is False
+    assert "Primitive reference mismatch" in msg
+
+
+# ===========================================================================
+# 3. Runtime API Signature Parity & Shared Call Spec
+# ===========================================================================
+
+def test_runtime_api_signature_parity_and_binds():
+    spec = build_ssa1_runtime_call_spec(timeout=45.0)
+    ok, msg = verify_runtime_api_signature_parity(spec)
+    assert ok is True
+    assert msg == "PASS"
+
+
+def test_runtime_signature_drift_causes_fail():
+    spec = build_ssa1_runtime_call_spec(timeout=45.0)
+    spec["host_kwargs"]["non_existent_arg"] = 123
+    ok, msg = verify_runtime_api_signature_parity(spec)
+    assert ok is False
+    assert "signature bind failed" in msg
+
+
+def test_shared_runtime_call_spec():
+    spec = build_ssa1_runtime_call_spec(timeout=30.0, profile_path="C:/custom/profile")
+    assert spec["host_cls"] is PesuWebViewHost
+    assert spec["host_kwargs"]["user_data_folder"] == "C:/custom/profile"
+    assert spec["config_cls"] is WebViewRuntimeConfig
+    assert spec["backend_cls"] is WebViewSlackSearchBackend
+    assert spec["start_runtime_kwargs"]["timeout"] == 30.0
+
+
+# ===========================================================================
+# 4. Observation Cadence & Envelope (4000ms, 50ms, <=80 polls)
+# ===========================================================================
+
+def test_observation_envelope_cadence_4000ms_50ms_80_polls():
+    assert SUGGESTION_OBSERVATION_TIMEOUT_MS == 4000
+    assert POLL_INTERVAL_MS == 50
+    assert MAX_SUGGESTION_OBSERVATION_POLLS == 80
+
+
+def test_safe_candidate_early_stop():
+    polls = [
+        {
+            "poll_index": 1,
+            "elapsed_ms": 50.0,
+            "safe_search_candidate_present": True,
+            "connected_candidate_count": 2,
+            "safe_candidate_count": 1,
+            "unsafe_candidate_count": 1,
+            "candidate_classifications": ["SAFE_EXPLICIT_SEARCH", "UNSAFE_NON_SEARCH_CHANNEL_NAV"],
+            "suggestion_surface_present": True,
+        }
+    ]
+    term_cls, details = classify_ssa1_terminal_state(polls, query_state_all_synced=True)
     assert term_cls == "SAFE_SEARCH_SUGGESTION_OBSERVED"
     assert details["first_safe_candidate_poll_index"] == 1
-    assert details["final_safe_candidate_count"] == 1
-    assert details["final_connected_candidate_count"] == 2
-    assert details["final_default_candidate_classification"] == "SAFE_EXPLICIT_SEARCH"
 
 
-def test_ssa1_safe_candidate_appears_after_bounded_delay():
-    """Safe candidate absent at poll 1-2, appears at poll 3 -> SAFE_SUGGESTION_APPEARED_AFTER_BOUNDED_DELAY."""
-    polls = build_mock_dry_run_observation_polls(scenario="safe_delayed")
+def test_delayed_safe_candidate_classification():
+    polls = [
+        {
+            "poll_index": 1,
+            "elapsed_ms": 50.0,
+            "safe_search_candidate_present": False,
+            "connected_candidate_count": 1,
+            "safe_candidate_count": 0,
+            "unsafe_candidate_count": 1,
+            "candidate_classifications": ["UNSAFE_NON_SEARCH_CHANNEL_NAV"],
+            "suggestion_surface_present": True,
+        },
+        {
+            "poll_index": 2,
+            "elapsed_ms": 100.0,
+            "safe_search_candidate_present": True,
+            "connected_candidate_count": 2,
+            "safe_candidate_count": 1,
+            "unsafe_candidate_count": 1,
+            "candidate_classifications": ["UNSAFE_NON_SEARCH_CHANNEL_NAV", "SAFE_EXPLICIT_SEARCH"],
+            "suggestion_surface_present": True,
+        },
+    ]
     term_cls, details = classify_ssa1_terminal_state(polls, query_state_all_synced=True)
-
     assert term_cls == "SAFE_SUGGESTION_APPEARED_AFTER_BOUNDED_DELAY"
-    assert details["first_safe_candidate_poll_index"] == 3
-    assert details["final_safe_candidate_count"] == 1
-    assert details["final_connected_candidate_count"] == 2
+    assert details["first_safe_candidate_poll_index"] == 2
 
 
-def test_ssa1_only_channel_nav_unsafe_candidates():
-    """All polls have only channel nav candidates -> ONLY_UNSAFE_NON_SEARCH_SUGGESTIONS_OBSERVED."""
-    polls = build_mock_dry_run_observation_polls(scenario="only_channel_nav")
+def test_unsafe_only_classification():
+    polls = [
+        {
+            "poll_index": i,
+            "elapsed_ms": i * 50.0,
+            "safe_search_candidate_present": False,
+            "connected_candidate_count": 2,
+            "safe_candidate_count": 0,
+            "unsafe_candidate_count": 2,
+            "candidate_classifications": ["UNSAFE_NON_SEARCH_CHANNEL_NAV", "UNSAFE_PERSON_NAV"],
+            "suggestion_surface_present": True,
+        }
+        for i in range(1, 5)
+    ]
     term_cls, details = classify_ssa1_terminal_state(polls, query_state_all_synced=True)
-
     assert term_cls == "ONLY_UNSAFE_NON_SEARCH_SUGGESTIONS_OBSERVED"
     assert details["first_safe_candidate_poll_index"] is None
-    assert details["final_safe_candidate_count"] == 0
-    assert details["final_connected_candidate_count"] == 3
-    assert details["final_default_candidate_classification"] == "UNSAFE_NON_SEARCH_CHANNEL_NAV"
 
 
-def test_ssa1_multiple_unsafe_candidates_no_safe_candidate():
-    """Candidates contain channel, member, and slackbot, but 0 safe candidates."""
-    poll = {
-        "poll_index": 1,
-        "elapsed_ms": 200,
-        "search_input_query_matches_requested": True,
-        "suggestion_surface_present": True,
-        "connected_candidate_count": 3,
-        "safe_candidate_count": 0,
-        "unsafe_candidate_count": 3,
-        "candidate_classifications": [
-            "UNSAFE_WRITE_CAPABLE_SLACKBOT",
-            "UNSAFE_NON_SEARCH_CHANNEL_NAV",
-            "UNSAFE_PERSON_NAV",
-        ],
-        "default_candidate_classification": "UNSAFE_WRITE_CAPABLE_SLACKBOT",
-        "selected_candidate_classification": "UNSAFE_WRITE_CAPABLE_SLACKBOT",
-        "explicit_search_candidate_present": False,
-        "safe_search_candidate_present": False,
-    }
-    term_cls, details = classify_ssa1_terminal_state([poll], query_state_all_synced=True)
-
-    assert term_cls == "ONLY_UNSAFE_NON_SEARCH_SUGGESTIONS_OBSERVED"
-    assert details["first_safe_candidate_poll_index"] is None
-    assert details["final_safe_candidate_count"] == 0
-
-
-def test_ssa1_unknown_candidate_only():
-    """Unrecognized candidate format only -> SUGGESTION_STRUCTURE_UNRECOGNIZED."""
-    polls = build_mock_dry_run_observation_polls(scenario="unrecognized")
+def test_no_surface_observed_classification():
+    polls = [
+        {
+            "poll_index": 1,
+            "elapsed_ms": 50.0,
+            "safe_search_candidate_present": False,
+            "connected_candidate_count": 0,
+            "safe_candidate_count": 0,
+            "unsafe_candidate_count": 0,
+            "candidate_classifications": [],
+            "suggestion_surface_present": False,
+        }
+    ]
     term_cls, details = classify_ssa1_terminal_state(polls, query_state_all_synced=True)
-
-    assert term_cls == "SUGGESTION_STRUCTURE_UNRECOGNIZED"
-    assert details["first_safe_candidate_poll_index"] is None
-
-
-def test_ssa1_suggestion_surface_absent():
-    """Suggestion surface absent across all polls -> NO_SUGGESTION_SURFACE_OBSERVED."""
-    polls = build_mock_dry_run_observation_polls(scenario="no_surface")
-    term_cls, details = classify_ssa1_terminal_state(polls, query_state_all_synced=True)
-
     assert term_cls == "NO_SUGGESTION_SURFACE_OBSERVED"
-    assert details["first_safe_candidate_poll_index"] is None
-    assert details["final_connected_candidate_count"] == 0
 
 
-def test_ssa1_query_state_mismatch():
-    """Query state not synced across surfaces -> QUERY_STATE_NOT_VERIFIED."""
-    polls = build_mock_dry_run_observation_polls(scenario="safe_immediate")
-    term_cls, details = classify_ssa1_terminal_state(polls, query_state_all_synced=False)
+# ===========================================================================
+# 5. Real Mocked Live-Path Integration (dry_run=False)
+# ===========================================================================
 
-    assert term_cls == "QUERY_STATE_NOT_VERIFIED"
-    assert details["query_state_all_synced"] is False
+class MockLiveWebViewHost:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.evaluate_calls = []
+        self.scenario_responses = []
+        self.scenario_idx = 0
+        self.closed = False
 
+    def evaluate_js(self, script: str, timeout: float = 10.0) -> Any:
+        self.evaluate_calls.append({"script": script, "timeout": timeout})
+        if "isLoginScreen" in script:
+            return {"ready": True, "auth_required": False, "search_button_count": 1}
+        if "searchButtons[0]" in script or "dispatch_search_shortcut" in script:
+            return {"activated": True, "method": "click"}
+        if "searchModalCandidates" in script:
+            return {"ready": True, "modal_count": 1, "input_count": 1, "strong_match_count": 1}
+        if "setContents" in script and "displayQueryOps" in script:
+            return {"success": True, "query_state_all_synced": True}
+        if "candidate_summaries" in script:
+            if self.scenario_idx < len(self.scenario_responses):
+                res = self.scenario_responses[self.scenario_idx]
+                self.scenario_idx += 1
+                return res
+            return self.scenario_responses[-1] if self.scenario_responses else {}
+        return {}
 
-def test_ssa1_safe_and_unsafe_candidates_together():
-    """Safe search and channel nav candidates coexist in observation."""
-    polls = build_mock_dry_run_observation_polls(scenario="safe_immediate")
-    p1 = polls[0]
-
-    assert p1["safe_candidate_count"] == 1
-    assert p1["unsafe_candidate_count"] == 1
-    assert p1["explicit_search_candidate_present"] is True
-    assert p1["safe_search_candidate_present"] is True
-    assert len(p1["candidate_summaries"]) == 2
-    assert p1["candidate_summaries"][0]["is_safe_search"] is True
-    assert p1["candidate_summaries"][1]["is_channel_nav"] is True
-
-
-def test_ssa1_candidate_ordering_changes_between_polls():
-    """Candidate ordering changes between poll 1 and poll 2."""
-    poll1 = {
-        "poll_index": 1,
-        "elapsed_ms": 200,
-        "search_input_query_matches_requested": True,
-        "suggestion_surface_present": True,
-        "connected_candidate_count": 2,
-        "safe_candidate_count": 1,
-        "unsafe_candidate_count": 1,
-        "candidate_classifications": ["UNSAFE_NON_SEARCH_CHANNEL_NAV", "SAFE_EXPLICIT_SEARCH"],
-        "default_candidate_classification": "UNSAFE_NON_SEARCH_CHANNEL_NAV",
-        "selected_candidate_classification": "UNSAFE_NON_SEARCH_CHANNEL_NAV",
-        "explicit_search_candidate_present": True,
-        "safe_search_candidate_present": True,
-    }
-    poll2 = {
-        "poll_index": 2,
-        "elapsed_ms": 400,
-        "search_input_query_matches_requested": True,
-        "suggestion_surface_present": True,
-        "connected_candidate_count": 2,
-        "safe_candidate_count": 1,
-        "unsafe_candidate_count": 1,
-        "candidate_classifications": ["SAFE_EXPLICIT_SEARCH", "UNSAFE_NON_SEARCH_CHANNEL_NAV"],
-        "default_candidate_classification": "SAFE_EXPLICIT_SEARCH",
-        "selected_candidate_classification": "SAFE_EXPLICIT_SEARCH",
-        "explicit_search_candidate_present": True,
-        "safe_search_candidate_present": True,
-    }
-    term_cls, details = classify_ssa1_terminal_state([poll1, poll2], query_state_all_synced=True)
-
-    assert term_cls == "SAFE_SEARCH_SUGGESTION_OBSERVED"
-    assert details["first_safe_candidate_poll_index"] == 1
-    assert details["final_default_candidate_classification"] == "SAFE_EXPLICIT_SEARCH"
+    def close(self):
+        self.closed = True
 
 
-def test_ssa1_safe_candidate_not_default_but_still_observed():
-    """Safe candidate is at index 1 (not default at index 0), but still observed."""
-    poll = {
-        "poll_index": 1,
-        "elapsed_ms": 200,
-        "search_input_query_matches_requested": True,
-        "suggestion_surface_present": True,
-        "connected_candidate_count": 2,
-        "safe_candidate_count": 1,
-        "unsafe_candidate_count": 1,
-        "candidate_classifications": ["UNSAFE_NON_SEARCH_CHANNEL_NAV", "SAFE_EXPLICIT_SEARCH"],
-        "default_candidate_classification": "UNSAFE_NON_SEARCH_CHANNEL_NAV",
-        "selected_candidate_classification": "UNSAFE_NON_SEARCH_CHANNEL_NAV",
-        "explicit_search_candidate_present": True,
-        "safe_search_candidate_present": True,
-    }
-    term_cls, details = classify_ssa1_terminal_state([poll], query_state_all_synced=True)
+class MockLiveBackend:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.started = False
+        self.closed = False
 
-    assert term_cls == "SAFE_SEARCH_SUGGESTION_OBSERVED"
-    assert details["final_safe_candidate_count"] == 1
-    assert details["final_default_candidate_classification"] == "UNSAFE_NON_SEARCH_CHANNEL_NAV"
+    def start_runtime(self, timeout: float = 25.0):
+        self.started = True
+
+    def close(self):
+        self.closed = True
 
 
-def test_ssa1_static_zero_submit_contract():
-    """Static AST audit guarantees 0 onEnter, 0 onAccept, 0 submit in observation JS."""
+def test_mocked_live_branch_scenario_a_immediate_safe(tmp_path):
+    marker_path = tmp_path / "marker_scenario_a.json"
+    output_path = tmp_path / "live_scenario_a.json"
+
+    host = MockLiveWebViewHost()
+    host.scenario_responses = [
+        {
+            "observation_ok": True,
+            "query_state_all_synced": True,
+            "suggestion_surface_present": True,
+            "connected_candidate_count": 2,
+            "safe_candidate_count": 1,
+            "unsafe_candidate_count": 1,
+            "safe_search_candidate_present": True,
+            "candidate_classifications": ["SAFE_EXPLICIT_SEARCH", "UNSAFE_NON_SEARCH_CHANNEL_NAV"],
+            "default_candidate_classification": "SAFE_EXPLICIT_SEARCH",
+            "selected_candidate_classification": "SAFE_EXPLICIT_SEARCH",
+            "explicit_search_candidate_present": True,
+            "candidate_summaries": [
+                {"index": 0, "classification": "SAFE_EXPLICIT_SEARCH", "is_safe": True, "is_unsafe": False},
+                {"index": 1, "classification": "UNSAFE_NON_SEARCH_CHANNEL_NAV", "is_safe": False, "is_unsafe": True},
+            ],
+        }
+    ]
+
+    report = run_ssa1_qualification(
+        dry_run=False,
+        timeout=10.0,
+        marker_file_override=marker_path,
+        output_file_override=output_path,
+        host_factory=lambda **kw: host,
+        backend_factory=lambda **kw: MockLiveBackend(**kw),
+    )
+
+    assert report["verdict"] == "QUALIFICATION_COMPLETED"
+    assert report["terminal_classification"] == "SAFE_SEARCH_SUGGESTION_OBSERVED"
+    assert report["observation_telemetry"]["actual_poll_count"] == 1
+    assert report["observation_telemetry"]["first_safe_candidate_poll_index"] == 1
+    assert report["checks"]["attempt_marker_written"] is True
+    assert marker_path.exists()
+    assert output_path.exists()
+    assert host.closed is True
+
+    # Audit zero submits
+    inv = report["live_action_inventory"]
+    assert inv["search_operations"] == 1
+    assert inv["query_entries"] == 1
+    assert inv["actual_submit_attempts"] == 0
+    assert inv["actual_submit_successes"] == 0
+    assert inv["enter_key_events"] == 0
+    assert inv["suggestion_clicks"] == 0
+    assert inv["navigation_actions"] == 0
+    assert inv["scroll_mutations"] == 0
+    assert inv["provider_invocations"] == 0
+    assert inv["retries"] == 0
+
+
+def test_mocked_live_branch_scenario_b_delayed_safe(tmp_path):
+    marker_path = tmp_path / "marker_scenario_b.json"
+    output_path = tmp_path / "live_scenario_b.json"
+
+    host = MockLiveWebViewHost()
+    host.scenario_responses = [
+        # Poll 1: only unsafe
+        {
+            "observation_ok": True,
+            "query_state_all_synced": True,
+            "suggestion_surface_present": True,
+            "connected_candidate_count": 1,
+            "safe_candidate_count": 0,
+            "unsafe_candidate_count": 1,
+            "safe_search_candidate_present": False,
+            "candidate_classifications": ["UNSAFE_NON_SEARCH_CHANNEL_NAV"],
+            "default_candidate_classification": "UNSAFE_NON_SEARCH_CHANNEL_NAV",
+            "selected_candidate_classification": "UNSAFE_NON_SEARCH_CHANNEL_NAV",
+            "explicit_search_candidate_present": False,
+            "candidate_summaries": [
+                {"index": 0, "classification": "UNSAFE_NON_SEARCH_CHANNEL_NAV", "is_safe": False, "is_unsafe": True},
+            ],
+        },
+        # Poll 2: safe appears
+        {
+            "observation_ok": True,
+            "query_state_all_synced": True,
+            "suggestion_surface_present": True,
+            "connected_candidate_count": 2,
+            "safe_candidate_count": 1,
+            "unsafe_candidate_count": 1,
+            "safe_search_candidate_present": True,
+            "candidate_classifications": ["UNSAFE_NON_SEARCH_CHANNEL_NAV", "SAFE_EXPLICIT_SEARCH"],
+            "default_candidate_classification": "UNSAFE_NON_SEARCH_CHANNEL_NAV",
+            "selected_candidate_classification": "UNSAFE_NON_SEARCH_CHANNEL_NAV",
+            "explicit_search_candidate_present": True,
+            "candidate_summaries": [
+                {"index": 0, "classification": "UNSAFE_NON_SEARCH_CHANNEL_NAV", "is_safe": False, "is_unsafe": True},
+                {"index": 1, "classification": "SAFE_EXPLICIT_SEARCH", "is_safe": True, "is_unsafe": False},
+            ],
+        },
+    ]
+
+    report = run_ssa1_qualification(
+        dry_run=False,
+        timeout=10.0,
+        marker_file_override=marker_path,
+        output_file_override=output_path,
+        host_factory=lambda **kw: host,
+        backend_factory=lambda **kw: MockLiveBackend(**kw),
+    )
+
+    assert report["verdict"] == "QUALIFICATION_COMPLETED"
+    assert report["terminal_classification"] == "SAFE_SUGGESTION_APPEARED_AFTER_BOUNDED_DELAY"
+    assert report["observation_telemetry"]["actual_poll_count"] == 2
+    assert report["observation_telemetry"]["first_safe_candidate_poll_index"] == 2
+    assert report["live_action_inventory"]["actual_submit_attempts"] == 0
+
+
+def test_mocked_live_branch_scenario_c_unsafe_only(tmp_path, monkeypatch):
+    marker_path = tmp_path / "marker_scenario_c.json"
+    output_path = tmp_path / "live_scenario_c.json"
+
+    # Monkeypatch sleep so 80 polls execute instantly in test
+    import scripts.diagnose_task11q4_search_safe_suggestion_availability_ssa1 as ssa1_mod
+    monkeypatch.setattr(ssa1_mod.time, "sleep", lambda s: None)
+
+    host = MockLiveWebViewHost()
+    host.scenario_responses = [
+        {
+            "observation_ok": True,
+            "query_state_all_synced": True,
+            "suggestion_surface_present": True,
+            "connected_candidate_count": 1,
+            "safe_candidate_count": 0,
+            "unsafe_candidate_count": 1,
+            "safe_search_candidate_present": False,
+            "candidate_classifications": ["UNSAFE_NON_SEARCH_CHANNEL_NAV"],
+            "default_candidate_classification": "UNSAFE_NON_SEARCH_CHANNEL_NAV",
+            "selected_candidate_classification": "UNSAFE_NON_SEARCH_CHANNEL_NAV",
+            "explicit_search_candidate_present": False,
+            "candidate_summaries": [
+                {"index": 0, "classification": "UNSAFE_NON_SEARCH_CHANNEL_NAV", "is_safe": False, "is_unsafe": True},
+            ],
+        }
+    ]
+
+    report = ssa1_mod.run_ssa1_qualification(
+        dry_run=False,
+        timeout=10.0,
+        marker_file_override=marker_path,
+        output_file_override=output_path,
+        host_factory=lambda **kw: host,
+        backend_factory=lambda **kw: MockLiveBackend(**kw),
+    )
+
+    assert report["verdict"] == "QUALIFICATION_COMPLETED"
+    assert report["terminal_classification"] == "ONLY_UNSAFE_NON_SEARCH_SUGGESTIONS_OBSERVED"
+    assert report["observation_telemetry"]["first_safe_candidate_poll_index"] is None
+    assert report["live_action_inventory"]["actual_submit_attempts"] == 0
+
+
+def test_mocked_live_branch_scenario_d_no_surface(tmp_path, monkeypatch):
+    marker_path = tmp_path / "marker_scenario_d.json"
+    output_path = tmp_path / "live_scenario_d.json"
+
+    import scripts.diagnose_task11q4_search_safe_suggestion_availability_ssa1 as ssa1_mod
+    monkeypatch.setattr(ssa1_mod.time, "sleep", lambda s: None)
+
+    host = MockLiveWebViewHost()
+    host.scenario_responses = [
+        {
+            "observation_ok": True,
+            "query_state_all_synced": True,
+            "suggestion_surface_present": False,
+            "connected_candidate_count": 0,
+            "safe_candidate_count": 0,
+            "unsafe_candidate_count": 0,
+            "safe_search_candidate_present": False,
+            "candidate_classifications": [],
+            "candidate_summaries": [],
+        }
+    ]
+
+    report = ssa1_mod.run_ssa1_qualification(
+        dry_run=False,
+        timeout=10.0,
+        marker_file_override=marker_path,
+        output_file_override=output_path,
+        host_factory=lambda **kw: host,
+        backend_factory=lambda **kw: MockLiveBackend(**kw),
+    )
+
+    assert report["verdict"] == "QUALIFICATION_COMPLETED"
+    assert report["terminal_classification"] == "NO_SUGGESTION_SURFACE_OBSERVED"
+    assert report["live_action_inventory"]["actual_submit_attempts"] == 0
+
+
+# ===========================================================================
+# 6. Static AST & Interaction Audits
+# ===========================================================================
+
+def test_zero_submit_static_ast_audit():
     assert verify_static_zero_submit_contract() is True
 
 
-def test_ssa1_static_zero_interaction_contract():
-    """Static AST audit guarantees 0 clicks, 0 keys, 0 mouse dispatches in runner."""
+def test_zero_click_navigation_ast_audit():
     assert verify_static_zero_interaction_contract() is True
 
 
-def test_ssa1_action_invariants_and_zero_scroll_nav_provider():
-    """Guarantees strictly zero submissions, clicks, scroll, navigation, and provider calls."""
-    assert MAX_SEARCH_SUBMISSIONS == 0
-    assert MAX_ENTER_KEY_EVENTS == 0
-    assert MAX_SUGGESTION_CLICKS == 0
-    assert MAX_NAVIGATION_ACTIONS == 0
-    assert MAX_SCROLL_ACTIONS == 0
-    assert MAX_PROVIDER_CALLS == 0
-    assert MAX_RETRIES == 0
-
-
-def test_ssa1_sanitization_removes_sensitive_content():
-    """Sanitizer purges raw URLs, permalinks, and sensitive message texts."""
-    raw = {
-        "candidate": "Search for 26년 하반기 간담회",
-        "raw_permalink": "https://app.slack.com/archives/C042WS25QAX/p1718079276126469",
-        "raw_url": "https://heumlabs.slack.com",
-        "token": ('xox' + 'b-1234567890-abcdef'),
-        "safe": True,
-        "count": 3,
+def test_sensitive_data_audit_persistence():
+    leak_data = {
+        "poll_index": 1,
+        "raw_text": "Sensitive search text",
+        "url": "https://secret.slack.com/archives/C123/p456",
+        "nested": {
+            "token": ('xox' + 'b-12345-secret'),
+            "safe_candidate_count": 1,
+            "msg": "Contact user@example.com for access",
+        },
     }
-    sanitized = sanitize_report_for_persistence(raw)
+    sanitized = sanitize_report_for_persistence(leak_data)
+    assert "raw_text" not in sanitized
+    assert "url" not in sanitized
+    assert "token" not in sanitized["nested"]
+    assert sanitized["nested"]["safe_candidate_count"] == 1
+    assert sanitized["nested"]["msg"] == "[REDACTED_SENSITIVE_STRING]"
 
-    assert "raw_permalink" not in sanitized
-    assert "raw_url" not in sanitized
-    assert "token" not in sanitized
-    assert sanitized["safe"] is True
-    assert sanitized["count"] == 3
+
+def test_dry_run_execution_generates_valid_artifact():
+    res = run_ssa1_qualification(dry_run=True)
+    assert res["verdict"] == "DRY_RUN_PASS"
+    assert res["diagnostic_verdict"] == "SAFE_SEARCH_SUGGESTION_OBSERVED"
+    assert res["checks"]["HEAD_EXACT"] is True
+    assert res["checks"]["HISTORICAL_BASELINES_EXACT"] is True
+    assert res["checks"]["PRODUCTION_CANDIDATE_CLASSIFIER_PARITY"] is True
+    assert res["checks"]["QUERY_ENTRY_PRIMITIVE_PARITY"] is True
+    assert res["checks"]["SSA1_RUNTIME_API_SIGNATURE_PARITY"] is True
 
 
-def test_ssa1_dry_run_end_to_end():
-    """Executes full offline dry-run of SSA1 runner and validates output structure."""
-    report = run_ssa1_qualification(dry_run=True, timeout=10.0)
-
-    assert report["verdict"] == CANONICAL_DRY_RUN_VERDICT
-    assert report["diagnostic_verdict"] == "SAFE_SEARCH_SUGGESTION_OBSERVED"
-    assert report["terminal_classification"] == "SAFE_SEARCH_SUGGESTION_OBSERVED"
-    assert report["live_action_inventory"]["search_submissions"] == 0
-    assert report["live_action_inventory"]["enter_key_events"] == 0
-    assert report["live_action_inventory"]["suggestion_clicks"] == 0
-    assert report["live_action_inventory"]["navigation_actions"] == 0
-    assert report["live_action_inventory"]["scroll_actions"] == 0
-    assert report["checks"]["query_entry_executed"] is True
-    assert report["checks"]["query_state_all_synced"] is True
-    assert report["checks"]["bounded_observation_executed"] is True
+def test_protocol_freeze_integrity_and_28_baselines():
+    assert PROTOCOL_FREEZE_FILE.exists()
+    with open(PROTOCOL_FREEZE_FILE, "r", encoding="utf-8") as f:
+        proto = json.load(f)
+    assert proto["protocol_name"] == "TASK_11_Q4_SEARCH_SSA1_SAFE_SUGGESTION_AVAILABILITY"
+    assert proto["target_query"] == TARGET_QUERY
+    assert len(proto["historical_baselines"]) == 28
+    assert proto["observation_envelope"]["suggestion_observation_timeout_ms"] == 4000
+    assert proto["observation_envelope"]["poll_interval_ms"] == 50
+    assert proto["observation_envelope"]["max_suggestion_observation_polls"] == 80

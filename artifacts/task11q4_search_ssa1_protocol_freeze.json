@@ -1,5 +1,5 @@
 {
-  "protocol": "task11q4_search_ssa1_safe_suggestion_availability",
+  "protocol": "TASK_11_Q4_SEARCH_SSA1_SAFE_SUGGESTION_AVAILABILITY",
   "diagnostic_run": "SSA1_SUGGESTION_RUN_1",
   "canonical_dry_run_verdict": "DRY_RUN_PASS",
   "target_query": "26년 하반기 간담회",
@@ -9,8 +9,8 @@
     "thread_ts": "1718058683.912369",
     "is_thread_reply": true
   },
-  "max_suggestion_observation_polls": 20,
-  "poll_interval_ms": 200,
+  "max_suggestion_observation_polls": 80,
+  "poll_interval_ms": 50,
   "action_contracts": {
     "max_slack_search_operations": 1,
     "max_query_entries": 1,
@@ -165,7 +165,7 @@
     }
   },
   "dependency_hashes": {
-    "ssa1_runner": "6893a4873e3e4d214e63fc4fd30fb575bd4fa7767e6c4ed8d8f96216ba7caf1b",
+    "ssa1_runner": "00f103665e0ef9140a425d6f62611e4992bdefa4a5b5f241cfa91685b10c82a1",
     "vsa2_runner": "089d417f2dd79bfaced813dfba90ced2625c823db85668c932c3a304d4c8d367",
     "vsa1_runner": "33b6d735f2f38dbfa11c3016d2b492db9d227297f46cbc132f677ee3d064dab9",
     "mgr1r1_runner": "15f43947dcfbd615fbf68f2cb81d8f6a6759b5c4e26dfc7daf20ccb1c0a6f249",
@@ -174,7 +174,7 @@
     "slack_permalink_parser": "f46137cd074e6f9f98e3831e87a2504d056c93596bde8ef564fb87cf3738c5ab"
   },
   "runtime_closure_hashes": {
-    "scripts/diagnose_task11q4_search_safe_suggestion_availability_ssa1.py": "6893a4873e3e4d214e63fc4fd30fb575bd4fa7767e6c4ed8d8f96216ba7caf1b",
+    "scripts/diagnose_task11q4_search_safe_suggestion_availability_ssa1.py": "00f103665e0ef9140a425d6f62611e4992bdefa4a5b5f241cfa91685b10c82a1",
     "src/pesu_agent/__init__.py": "d1ae8793964867c74ef4628e2776faef093c59f23c635e2b6ab9837e042cd4bd",
     "src/pesu_agent/lifecycle/slack_lifecycle.py": "f70b6c91e4186452f790a73e9f24debb4f2ccc2821231b59608f1dd2677bf249",
     "src/pesu_agent/lifecycle/__init__.py": "fc09d0190d0bf22f2177f0deee0350f9dd384468081bf6c2f0cfce98f96adfc5",
@@ -234,5 +234,29 @@
     "src/pesu_agent/search/real_slack_backend.py": "2e15af2544fa6ad047c855ae9065b8544c2f8e6b771ede17c81a0d7bbf24b74c",
     "src/pesu_agent/search/slack_backend_factory.py": "c0151d0b4e57b42f72fae543a4b8490e62aed62c28c3c980bc10c78bf9b6b3bf",
     "src/pesu_agent/search/__init__.py": "5f1e2bb33d4a778fe263351804dc2b7cab52aad35253aa197ac2f312b8453ae5"
-  }
+  },
+  "suggestion_observation_timeout_ms": 4000,
+  "observation_envelope": {
+    "suggestion_observation_timeout_ms": 4000,
+    "poll_interval_ms": 50,
+    "max_suggestion_observation_polls": 80,
+    "monotonic_deadline_enforced": true,
+    "early_stop_on_safe_candidate": true
+  },
+  "query_entry_primitive_parity": "EXACT_PRODUCTION_JS_QUERY_ENTRY_PRIMITIVES_REUSED",
+  "production_candidate_classifier_parity": true,
+  "runtime_api_signature_parity": "PASS",
+  "postmortem_root_cause_analysis": {
+    "vsa2_diagnostic_question_answered": false,
+    "vsa2_r1_justified": false,
+    "primary_failure_class": "PRE_SUBMIT_SAFE_SEARCH_SUGGESTION_UNAVAILABLE",
+    "primary_failure_reason": "NO_SAFE_SEARCH_SUGGESTION_FOUND",
+    "production_defect_proven": false,
+    "selector_or_parser_drift_proven": false,
+    "observed_ui_state_difference": true,
+    "pure_ui_state_drift_proven": false,
+    "timing_vs_persistent_safe_candidate_absence": "UNRESOLVED"
+  },
+  "frozen_timestamp_utc": "2026-09-29T05:46:54.489665+00:00",
+  "protocol_name": "TASK_11_Q4_SEARCH_SSA1_SAFE_SUGGESTION_AVAILABILITY"
 }
