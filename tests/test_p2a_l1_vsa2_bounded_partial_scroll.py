@@ -4,11 +4,13 @@ Covers:
 - Parity & static safety contracts (zero-click, zero-keyboard, zero-navigation, one-scroll only)
 - 26 historical baselines & protocol freeze governance
 - Canonical identity parsing & UNPROVEN query membership isolation
-- Partial scroll calculation, 3-viewport frozen bound preservation, maxScrollTop clamping
+- Partial scroll calculation: 1-viewport sentinel step (PARTIAL_SCROLL_STEP_MULTIPLIER = 1.0)
+- 3-viewport absolute outer ceiling preservation (MAX_SCROLL_DELTA_MULTIPLIER = 3.0)
 - Boundary conditions: full_reveal <= 3x viewports -> FULL_REVEAL_NOW_WITHIN_VSA1_BOUND
+- maxScrollTop clamping producing <1 viewport movement
 - Post-scroll reacquisition (tolerating virtualization and mounted position changes)
 - Failure modes: target lost, target duplicated, anchor invalid, tolerance failure, no progress
-- Progress proof: distance_below_viewport_after < distance_below_viewport_before
+- Progress proof: distance_below_viewport_after < distance_below_viewport_before and geometric_progress_px > 0
 - Offscreen-after-scroll validity & unexpected visibility handling
 - Residual distance telemetry computation (read-only, no residual scroll)
 - Sensitive data sanitization audit
@@ -126,15 +128,20 @@ class TestVsa2CanonicalIdentityAndMembership:
 
 
 class TestVsa2PartialScrollCalculationAndSafetyBound:
-    """Verifies partial scroll math, 3-viewport frozen bound preservation, and clamping."""
+    """Verifies partial scroll math, 1-viewport sentinel step, 3-viewport ceiling, and clamping."""
 
-    def test_vsa1_historical_geometry_partial_scroll(self):
+    def test_multiplier_constants(self):
+        assert vsa2.PARTIAL_SCROLL_STEP_MULTIPLIER == 1.0
+        assert vsa2.MAX_SCROLL_DELTA_MULTIPLIER == 3.0
+
+    def test_vsa1_historical_geometry_one_viewport_sentinel(self):
         """Simulates the exact VSA1 live conditions:
-        visible_bottom = 857 - 32 = 825
-        required_delta = 3349.859375 - 825 = 2524.859375
-        max_scroll_delta = 3 * 817 = 2451.0
+        clientHeight = 817.0
+        absolute 3x ceiling = 3 * 817 = 2451.0
+        required full reveal delta = 3349.859375 - 825 = 2524.859375
         -> full_reveal_fits_within_bound is False
-        -> partial_scroll_delta = 2451.0
+        -> qualified_step_limit = 1.0 * 817.0 = 817.0
+        -> partial_scroll_delta = 817.0 (NOT 2451.0!)
         """
         calc = vsa2.compute_bounded_partial_scroll_target(
             current_scroll_top=0.0,
@@ -145,17 +152,49 @@ class TestVsa2PartialScrollCalculationAndSafetyBound:
             scroll_container_rect_top=40.0,
             scroll_container_rect_bottom=857.0,
             margin_px=32.0,
+            step_multiplier=1.0,
             max_delta_multiplier=3.0,
         )
         assert calc["visible_bottom"] == 825.0
         assert calc["full_reveal_required_delta"] == 2524.859375
-        assert calc["max_scroll_delta"] == 2451.0
+        assert calc["qualified_step_limit"] == 817.0
+        assert calc["absolute_max_scroll_delta"] == 2451.0
         assert calc["full_reveal_fits_within_bound"] is False
         assert calc["is_already_visible"] is False
-        assert calc["partial_requested_scroll_top"] == 2451.0
-        assert calc["partial_target_scroll_top"] == 2451.0
-        assert calc["partial_scroll_delta"] == 2451.0
+        assert calc["partial_requested_scroll_top"] == 817.0
+        assert calc["partial_target_scroll_top"] == 817.0
+        assert calc["partial_scroll_delta"] == 817.0
         assert calc["is_valid_partial_delta"] is True
+
+    def test_partial_delta_never_exceeds_client_height(self):
+        """Even with huge anchor distance, requested delta never exceeds clientHeight."""
+        calc = vsa2.compute_bounded_partial_scroll_target(
+            current_scroll_top=0.0,
+            scroll_height=10000.0,
+            client_height=800.0,
+            anchor_rect_top=9000.0,
+            anchor_rect_bottom=9018.0,
+            scroll_container_rect_top=40.0,
+            scroll_container_rect_bottom=840.0,
+            margin_px=32.0,
+        )
+        assert calc["qualified_step_limit"] == 800.0
+        assert calc["partial_scroll_delta"] == 800.0
+        assert calc["partial_scroll_delta"] <= 800.0
+
+    def test_partial_delta_never_exceeds_3x_hard_ceiling(self):
+        calc = vsa2.compute_bounded_partial_scroll_target(
+            current_scroll_top=0.0,
+            scroll_height=10000.0,
+            client_height=800.0,
+            anchor_rect_top=9000.0,
+            anchor_rect_bottom=9018.0,
+            scroll_container_rect_top=40.0,
+            scroll_container_rect_bottom=840.0,
+            margin_px=32.0,
+        )
+        assert calc["partial_scroll_delta"] <= calc["absolute_max_scroll_delta"]
+        assert calc["absolute_max_scroll_delta"] == 2400.0
 
     def test_full_reveal_fits_within_bound_boundary(self):
         """If full reveal requires exactly or less than 3 viewports, VSA2 is not applicable."""
@@ -165,7 +204,7 @@ class TestVsa2PartialScrollCalculationAndSafetyBound:
             scroll_height=3661.0,
             client_height=817.0,
             anchor_rect_top=3258.0,
-            anchor_rect_bottom=825.0 + 2451.0,  # 3276.0 -> delta = 2451.0
+            anchor_rect_bottom=825.0 + 2451.0,
             scroll_container_rect_top=40.0,
             scroll_container_rect_bottom=857.0,
             margin_px=32.0,
@@ -180,7 +219,7 @@ class TestVsa2PartialScrollCalculationAndSafetyBound:
             scroll_height=3661.0,
             client_height=817.0,
             anchor_rect_top=1800.0,
-            anchor_rect_bottom=1825.0,  # delta = 1825 - 825 = 1000.0
+            anchor_rect_bottom=1825.0,
             scroll_container_rect_top=40.0,
             scroll_container_rect_bottom=857.0,
             margin_px=32.0,
@@ -190,47 +229,48 @@ class TestVsa2PartialScrollCalculationAndSafetyBound:
         assert calc_less["full_reveal_fits_within_bound"] is True
 
     def test_partial_scroll_max_scroll_top_clamping(self):
-        """If partial requested scroll exceeds max_scroll_top, it clamps to max_scroll_top."""
-        # scroll_height 2000, client_height 817 -> max_scroll_top = 1183.0
-        # max_scroll_delta = 2451.0 -> partial_requested = 2451.0
-        # clamped target = 1183.0
+        """If max_scroll_top < clientHeight, partial scroll is clamped to max_scroll_top (<1 viewport)."""
+        # scroll_height 1200, client_height 817 -> max_scroll_top = 383.0
+        # qualified_step_limit = 817.0 -> clamped to 383.0
         calc = vsa2.compute_bounded_partial_scroll_target(
             current_scroll_top=0.0,
-            scroll_height=2000.0,
+            scroll_height=1200.0,
             client_height=817.0,
             anchor_rect_top=3500.0,
             anchor_rect_bottom=3518.0,
             scroll_container_rect_top=40.0,
             scroll_container_rect_bottom=857.0,
             margin_px=32.0,
+            step_multiplier=1.0,
             max_delta_multiplier=3.0,
         )
-        assert calc["max_scroll_top"] == 1183.0
-        assert calc["partial_target_scroll_top"] == 1183.0
-        assert calc["partial_scroll_delta"] == 1183.0
+        assert calc["max_scroll_top"] == 383.0
+        assert calc["partial_target_scroll_top"] == 383.0
+        assert calc["partial_scroll_delta"] == 383.0
+        assert calc["partial_scroll_delta"] < 817.0
         assert calc["is_valid_partial_delta"] is True
 
 
 class TestVsa2ResidualDistanceTelemetry:
     """Verifies that residual distance is computed strictly as read-only telemetry."""
 
-    def test_residual_distance_after_partial_scroll(self):
-        """After 2451px scroll:
-        anchor_rect_bottom = 3349.859375 - 2451 = 898.859375
+    def test_residual_distance_after_one_viewport_scroll(self):
+        """After 817px scroll:
+        anchor_rect_bottom = 3349.859375 - 817 = 2532.859375
         visible_bottom = 857 - 32 = 825
-        residual_delta = 898.859375 - 825 = 73.859375
-        residual_requested_scroll_top = 2451 + 73.859375 = 2524.859375
+        residual_delta = 2532.859375 - 825 = 1707.859375
+        residual_requested_scroll_top = 817 + 1707.859375 = 2524.859375
         """
         res = vsa2.compute_residual_distance_telemetry(
-            post_scroll_top=2451.0,
+            post_scroll_top=817.0,
             post_scroll_height=3661.0,
             post_client_height=817.0,
-            post_anchor_rect_bottom=898.859375,
+            post_anchor_rect_bottom=2532.859375,
             post_scroll_container_rect_bottom=857.0,
             margin_px=32.0,
         )
         assert res["residual_visible_bottom"] == 825.0
-        assert abs(res["residual_required_delta"] - 73.859375) < 1e-6
+        assert abs(res["residual_required_delta"] - 1707.859375) < 1e-6
         assert abs(res["residual_requested_scroll_top"] - 2524.859375) < 1e-6
         assert res["residual_max_scroll_top"] == 2844.0
 
@@ -249,27 +289,27 @@ class TestVsa2PostScrollClassificationHierarchy:
         post_dom = vsa2.build_mock_dry_run_dom_snapshot(
             case="post_scroll_below_viewport_progress",
             simulated_position=19,
-            scroll_top=2451.0,
-            anchor_rect_top=881.265625,
-            anchor_rect_bottom=898.859375,
+            scroll_top=817.0,
+            anchor_rect_top=2515.265625,
+            anchor_rect_bottom=2532.859375,
         )
 
         cls, details = vsa2.classify_vsa2_post_scroll_state(
             pre_scroll_telemetry=pre_dom,
             post_scroll_telemetry=post_dom,
             scroll_top_before=0.0,
-            scroll_top_after=2451.0,
-            partial_target_scroll_top=2451.0,
+            scroll_top_after=817.0,
+            partial_target_scroll_top=817.0,
         )
-        assert cls == "BOUNDED_PARTIAL_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
+        assert cls == "ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
         assert details["scroll_top_movement_valid"] is True
         assert details["target_match_count"] == 1
         assert details["anchor_valid"] is True
         assert details["geometric_progress_proven"] is True
         assert details["target_became_visible"] is False
         assert details["distance_below_viewport_before"] == 3332.265625 - 857.0
-        assert details["distance_below_viewport_after"] == 881.265625 - 857.0
-        assert details["progress_delta_px"] == 2451.0
+        assert details["distance_below_viewport_after"] == 2515.265625 - 857.0
+        assert details["geometric_progress_px"] == 817.0
 
     def test_success_with_progress_and_unexpected_visibility(self):
         """If partial scroll unexpectedly makes the target visible, progress is proven and visibility noted."""
@@ -283,7 +323,7 @@ class TestVsa2PostScrollClassificationHierarchy:
         post_dom = vsa2.build_mock_dry_run_dom_snapshot(
             case="post_scroll_visible_and_reachable",
             simulated_position=19,
-            scroll_top=2451.0,
+            scroll_top=817.0,
             anchor_rect_top=800.0,
             anchor_rect_bottom=818.0,
         )
@@ -292,15 +332,15 @@ class TestVsa2PostScrollClassificationHierarchy:
             pre_scroll_telemetry=pre_dom,
             post_scroll_telemetry=post_dom,
             scroll_top_before=0.0,
-            scroll_top_after=2451.0,
-            partial_target_scroll_top=2451.0,
+            scroll_top_after=817.0,
+            partial_target_scroll_top=817.0,
         )
-        assert cls == "BOUNDED_PARTIAL_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
+        assert cls == "ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
         assert details["geometric_progress_proven"] is True
         assert details["target_became_visible"] is True
 
     def test_tolerates_virtualization_and_mounted_position_drift(self):
-        """Target row moves from position 19 to position 12 after scroll."""
+        """Target row moves from position 19 to position 14 after scroll."""
         pre_dom = vsa2.build_mock_dry_run_dom_snapshot(
             case="below_viewport_normal",
             simulated_position=19,
@@ -310,20 +350,20 @@ class TestVsa2PostScrollClassificationHierarchy:
         )
         post_dom = vsa2.build_mock_dry_run_dom_snapshot(
             case="post_scroll_below_viewport_progress",
-            simulated_position=12,  # Drifted due to virtualization!
-            scroll_top=2451.0,
-            anchor_rect_top=881.265625,
-            anchor_rect_bottom=898.859375,
+            simulated_position=14,
+            scroll_top=817.0,
+            anchor_rect_top=2515.265625,
+            anchor_rect_bottom=2532.859375,
         )
 
         cls, details = vsa2.classify_vsa2_post_scroll_state(
             pre_scroll_telemetry=pre_dom,
             post_scroll_telemetry=post_dom,
             scroll_top_before=0.0,
-            scroll_top_after=2451.0,
-            partial_target_scroll_top=2451.0,
+            scroll_top_after=817.0,
+            partial_target_scroll_top=817.0,
         )
-        assert cls == "BOUNDED_PARTIAL_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
+        assert cls == "ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
         assert details["target_match_count"] == 1
         assert details["geometric_progress_proven"] is True
 
@@ -335,8 +375,8 @@ class TestVsa2PostScrollClassificationHierarchy:
             pre_scroll_telemetry=pre_dom,
             post_scroll_telemetry=post_dom,
             scroll_top_before=0.0,
-            scroll_top_after=2451.0,
-            partial_target_scroll_top=2451.0,
+            scroll_top_after=817.0,
+            partial_target_scroll_top=817.0,
         )
         assert cls == "TARGET_LOST_AFTER_PARTIAL_SCROLL"
 
@@ -348,8 +388,8 @@ class TestVsa2PostScrollClassificationHierarchy:
             pre_scroll_telemetry=pre_dom,
             post_scroll_telemetry=post_dom,
             scroll_top_before=0.0,
-            scroll_top_after=2451.0,
-            partial_target_scroll_top=2451.0,
+            scroll_top_after=817.0,
+            partial_target_scroll_top=817.0,
         )
         assert cls == "TARGET_DUPLICATED_AFTER_PARTIAL_SCROLL"
 
@@ -363,7 +403,7 @@ class TestVsa2PostScrollClassificationHierarchy:
             post_scroll_telemetry=post_dom,
             scroll_top_before=0.0,
             scroll_top_after=0.0,
-            partial_target_scroll_top=2451.0,
+            partial_target_scroll_top=817.0,
         )
         assert cls_no_move == "PARTIAL_SCROLL_POSITION_NOT_APPLIED_AS_REQUESTED"
 
@@ -372,8 +412,8 @@ class TestVsa2PostScrollClassificationHierarchy:
             pre_scroll_telemetry=pre_dom,
             post_scroll_telemetry=post_dom,
             scroll_top_before=0.0,
-            scroll_top_after=2400.0,
-            partial_target_scroll_top=2451.0,
+            scroll_top_after=810.0,
+            partial_target_scroll_top=817.0,
         )
         assert cls_tol == "PARTIAL_SCROLL_POSITION_NOT_APPLIED_AS_REQUESTED"
 
@@ -384,7 +424,6 @@ class TestVsa2PostScrollClassificationHierarchy:
             simulated_position=19,
             anchor_rect_top=3332.265625,
         )
-        # Anchor top remains at 3332.265625 (no progress)
         post_dom = vsa2.build_mock_dry_run_dom_snapshot(
             case="post_scroll_below_viewport_progress",
             simulated_position=19,
@@ -395,8 +434,8 @@ class TestVsa2PostScrollClassificationHierarchy:
             pre_scroll_telemetry=pre_dom,
             post_scroll_telemetry=post_dom,
             scroll_top_before=0.0,
-            scroll_top_after=2451.0,
-            partial_target_scroll_top=2451.0,
+            scroll_top_after=817.0,
+            partial_target_scroll_top=817.0,
         )
         assert cls == "NO_GEOMETRIC_PROGRESS_AFTER_PARTIAL_SCROLL"
         assert details["geometric_progress_proven"] is False
@@ -427,8 +466,8 @@ class TestVsa2SanitizationAndDryRun:
     def test_dry_run_execution(self):
         report = vsa2.run_vsa2_qualification(dry_run=True)
         assert report["verdict"] == "DRY_RUN_PASS"
-        assert report["diagnostic_verdict"] == "BOUNDED_PARTIAL_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
-        assert report["geometry_classification"] == "BOUNDED_PARTIAL_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
+        assert report["diagnostic_verdict"] == "ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
+        assert report["geometry_classification"] == "ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
         assert report["error"] is None
 
         # Verify output artifact created and sanitized
@@ -455,9 +494,11 @@ class TestVsa2OfflineLivePathIntegration:
             scroll_container_rect_top=40.0,
             scroll_container_rect_bottom=857.0,
             margin_px=32.0,
+            step_multiplier=1.0,
             max_delta_multiplier=3.0,
         )
         target_top = calc["partial_target_scroll_top"]
+        assert target_top == 817.0
 
         mock_pre_dom = vsa2.build_mock_dry_run_dom_snapshot(
             case="below_viewport_normal",
@@ -477,8 +518,8 @@ class TestVsa2OfflineLivePathIntegration:
             simulated_position=19,
             backend_identity_set=backend_id_set,
             scroll_top=target_top,
-            anchor_rect_top=881.265625,
-            anchor_rect_bottom=898.859375,
+            anchor_rect_top=2515.265625,
+            anchor_rect_bottom=2532.859375,
         )
 
         class MockHost:
@@ -527,8 +568,8 @@ class TestVsa2OfflineLivePathIntegration:
         report = vsa2.run_vsa2_qualification(dry_run=False, timeout=5.0)
 
         assert report["verdict"] == "QUALIFICATION_COMPLETED"
-        assert report["diagnostic_verdict"] == "BOUNDED_PARTIAL_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
-        assert report["geometry_classification"] == "BOUNDED_PARTIAL_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
+        assert report["diagnostic_verdict"] == "ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
+        assert report["geometry_classification"] == "ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED"
         assert report["error"] is None
         assert report["live_action_inventory"]["search_submissions"] == 1
         assert report["live_action_inventory"]["scroll_actions"] == 1

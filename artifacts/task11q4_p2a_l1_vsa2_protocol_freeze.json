@@ -6,6 +6,7 @@
   "search_max_results": 5,
   "max_mounted_rows_to_inspect": 20,
   "scroll_bottom_margin_px": 32.0,
+  "partial_scroll_step_multiplier": 1.0,
   "max_scroll_delta_multiplier": 3.0,
   "small_scroll_tolerance_px": 2.0,
   "post_scroll_settle_ms": 250,
@@ -25,8 +26,9 @@
     "search_result_row_selectors": "[data-qa=\"search_result\"], [data-qa=\"search_message_result_item\"], .c-search_result"
   },
   "scroll_target_strategy": {
-    "strategy": "bounded_partial_scroll_with_progress_proof",
+    "strategy": "one_viewport_sentinel_scroll_with_progress_proof",
     "margin_px": 32.0,
+    "step_multiplier": 1.0,
     "max_delta_multiplier": 3.0,
     "tolerance_px": 2.0,
     "post_scroll_settle_ms": 250
@@ -62,7 +64,7 @@
     "TARGET_DUPLICATED_AFTER_PARTIAL_SCROLL",
     "TARGET_ANCHOR_INVALID_AFTER_PARTIAL_SCROLL",
     "NO_GEOMETRIC_PROGRESS_AFTER_PARTIAL_SCROLL",
-    "BOUNDED_PARTIAL_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED",
+    "ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED",
     "RUNTIME_INITIALIZATION_EXCEPTION",
     "SEARCH_EXECUTION_EXCEPTION",
     "SEARCH_SAFETY_GATE_FAILED",
@@ -186,7 +188,7 @@
     }
   },
   "dependency_hashes": {
-    "vsa2_runner": "f8e29faa3d33b7a4aa0c65c5b81bae0527bf9a3c9358f9a2c129c615f8e078b8",
+    "vsa2_runner": "6fb1377ace4e6399a6815dcf4fb97274eca24ee0d82f452944c07f931023485d",
     "vsa1_runner": "33b6d735f2f38dbfa11c3016d2b492db9d227297f46cbc132f677ee3d064dab9",
     "mgr1r1_runner": "15f43947dcfbd615fbf68f2cb81d8f6a6759b5c4e26dfc7daf20ccb1c0a6f249",
     "attempt4_runner": "b2f4c6972e1e1297045c7fe7d7f1e50492225d3bd073b311ee1dcadd967a905d",
@@ -195,7 +197,7 @@
     "slack_permalink_parser": "f46137cd074e6f9f98e3831e87a2504d056c93596bde8ef564fb87cf3738c5ab"
   },
   "runtime_closure_hashes": {
-    "scripts/qualify_task11q4_p2a_l1_bounded_partial_scroll_vsa2.py": "f8e29faa3d33b7a4aa0c65c5b81bae0527bf9a3c9358f9a2c129c615f8e078b8",
+    "scripts/qualify_task11q4_p2a_l1_bounded_partial_scroll_vsa2.py": "6fb1377ace4e6399a6815dcf4fb97274eca24ee0d82f452944c07f931023485d",
     "src/pesu_agent/__init__.py": "d1ae8793964867c74ef4628e2776faef093c59f23c635e2b6ab9837e042cd4bd",
     "src/pesu_agent/lifecycle/slack_lifecycle.py": "f70b6c91e4186452f790a73e9f24debb4f2ccc2821231b59608f1dd2677bf249",
     "src/pesu_agent/lifecycle/__init__.py": "fc09d0190d0bf22f2177f0deee0350f9dd384468081bf6c2f0cfce98f96adfc5",

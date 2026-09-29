@@ -144,6 +144,7 @@ CANONICAL_TARGET_IDENTITY: tuple[str, str, Optional[str]] = (
 )
 
 SCROLL_BOTTOM_MARGIN_PX = 32.0
+PARTIAL_SCROLL_STEP_MULTIPLIER = 1.0
 MAX_SCROLL_DELTA_MULTIPLIER = 3.0
 SMALL_SCROLL_TOLERANCE_PX = 2.0
 POST_SCROLL_SETTLE_MS = 250
@@ -177,7 +178,7 @@ DIAGNOSTIC_OUTCOMES = [
     "TARGET_DUPLICATED_AFTER_PARTIAL_SCROLL",
     "TARGET_ANCHOR_INVALID_AFTER_PARTIAL_SCROLL",
     "NO_GEOMETRIC_PROGRESS_AFTER_PARTIAL_SCROLL",
-    "BOUNDED_PARTIAL_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED",
+    "ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED",
     "RUNTIME_INITIALIZATION_EXCEPTION",
     "SEARCH_EXECUTION_EXCEPTION",
     "SEARCH_SAFETY_GATE_FAILED",
@@ -906,51 +907,64 @@ def compute_bounded_partial_scroll_target(
     scroll_container_rect_top: float,
     scroll_container_rect_bottom: float,
     margin_px: float = SCROLL_BOTTOM_MARGIN_PX,
+    step_multiplier: float = PARTIAL_SCROLL_STEP_MULTIPLIER,
     max_delta_multiplier: float = MAX_SCROLL_DELTA_MULTIPLIER,
 ) -> dict[str, Any]:
-    """Calculates bounded partial scroll progress target.
+    """Calculates bounded partial scroll progress target with 1-viewport sentinel step and 3-viewport outer guard.
 
     1. Observational full reveal delta (VSA1 formula):
        visible_bottom = scroll_container_rect_bottom - margin_px
        full_reveal_required_delta = anchor_rect_bottom - visible_bottom
        full_reveal_requested_scroll_top = current_scroll_top + full_reveal_required_delta
 
-    2. Frozen 3-viewport safety bound check:
-       max_scroll_delta = max_delta_multiplier * client_height
-       full_reveal_fits_within_bound = (full_reveal_required_delta <= max_scroll_delta)
+    2. Frozen 3-viewport absolute outer safety bound:
+       absolute_max_scroll_delta = max_delta_multiplier * client_height
+       full_reveal_fits_within_bound = (full_reveal_required_delta <= absolute_max_scroll_delta)
 
-    3. Partial scroll target calculation:
+    3. One-viewport sentinel qualified step limit:
+       qualified_step_limit = step_multiplier * client_height
+
+    4. Partial scroll target calculation:
        max_scroll_top = max(0.0, scroll_height - client_height)
-       partial_requested_scroll_top = current_scroll_top + max_scroll_delta
+       partial_requested_scroll_top = current_scroll_top + qualified_step_limit
        partial_target_scroll_top = min(partial_requested_scroll_top, max_scroll_top)
        partial_scroll_delta = partial_target_scroll_top - current_scroll_top
 
-    4. Delta validation:
-       is_valid_partial_delta = (0.0 < partial_scroll_delta <= max_scroll_delta)
+    5. Delta validation:
+       is_valid_partial_delta = (
+           0.0 < partial_scroll_delta <= qualified_step_limit and
+           partial_scroll_delta <= absolute_max_scroll_delta
+       )
     """
     visible_bottom = scroll_container_rect_bottom - margin_px
     full_reveal_required_delta = anchor_rect_bottom - visible_bottom
     full_reveal_requested_scroll_top = current_scroll_top + full_reveal_required_delta
 
-    max_scroll_delta = max_delta_multiplier * client_height
-    full_reveal_fits_within_bound = (full_reveal_required_delta <= max_scroll_delta)
+    absolute_max_scroll_delta = max_delta_multiplier * client_height
+    full_reveal_fits_within_bound = (full_reveal_required_delta <= absolute_max_scroll_delta)
 
     is_already_visible = (
         anchor_rect_top >= scroll_container_rect_top and
         anchor_rect_bottom <= scroll_container_rect_bottom
     )
 
+    qualified_step_limit = step_multiplier * client_height
     max_scroll_top = max(0.0, scroll_height - client_height)
-    partial_requested_scroll_top = current_scroll_top + max_scroll_delta
+    partial_requested_scroll_top = current_scroll_top + qualified_step_limit
     partial_target_scroll_top = min(partial_requested_scroll_top, max_scroll_top)
     partial_scroll_delta = partial_target_scroll_top - current_scroll_top
-    is_valid_partial_delta = (0.0 < partial_scroll_delta <= max_scroll_delta)
+    is_valid_partial_delta = (
+        0.0 < partial_scroll_delta <= qualified_step_limit and
+        partial_scroll_delta <= absolute_max_scroll_delta
+    )
 
     return {
         "visible_bottom": visible_bottom,
         "full_reveal_required_delta": full_reveal_required_delta,
         "full_reveal_requested_scroll_top": full_reveal_requested_scroll_top,
-        "max_scroll_delta": max_scroll_delta,
+        "qualified_step_limit": qualified_step_limit,
+        "absolute_max_scroll_delta": absolute_max_scroll_delta,
+        "max_scroll_delta": absolute_max_scroll_delta,
         "full_reveal_fits_within_bound": full_reveal_fits_within_bound,
         "is_already_visible": is_already_visible,
         "max_scroll_top": max_scroll_top,
@@ -1005,6 +1019,7 @@ def classify_vsa2_post_scroll_state(
         "distance_below_viewport_before": None,
         "distance_below_viewport_after": None,
         "progress_delta_px": None,
+        "geometric_progress_px": None,
     }
 
     if not post_scroll_telemetry or not post_scroll_telemetry.get("ok"):
@@ -1050,11 +1065,13 @@ def classify_vsa2_post_scroll_state(
 
     dist_before = max(anc_top_before - sc_bottom_before, 0.0)
     dist_after = max(anc_top_after - sc_bottom_after, 0.0)
+    geometric_progress_px = dist_before - dist_after
     details["distance_below_viewport_before"] = dist_before
     details["distance_below_viewport_after"] = dist_after
-    details["progress_delta_px"] = dist_before - dist_after
+    details["progress_delta_px"] = geometric_progress_px
+    details["geometric_progress_px"] = geometric_progress_px
 
-    if dist_after >= dist_before:
+    if dist_after >= dist_before or geometric_progress_px <= 0:
         details["geometric_progress_proven"] = False
         return "NO_GEOMETRIC_PROGRESS_AFTER_PARTIAL_SCROLL", details
 
@@ -1064,7 +1081,7 @@ def classify_vsa2_post_scroll_state(
     intersects_scroll = anchor_geom.get("anchor_intersects_scroll_viewport", False)
     details["target_became_visible"] = intersects_scroll
 
-    return "BOUNDED_PARTIAL_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED", details
+    return "ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED", details
 
 
 def evaluate_search_surface_current_query_correlation(
@@ -2522,7 +2539,7 @@ def run_vsa2_qualification(*, dry_run: bool = False, timeout: float = 30.0) -> d
             if details.get("target_became_visible"):
                 report["checks"]["PARTIAL_SCROLL_TARGET_BECAME_VISIBLE"] = True
 
-            if classification == "BOUNDED_PARTIAL_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED":
+            if classification == "ONE_VIEWPORT_SCROLL_APPLIED_TARGET_REACQUIRED_AND_PROGRESS_CONFIRMED":
                 report["verdict"] = "QUALIFICATION_COMPLETED"
             else:
                 report["verdict"] = "FAIL_CLOSED"
