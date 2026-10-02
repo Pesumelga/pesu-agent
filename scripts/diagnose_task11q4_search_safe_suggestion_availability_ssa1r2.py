@@ -502,14 +502,21 @@ def classify_ssa1r2_terminal_state(
     for p in polls:
         all_candidates.extend(p.get("candidate_classifications", []))
 
-    if any_sync:
+    # Case 1 — both observed, but never same poll
+    if any_sync and any_safe:
+        return "QUERY_STATE_AND_SAFE_SUGGESTION_OBSERVED_WITHOUT_COEXISTENCE", details
+
+    # Case 2 — sync observed, safe never observed
+    if any_sync and not any_safe:
         if all_candidates and all(c == "UNKNOWN_CANDIDATE" for c in all_candidates):
             return "SUGGESTION_STRUCTURE_UNRECOGNIZED", details
         return "QUERY_STATE_SYNCED_SAFE_SUGGESTION_NEVER_OBSERVED", details
 
-    if any_safe:
+    # Case 3 — safe observed, sync never observed
+    if not any_sync and any_safe:
         return "SAFE_SUGGESTION_OBSERVED_BUT_QUERY_STATE_NEVER_SYNCED", details
 
+    # Case 4 — neither observed
     if all_candidates and all(c == "UNKNOWN_CANDIDATE" for c in all_candidates):
         return "SUGGESTION_STRUCTURE_UNRECOGNIZED", details
 
@@ -561,7 +568,7 @@ def get_file_sha256(path: Path) -> str:
 def compute_all_dependency_hashes() -> dict[str, str]:
     deps = {
         "ssa1r2_runner": REPO_ROOT / "scripts" / "diagnose_task11q4_search_safe_suggestion_availability_ssa1r2.py",
-        "ssa1r1_runner": REPO_ROOT / "scripts" / "diagnose_task11q4_search_safe_suggestion_availability_ssa1r2.py",
+        "ssa1r1_runner": REPO_ROOT / "scripts" / "diagnose_task11q4_search_safe_suggestion_availability_ssa1r1.py",
         "ssa1_runner": REPO_ROOT / "scripts" / "diagnose_task11q4_search_safe_suggestion_availability_ssa1.py",
         "vsa2_runner": REPO_ROOT / "scripts" / "diagnose_task11q4_p2a_l1_vsa2_bounded_partial_scroll.py",
         "vsa1_runner": REPO_ROOT / "scripts" / "diagnose_task11q4_p2a_l1_vsa1_bounded_scroll_safety.py",

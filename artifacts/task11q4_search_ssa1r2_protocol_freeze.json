@@ -36,6 +36,7 @@
   },
   "terminal_classifications": [
     "QUERY_STATE_SYNCED_WITH_SAFE_SEARCH_SUGGESTION",
+    "QUERY_STATE_AND_SAFE_SUGGESTION_OBSERVED_WITHOUT_COEXISTENCE",
     "QUERY_STATE_SYNCED_SAFE_SUGGESTION_NEVER_OBSERVED",
     "SAFE_SUGGESTION_OBSERVED_BUT_QUERY_STATE_NEVER_SYNCED",
     "QUERY_STATE_NEVER_SYNCED_AND_NO_SAFE_SUGGESTION",
@@ -58,8 +59,8 @@
     "zero_retry": true
   },
   "dependency_hashes": {
-    "ssa1r2_runner": "ed01b4f947e2d389868c138407133a02038ab5ed95e0da3b660e69ea060874c2",
-    "ssa1r1_runner": "ed01b4f947e2d389868c138407133a02038ab5ed95e0da3b660e69ea060874c2",
+    "ssa1r2_runner": "94be4593a8a8d3e811df973ab3fc588e4a553905939cd2eaa6036d1a9a970e0a",
+    "ssa1r1_runner": "32543fa2a72697581954102f1a968eaf15f5a73182721fbbf5221f0742097c69",
     "ssa1_runner": "00f103665e0ef9140a425d6f62611e4992bdefa4a5b5f241cfa91685b10c82a1",
     "webview_slack_search": "0f23a7430fd77659e5e3559c9105f9ce5acddb2ef2a0260feabd66cb10b72c21",
     "pesu_webview_host": "831cebf43320fe7ff4fcca84a439e0daa30e18b3d74519970d5d529389691ea0",
@@ -232,7 +233,7 @@
     }
   },
   "runtime_closure_hashes": {
-    "scripts/diagnose_task11q4_search_safe_suggestion_availability_ssa1r2.py": "ed01b4f947e2d389868c138407133a02038ab5ed95e0da3b660e69ea060874c2",
+    "scripts/diagnose_task11q4_search_safe_suggestion_availability_ssa1r2.py": "94be4593a8a8d3e811df973ab3fc588e4a553905939cd2eaa6036d1a9a970e0a",
     "src/pesu_agent/__init__.py": "d1ae8793964867c74ef4628e2776faef093c59f23c635e2b6ab9837e042cd4bd",
     "src/pesu_agent/adapters/__init__.py": "3153bd5a614bb98e5efedd0178add069aa78236f8c001e55698ce1671438d975",
     "src/pesu_agent/adapters/slack_cdp.py": "cfa7b1a52c7443746941738c5dd281f8439f0bcd2b1ba94ca503ba05905c0a8d",
@@ -293,5 +294,8 @@
     "src/pesu_agent/security/read_only_barrier.py": "c42afe7ea78ff9b1e2e9fd922d0249508ea4b15ce280e3529665acc95c72646c",
     "src/pesu_agent/security/write_audit.py": "5560ec12f85886b49c2bd40c3faa2b9271680e1a04abdd97e37e324d1fc6f09e"
   },
-  "frozen_timestamp_utc": "2026-10-01T23:54:16.347173+00:00"
+  "frozen_timestamp_utc": "2026-10-02T02:56:47.872770+00:00",
+  "git_commit": null,
+  "preparation_head": "8cac46c543a51b84c594afbfda79d483d5e7bc30",
+  "source_parent_commit": "3ce9b70a3b23159a087d8cda1614ea3051c2bef5"
 }

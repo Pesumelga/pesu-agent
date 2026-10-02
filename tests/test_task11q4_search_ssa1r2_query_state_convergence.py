@@ -279,7 +279,7 @@ def test_matrix_scenario_b_safe_first_disappears_sync_later_without_safe():
     ]
 
     term_cls, details = classify_ssa1r2_terminal_state(polls, error=None)
-    assert term_cls == "QUERY_STATE_SYNCED_SAFE_SUGGESTION_NEVER_OBSERVED"
+    assert term_cls == "QUERY_STATE_AND_SAFE_SUGGESTION_OBSERVED_WITHOUT_COEXISTENCE"
     assert details["first_safe_candidate_poll_index"] == 1
     assert details["first_query_state_synced_poll_index"] == 3
     assert details["first_coexistence_poll_index"] is None
@@ -395,6 +395,34 @@ def test_matrix_scenario_g_both_true_first_poll_immediate_success():
 def test_matrix_scenario_h_generic_setter_success_payload_rejected():
     """Test Matrix H: Generic setter payload rejected before observation."""
     assert validate_query_setter_response({"success": True}) is False
+
+def test_matrix_scenario_i_sync_first_disappears_safe_later_without_coexistence():
+    """Test Matrix I: Sync occurs on poll 1, disappears on poll 2 while safe appears.
+    Both occurred, but never in the same poll -> QUERY_STATE_AND_SAFE_SUGGESTION_OBSERVED_WITHOUT_COEXISTENCE.
+    """
+    polls = [
+        {
+            "poll_index": 1,
+            "elapsed_ms": 10.0,
+            "query_state_all_synced": True,
+            "safe_search_candidate_present": False,
+            "candidate_classifications": ["UNSAFE_NON_SEARCH_CHANNEL_NAV"],
+        },
+        {
+            "poll_index": 2,
+            "elapsed_ms": 60.0,
+            "query_state_all_synced": False,
+            "safe_search_candidate_present": True,
+            "candidate_classifications": ["SAFE_EXPLICIT_SEARCH"],
+        },
+    ]
+
+    term_cls, details = classify_ssa1r2_terminal_state(polls, error=None)
+    assert term_cls == "QUERY_STATE_AND_SAFE_SUGGESTION_OBSERVED_WITHOUT_COEXISTENCE"
+    assert details["first_safe_candidate_poll_index"] == 2
+    assert details["first_query_state_synced_poll_index"] == 1
+    assert details["first_coexistence_poll_index"] is None
+
 
 
 def test_observational_persistence_reappearance_after_convergence():
@@ -617,7 +645,7 @@ def test_mocked_live_branch_scenario_b_safe_first_disappears_sync_later(tmp_path
     )
 
     assert report["verdict"] == "QUALIFICATION_COMPLETED"
-    assert report["terminal_classification"] == "QUERY_STATE_SYNCED_SAFE_SUGGESTION_NEVER_OBSERVED"
+    assert report["terminal_classification"] == "QUERY_STATE_AND_SAFE_SUGGESTION_OBSERVED_WITHOUT_COEXISTENCE"
     assert report["observation_telemetry"]["safe_candidate_disappeared_before_convergence"] is True
 
 
