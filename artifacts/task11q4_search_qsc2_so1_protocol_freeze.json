@@ -65,7 +65,7 @@
     "webview_slack_search": "0f23a7430fd77659e5e3559c9105f9ce5acddb2ef2a0260feabd66cb10b72c21",
     "pesu_webview_host": "831cebf43320fe7ff4fcca84a439e0daa30e18b3d74519970d5d529389691ea0",
     "slack_permalink_parser": "f46137cd074e6f9f98e3831e87a2504d056c93596bde8ef564fb87cf3738c5ab",
-    "qsc2_so1_runner": "72627ba165ea0174035bb4754c95fd3a5eb3146e4fd3ec1d4e2b72190776a185"
+    "qsc2_so1_runner": "9a1321ab8c1ec10313e508569e6b8324b482c1e52101b836e2952ed47e3caf7d"
   },
   "query_entry_primitive_parity": "EXACT_PRODUCTION_JS_QUERY_ENTRY_PRIMITIVES_REUSED",
   "production_candidate_classifier_parity": true,
@@ -301,7 +301,7 @@
     "src/pesu_agent/security/credential_store.py": "ce3d8e8d7dd911527e9cb45790dbc4c6a006f07d2e8ad108a0945f10343fcd0c",
     "src/pesu_agent/security/read_only_barrier.py": "c42afe7ea78ff9b1e2e9fd922d0249508ea4b15ce280e3529665acc95c72646c",
     "src/pesu_agent/security/write_audit.py": "5560ec12f85886b49c2bd40c3faa2b9271680e1a04abdd97e37e324d1fc6f09e",
-    "scripts/diagnose_task11q4_search_safe_suggestion_availability_qsc2_so1.py": "72627ba165ea0174035bb4754c95fd3a5eb3146e4fd3ec1d4e2b72190776a185"
+    "scripts/diagnose_task11q4_search_safe_suggestion_availability_qsc2_so1.py": "9a1321ab8c1ec10313e508569e6b8324b482c1e52101b836e2952ed47e3caf7d"
   },
   "frozen_timestamp_utc": "2026-10-13T06:16:45.988183+00:00",
   "git_commit": null,

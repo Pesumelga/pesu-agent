@@ -536,7 +536,8 @@ JS_OBSERVE_SEARCH_SUGGESTION_SURFACE = r"""
         report.observation_valid &&
         report.query_state_all_synced &&
         report.internal_flags_ok &&
-        report.safe_search_candidate_present
+        report.safe_search_candidate_present &&
+        report.safe_candidate_exact_query_correlation !== 'MISMATCH'
     );
 
     return report;
@@ -680,7 +681,10 @@ def classify_qsc2_so1_terminal_state(
 
     coexist_polls = [
         p for p in valid_polls
-        if p.get("query_state_all_synced") and p.get("safe_search_candidate_present") and p.get("internal_flags_ok")
+        if p.get("query_state_all_synced")
+        and p.get("safe_search_candidate_present")
+        and p.get("internal_flags_ok")
+        and p.get("safe_candidate_exact_query_correlation") != "MISMATCH"
     ]
     if coexist_polls:
         return "QUERY_STATE_SYNCED_WITH_SAFE_SEARCH_SUGGESTION", details
@@ -1668,8 +1672,8 @@ def run_qsc2_so1_qualification(
                 }
                 polls.append(poll_rec)
 
-                # Coexistence early stop: observation_valid AND is_sync AND flags_ok AND is_safe in SAME poll
-                if obs_valid and is_sync and flags_ok and is_safe:
+                # Coexistence early stop: observation_valid AND is_sync AND flags_ok AND is_safe AND not mismatch in SAME poll
+                if obs_valid and is_sync and flags_ok and is_safe and poll_res.get("safe_candidate_exact_query_correlation") != "MISMATCH":
                     break
             else:
                 polls.append({

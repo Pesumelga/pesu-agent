@@ -2,6 +2,7 @@ import json
 import re
 import ast
 import hashlib
+import subprocess
 from pathlib import Path
 from typing import Any, Optional
 import pytest
@@ -92,6 +93,133 @@ class MockLiveBackendQSC2:
 
 
 # =============================================================================
+# Helper for Offline Node.js Real JS Execution
+# =============================================================================
+
+def execute_observer_js_in_node(env_js: str, target_query: str = "26년 일반기 조회") -> dict[str, Any]:
+    js_observer = runner.JS_OBSERVE_SEARCH_SUGGESTION_SURFACE
+    node_code = f"""
+{env_js}
+
+const observer = {js_observer};
+const report = observer({json.dumps(target_query)});
+console.log(JSON.stringify(report));
+"""
+    proc = subprocess.run(
+        ["node", "-e", node_code],
+        capture_output=True,
+        text=True,
+        encoding="utf-8"
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"Node execution failed (code {proc.returncode}): {proc.stderr}")
+    return json.loads(proc.stdout)
+
+
+NODE_BASE_FIXTURE = """
+class MockElement {
+    constructor(tag, attrs = {}) {
+        this.tag = tag;
+        this.attrs = attrs;
+        this.isConnected = true;
+        this.parentElement = null;
+        this.textContent = "";
+        this.innerText = "";
+    }
+    getAttribute(name) { return this.attrs[name] || null; }
+    closest(selector) {
+        if (selector.includes('message') && this.attrs['data-qa'] === 'message_input') return this;
+        if (selector.includes('search_modal') && this.attrs['data-qa'] === 'search_modal') return this;
+        if (selector.includes('search_input_box') && this.attrs['data-qa'] === 'search_input_box') return this;
+        return this.parentElement ? this.parentElement.closest(selector) : null;
+    }
+    click() { throw new Error("ILLEGAL_MUTATION: click called!"); }
+    submit() { throw new Error("ILLEGAL_MUTATION: submit called!"); }
+    scroll() { throw new Error("ILLEGAL_MUTATION: scroll called!"); }
+    scrollTo() { throw new Error("ILLEGAL_MUTATION: scrollTo called!"); }
+}
+
+function buildMockSlackEnv(opts = {}) {
+    const modal = new MockElement('div', { 'data-qa': 'search_modal' });
+    const box = new MockElement('div', { 'data-qa': 'search_input_box' });
+    box.parentElement = modal;
+    const input = new MockElement('div', { 'role': 'combobox', 'class': 'ql-editor' });
+    input.parentElement = box;
+    input.textContent = opts.domText !== undefined ? opts.domText : "26년 일반기 조회";
+
+    const mockTexty = {
+        instance: {
+            quill: {
+                getText: () => {
+                    if (opts.quillThrow) throw new Error("Quill getter exception");
+                    return opts.quillText !== undefined ? opts.quillText : "26년 일반기 조회";
+                }
+            }
+        },
+        getContents: () => {
+            if (opts.textyThrow) throw new Error("Texty getContents exception");
+            return { contents: [{ insert: opts.textyText !== undefined ? opts.textyText : "26년 일반기 조회" }] };
+        }
+    };
+
+    const searchInputBoxInstance = {
+        getTextyOps: () => {
+            if (opts.deltaThrow) throw new Error("getTextyOps exception");
+            return [{ insert: opts.deltaText !== undefined ? opts.deltaText : "26년 일반기 조회" }];
+        },
+        onUserInput: () => {},
+        texty: mockTexty,
+        state: opts.noState ? null : {
+            _isUpdatingDisplayQuery: Boolean(opts.isUpdatingDisplayQuery),
+            isInComposition: Boolean(opts.isInComposition),
+            queryHasChanged: true,
+            queryHasBeenSubmitted: false
+        },
+        props: {
+            displayQueryOps: opts.noDisplayOps ? undefined : [{ insert: opts.opsText !== undefined ? opts.opsText : "26년 일반기 조회" }],
+            suggestions: opts.suggestions || [
+                {
+                    type: "queryUser",
+                    suggestion_sub_type: "query-echo",
+                    is_type_query_completion: true,
+                    string: opts.candidateString !== undefined ? opts.candidateString : "26년 일반기 조회"
+                }
+            ]
+        }
+    };
+
+    if (opts.noDisplayOps) {
+        delete searchInputBoxInstance.props.displayQueryOps;
+    }
+
+    const fiber = {
+        stateNode: searchInputBoxInstance,
+        memoizedProps: searchInputBoxInstance.props,
+        return: null
+    };
+
+    input['__reactFiber$test'] = fiber;
+
+    global.window = {
+        location: { href: "https://app.slack.com/client/T001/C001" }
+    };
+
+    global.document = {
+        querySelectorAll: (sel) => {
+            if (sel.includes('search_input_box') && sel.includes('.ql-editor')) return [input];
+            if (sel.includes('role="option"')) return [];
+            return [];
+        },
+        querySelector: (sel) => {
+            if (sel.includes('search_autocomplete') || sel.includes('listbox')) return new MockElement('div');
+            return null;
+        }
+    };
+}
+"""
+
+
+# =============================================================================
 # 1. Parity Gates and Static Contract Audits
 # =============================================================================
 
@@ -102,19 +230,15 @@ def test_query_setter_response_contract_parity_gate():
 
 
 def test_validate_query_setter_response_contract_acceptance_and_rejection():
-    # Valid authoritative response
     valid_resp = {"ok": True, "setter_succeeded": True}
     assert runner.validate_query_setter_response(valid_resp) is True
 
-    # Rejection: missing setter_succeeded
     inv_resp1 = {"ok": True}
     assert runner.validate_query_setter_response(inv_resp1) is False
 
-    # Rejection: setter_succeeded is False
     inv_resp2 = {"ok": True, "setter_succeeded": False}
     assert runner.validate_query_setter_response(inv_resp2) is False
 
-    # Rejection: not a dict
     inv_resp3 = True
     assert runner.validate_query_setter_response(inv_resp3) is False
 
@@ -212,7 +336,6 @@ def test_protocol_freeze_integrity_and_34_baselines():
         act_sha = hashlib.sha256(fp.read_bytes()).hexdigest()
         assert act_sha == exp_sha, f"Baseline SHA mismatch for {rel_path}: exp {exp_sha}, got {act_sha}"
 
-    # Verify closure hashes
     closure = proto.get("runtime_closure_hashes", {})
     closure_ok, closure_errors = runner.audit_runtime_import_closure(closure)
     assert closure_ok is True, f"Closure audit failed: {closure_errors}"
@@ -223,7 +346,6 @@ def test_protocol_freeze_integrity_and_34_baselines():
 # =============================================================================
 
 def test_scenario_1_all_query_states_synced():
-    """Scenario 1: All query state surfaces synced."""
     surfaces = {
         "dom": True,
         "quill_text": True,
@@ -243,7 +365,6 @@ def test_scenario_1_all_query_states_synced():
 
 
 def test_scenario_2_dom_only_synced():
-    """Scenario 2: Only DOM synced, internal models not converged."""
     surfaces = {
         "dom": True,
         "quill_text": False,
@@ -263,59 +384,26 @@ def test_scenario_2_dom_only_synced():
 
 
 def test_scenario_3_quill_text_unsynced():
-    """Scenario 3: QuillText unsynced while others synced."""
-    surfaces = {
-        "dom": True,
-        "quill_text": False,
-        "quill_delta": True,
-        "texty": True,
-        "display_query_ops": True,
-    }
-    all_synced = all(surfaces.values())
-    assert all_synced is False
+    surfaces = {"dom": True, "quill_text": False, "quill_delta": True, "texty": True, "display_query_ops": True}
+    assert all(surfaces.values()) is False
 
 
 def test_scenario_4_quill_delta_unsynced():
-    """Scenario 4: QuillDelta unsynced while others synced."""
-    surfaces = {
-        "dom": True,
-        "quill_text": True,
-        "quill_delta": False,
-        "texty": True,
-        "display_query_ops": True,
-    }
-    all_synced = all(surfaces.values())
-    assert all_synced is False
+    surfaces = {"dom": True, "quill_text": True, "quill_delta": False, "texty": True, "display_query_ops": True}
+    assert all(surfaces.values()) is False
 
 
 def test_scenario_5_texty_unsynced():
-    """Scenario 5: Texty unsynced while others synced."""
-    surfaces = {
-        "dom": True,
-        "quill_text": True,
-        "quill_delta": True,
-        "texty": False,
-        "display_query_ops": True,
-    }
-    all_synced = all(surfaces.values())
-    assert all_synced is False
+    surfaces = {"dom": True, "quill_text": True, "quill_delta": True, "texty": False, "display_query_ops": True}
+    assert all(surfaces.values()) is False
 
 
 def test_scenario_6_display_query_ops_unsynced():
-    """Scenario 6: DisplayQueryOps unsynced while others synced."""
-    surfaces = {
-        "dom": True,
-        "quill_text": True,
-        "quill_delta": True,
-        "texty": True,
-        "display_query_ops": False,
-    }
-    all_synced = all(surfaces.values())
-    assert all_synced is False
+    surfaces = {"dom": True, "quill_text": True, "quill_delta": True, "texty": True, "display_query_ops": False}
+    assert all(surfaces.values()) is False
 
 
 def test_scenario_7_getter_exception_fail_closed():
-    """Scenario 7: Getter exception marks observation invalid fail-closed."""
     polls = [
         {
             "poll_index": 1,
@@ -333,20 +421,17 @@ def test_scenario_7_getter_exception_fail_closed():
 
 
 def test_scenario_8_component_state_or_flags_missing():
-    """Scenario 8: Missing component state or flags must prevent internal_flags_ok."""
-    # When state or flags are missing
     component_state_present = False
     flags_readable = False
     internal_flags_ok = bool(component_state_present and flags_readable)
     assert internal_flags_ok is False
 
-    # In classifier, if flags are not ok, coexistence cannot occur
     polls = [
         {
             "poll_index": 1,
             "observation_valid": True,
             "query_state_all_synced": True,
-            "internal_flags_ok": False,  # Missing or composition active
+            "internal_flags_ok": False,
             "safe_search_candidate_present": True,
             "candidate_classifications": ["SAFE_EXPLICIT_SEARCH"],
         }
@@ -357,7 +442,6 @@ def test_scenario_8_component_state_or_flags_missing():
 
 
 def test_scenario_9_search_input_box_cardinality_not_one():
-    """Scenario 9: SearchInputBox cardinality 0 or 2+ fails closed."""
     polls = [
         {
             "poll_index": 1,
@@ -373,7 +457,6 @@ def test_scenario_9_search_input_box_cardinality_not_one():
 
 
 def test_scenario_10_observation_validity_failure():
-    """Scenario 10: Observation validity failure across all polls yields OBSERVATION_INVALID."""
     polls = [
         {"poll_index": 1, "observation_valid": False, "validity_failure_reason": "SEARCH_INPUT_CARDINALITY_NOT_ONE"},
         {"poll_index": 2, "observation_valid": False, "validity_failure_reason": "NO_REACT_FIBER_KEY_FOUND"},
@@ -385,7 +468,6 @@ def test_scenario_10_observation_validity_failure():
 
 
 def test_scenario_11_safe_candidate_unproven_correlation():
-    """Scenario 11: Structurally safe candidate without authoritative string field yields UNPROVEN."""
     candidate_obj = {
         "type": "queryUser",
         "suggestion_sub_type": "query-echo",
@@ -407,7 +489,6 @@ def test_scenario_11_safe_candidate_unproven_correlation():
 
 
 def test_scenario_12_coexistence_in_same_poll():
-    """Scenario 12: Safe search candidate and query state synced in SAME poll."""
     polls = [
         {
             "poll_index": 1,
@@ -428,7 +509,6 @@ def test_scenario_12_coexistence_in_same_poll():
 
 
 def test_scenario_13_separate_polls_without_coexistence():
-    """Scenario 13: Conditions met in different polls without coexistence."""
     polls = [
         {
             "poll_index": 1,
@@ -452,7 +532,6 @@ def test_scenario_13_separate_polls_without_coexistence():
 
 
 def test_scenario_14_invalid_setter_response_fail_closed():
-    """Scenario 14: Invalid query setter response fails closed."""
     invalid_responses = [
         None,
         {},
@@ -466,14 +545,140 @@ def test_scenario_14_invalid_setter_response_fail_closed():
 
 
 def test_scenario_15_unsafe_slackbot_candidate_excluded():
-    """Scenario 15: Slackbot candidates must be classified as unsafe and never safe search."""
     obs_src = runner.JS_OBSERVE_SEARCH_SUGGESTION_SURFACE
     assert "UNSAFE_WRITE_CAPABLE_SLACKBOT" in obs_src
     assert "isWriteCapableSuggestion" in obs_src
 
 
 # =============================================================================
-# 3. Mocked Live Branch Integration Tests
+# 3. Exact-Query Correlation Semantics Tests (Question B Hardening)
+# =============================================================================
+
+def test_mismatch_candidate_never_promoted_to_coexistence():
+    """Proves that a safe candidate with MISMATCH query text cannot achieve coexistence."""
+    polls = [
+        {
+            "poll_index": 1,
+            "observation_valid": True,
+            "query_state_all_synced": True,
+            "internal_flags_ok": True,
+            "safe_search_candidate_present": True,
+            "safe_candidate_exact_query_correlation": "MISMATCH",
+            "candidate_classifications": ["SAFE_EXPLICIT_SEARCH"],
+            "coexistence_observed": False,
+        }
+    ]
+    state, details = runner.classify_qsc2_so1_terminal_state(polls)
+    assert state == "QUERY_STATE_AND_SAFE_SUGGESTION_OBSERVED_WITHOUT_COEXISTENCE"
+    assert state != "QUERY_STATE_SYNCED_WITH_SAFE_SEARCH_SUGGESTION"
+    assert details["final_safe_candidate_exact_query_correlation"] == "MISMATCH"
+
+
+def test_unproven_candidate_records_unproven_correlation():
+    """Proves that UNPROVEN candidate records UNPROVEN in details without claiming exact match."""
+    polls = [
+        {
+            "poll_index": 1,
+            "observation_valid": True,
+            "query_state_all_synced": True,
+            "internal_flags_ok": True,
+            "safe_search_candidate_present": True,
+            "safe_candidate_exact_query_correlation": "UNPROVEN",
+            "candidate_classifications": ["SAFE_EXPLICIT_SEARCH"],
+            "coexistence_observed": True,
+        }
+    ]
+    state, details = runner.classify_qsc2_so1_terminal_state(polls)
+    assert state == "QUERY_STATE_SYNCED_WITH_SAFE_SEARCH_SUGGESTION"
+    assert details["final_safe_candidate_exact_query_correlation"] == "UNPROVEN"
+
+
+# =============================================================================
+# 4. Actual JavaScript Execution in Node.js (Question A Hardening)
+# =============================================================================
+
+def test_node_actual_js_execution_full_sync_and_coexistence():
+    """Runs actual JS_OBSERVE_SEARCH_SUGGESTION_SURFACE in Node.js: all 5 surfaces synced + exact safe candidate."""
+    script = NODE_BASE_FIXTURE + "\nbuildMockSlackEnv();"
+    report = execute_observer_js_in_node(script)
+    assert report["observation_ok"] is True
+    assert report["observation_valid"] is True
+    assert report["query_state_all_synced"] is True
+    assert report["internal_flags_ok"] is True
+    assert report["safe_search_candidate_present"] is True
+    assert report["safe_candidate_exact_query_correlation"] == "EXACT_MATCH"
+    assert report["coexistence_observed"] is True
+    surfaces = report["surfaces_synced"]
+    assert surfaces["dom"] is True
+    assert surfaces["quill_text"] is True
+    assert surfaces["quill_delta"] is True
+    assert surfaces["texty"] is True
+    assert surfaces["display_query_ops"] is True
+
+
+def test_node_actual_js_execution_getter_exception_fail_closed():
+    """Runs actual JS_OBSERVE_SEARCH_SUGGESTION_SURFACE in Node.js: Quill getText throws exception."""
+    script = NODE_BASE_FIXTURE + "\nbuildMockSlackEnv({ quillThrow: true });"
+    report = execute_observer_js_in_node(script)
+    assert report["observation_ok"] is False
+    assert report["observation_valid"] is False
+    assert report["validity_failure_reason"] == "QUILL_TEXT_GETTER_EXCEPTION"
+    assert report["coexistence_observed"] is False
+
+
+def test_node_actual_js_execution_component_state_missing_fail_closed():
+    """Runs actual JS_OBSERVE_SEARCH_SUGGESTION_SURFACE in Node.js: component state missing."""
+    script = NODE_BASE_FIXTURE + "\nbuildMockSlackEnv({ noState: true });"
+    report = execute_observer_js_in_node(script)
+    assert report["observation_valid"] is True
+    assert report["internal_flags_ok"] is False
+    assert report["coexistence_observed"] is False
+
+
+def test_node_actual_js_execution_unproven_safe_candidate():
+    """Runs actual JS_OBSERVE_SEARCH_SUGGESTION_SURFACE in Node.js: safe candidate without query text."""
+    script = NODE_BASE_FIXTURE + """
+buildMockSlackEnv({
+    suggestions: [{
+        type: "queryUser",
+        suggestion_sub_type: "query-echo",
+        is_type_query_completion: true
+    }]
+});
+"""
+    report = execute_observer_js_in_node(script)
+    assert report["safe_search_candidate_present"] is True
+    assert report["safe_candidate_exact_query_correlation"] == "UNPROVEN"
+
+
+def test_node_actual_js_execution_mismatch_safe_candidate_no_coexistence():
+    """Runs actual JS_OBSERVE_SEARCH_SUGGESTION_SURFACE in Node.js: safe candidate with mismatched query text."""
+    script = NODE_BASE_FIXTURE + """
+buildMockSlackEnv({
+    suggestions: [{
+        type: "queryUser",
+        suggestion_sub_type: "query-echo",
+        is_type_query_completion: true,
+        string: "완전 다른 검색어"
+    }]
+});
+"""
+    report = execute_observer_js_in_node(script)
+    assert report["safe_search_candidate_present"] is True
+    assert report["safe_candidate_exact_query_correlation"] == "MISMATCH"
+    assert report["coexistence_observed"] is False
+
+
+def test_node_actual_js_execution_zero_interaction_verified():
+    """Runs actual JS_OBSERVE_SEARCH_SUGGESTION_SURFACE in Node.js with mutation traps and verifies zero interactions."""
+    script = NODE_BASE_FIXTURE + "\nbuildMockSlackEnv();"
+    # If any click/submit/scroll had been invoked, MockElement would have thrown an exception
+    report = execute_observer_js_in_node(script)
+    assert report["observation_ok"] is True
+
+
+# =============================================================================
+# 5. Mocked Live Branch Integration Tests
 # =============================================================================
 
 def test_mocked_live_branch_coexistence_success(tmp_path):
