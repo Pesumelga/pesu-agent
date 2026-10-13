@@ -555,7 +555,7 @@ def test_scenario_15_unsafe_slackbot_candidate_excluded():
 # =============================================================================
 
 def test_mismatch_candidate_never_promoted_to_coexistence():
-    """Proves that a safe candidate with MISMATCH query text cannot achieve coexistence."""
+    """Proves that a safe candidate with MISMATCH query text receives dedicated mismatch status."""
     polls = [
         {
             "poll_index": 1,
@@ -565,15 +565,42 @@ def test_mismatch_candidate_never_promoted_to_coexistence():
             "safe_search_candidate_present": True,
             "safe_candidate_exact_query_correlation": "MISMATCH",
             "candidate_classifications": ["SAFE_EXPLICIT_SEARCH"],
-            "coexistence_observed": False,
+            "coexistence_observed": True,
         }
     ]
     state, details = runner.classify_qsc2_so1_terminal_state(polls)
-    assert state == "QUERY_STATE_AND_SAFE_SUGGESTION_OBSERVED_WITHOUT_COEXISTENCE"
+    assert state == "QUERY_STATE_SYNCED_WITH_CANDIDATE_QUERY_MISMATCH"
     assert state != "QUERY_STATE_SYNCED_WITH_SAFE_SEARCH_SUGGESTION"
     assert details["final_safe_candidate_exact_query_correlation"] == "MISMATCH"
 
 
+def test_mismatch_followed_by_exact_match_reaches_coexistence():
+    """Proves that a transient MISMATCH in early poll followed by EXACT_MATCH in subsequent poll correctly qualifies."""
+    polls = [
+        {
+            "poll_index": 1,
+            "observation_valid": True,
+            "query_state_all_synced": True,
+            "internal_flags_ok": True,
+            "safe_search_candidate_present": True,
+            "safe_candidate_exact_query_correlation": "MISMATCH",
+            "candidate_classifications": ["SAFE_EXPLICIT_SEARCH"],
+            "coexistence_observed": True,
+        },
+        {
+            "poll_index": 2,
+            "observation_valid": True,
+            "query_state_all_synced": True,
+            "internal_flags_ok": True,
+            "safe_search_candidate_present": True,
+            "safe_candidate_exact_query_correlation": "EXACT_MATCH",
+            "candidate_classifications": ["SAFE_EXPLICIT_SEARCH"],
+            "coexistence_observed": True,
+        },
+    ]
+    state, details = runner.classify_qsc2_so1_terminal_state(polls)
+    assert state == "QUERY_STATE_SYNCED_WITH_SAFE_SEARCH_SUGGESTION"
+    assert details["final_safe_candidate_exact_query_correlation"] == "EXACT_MATCH"
 def test_unproven_candidate_records_unproven_correlation():
     """Proves that UNPROVEN candidate records UNPROVEN in details without claiming exact match."""
     polls = [
@@ -659,16 +686,19 @@ buildMockSlackEnv({
         type: "queryUser",
         suggestion_sub_type: "query-echo",
         is_type_query_completion: true,
-        string: "완전 다른 검색어"
+        string: "\uC644\uC804 \uB2E4\uB978 \uAC80\uC0C9\uC5B4"
     }]
 });
 """
     report = execute_observer_js_in_node(script)
     assert report["safe_search_candidate_present"] is True
     assert report["safe_candidate_exact_query_correlation"] == "MISMATCH"
-    assert report["coexistence_observed"] is False
+    assert report["coexistence_observed"] is True
 
-
+    # Terminal classification separates mismatch from non-coexistence
+    state, details = runner.classify_qsc2_so1_terminal_state([report])
+    assert state == "QUERY_STATE_SYNCED_WITH_CANDIDATE_QUERY_MISMATCH"
+    assert details["final_safe_candidate_exact_query_correlation"] == "MISMATCH"
 def test_node_actual_js_execution_zero_interaction_verified():
     """Runs actual JS_OBSERVE_SEARCH_SUGGESTION_SURFACE in Node.js with mutation traps and verifies zero interactions."""
     script = NODE_BASE_FIXTURE + "\nbuildMockSlackEnv();"
