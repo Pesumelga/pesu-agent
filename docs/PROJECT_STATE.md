@@ -1,6 +1,6 @@
 # PESU Agent — 현재 상태
 
-갱신: 2026-10-16. **현재 단계: Phase 13.5D / Task 11, 승인된 SST3 Live 1회 실행 종료 — FAIL_CLOSED / TRANSITION_TIMED_OUT. SST3 소비 완료, 재실행 금지.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 Phase 9 이하의 과거 기록은 역사 참고이며 현재 단계·승인·모델 선택을 대체하지 않는다.
+갱신: 2026-10-16. **현재 단계: Phase 13.5D / Task 11, 검색어 추출 수정의 오프라인 검증 완료, 사용자 위임 범위의 새 SST4 Live 1회 준비. SST3는 FAIL_CLOSED / TRANSITION_TIMED_OUT으로 소비 완료, 재실행 금지.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 Phase 9 이하의 과거 기록은 역사 참고이며 현재 단계·승인·모델 선택을 대체하지 않는다.
 
 ## 제품이 실제로 도달한 범위
 
@@ -29,7 +29,20 @@
 
 Engineering Lead가 [NEXT_ACTIONS.md](NEXT_ACTIONS.md)의 우선순위에 따라 승인 불필요 작업을 자율 진행한다. 실제 검색·새 실데이터 수집·실제 provider 비용/민감 처리·동결 계약 변경·중대 설계 변경·배포는 Product Owner의 별도 승인을 받는다. Slack 쓰기와 Slackbot은 금지다.
 
-승인된 query `26년 하반기 간담회`의 단일 실행은 종료됐다. 실패 증거를 보존하고 보고한 뒤, 다음 개발 작업은 아래 관측에 근거한 query 추출/상관 검사의 최소 오프라인 개선으로 관리한다. 새로운 Live 시도는 별도 계획과 명시적 승인이 필요하다. 이번 실행을 본문 수집·thread 열기·후속 검색·provider 호출·Task 12/production cutover로 확장하지 않는다.
+SST3의 단일 실행은 종료됐다. 이후 사용자는 검색어 추출·검증 불일치의 오프라인 재현·최소 수정·테스트·커밋과 새 Live 실행을 명시적으로 위임했다. Engineering Lead는 이를 **같은 query `26년 하반기 간담회`의 새 SST4 1회, 결과 화면 확인까지만**으로 한정한다. 커밋 후 새 HEAD/runner/protocol 해시에 승인 기록을 묶고, 실패 시 자동 재시도 없이 원본을 보존한다. 본문 수집·thread 열기·provider 호출·Task 12/production cutover로 확장하지 않는다.
+
+## 2026-10-16 검색어 추출 수정 / SST4 준비
+
+- Production 변경은 `JS_PROBE_POST_WAIT_SEARCH_STATE`에 한정했다. 유일한 search view 안의 query 전용 필드는 그대로 읽고, presentation title에서만 관측된 UI 안내 문구 `다음에 대한 결과:`를 시작 위치에서 한 번 제거한다. 업무 도메인/정답 규칙은 추가하지 않았다.
+- URL/header query가 다르거나 header/search view가 모호하면 query를 확정하지 않는다. 입력창 echo만으로 결과 검색어를 증명하는 fallback을 제거했다. 완료 판정의 정확한 query 일치·로딩 해제 조건 및 기존 원자적 제출 가드는 그대로다.
+- 관측된 제목을 합성 DOM fixture로 옮겨 실제 Production JS를 Node에서 실행했다. 최초 올바른 재현 run은 3 FAIL / 13 PASS로 제목 불일치와 editor-only 오판을 확인했다. 현재 관련 query/SST4/Production guard/transition 테스트 **90 PASS (25.08s)**. 지역화 제목의 전체 non-dry runner 경로 및 다른 query·접미어·상충 URL·중복 header·로딩을 검증했다. 실제 본문을 읽으려 하면 실패하는 DOM fixture도 사용한다.
+- 독립 검토에서 Production/수명주기 추가 결함은 발견되지 않았다. 실제 SST3 trace를 테스트 기본 fixture로 읽지 말라는 지적은, 허용된 제목 필드만 literal fixture로 복사하는 방식으로 반영했다.
+- SST3 runner·protocol·승인·marker·trace는 변경하지 않았다. 기존 artifact/output **784개 해시 동일**, 원자적 guard JS도 동일하다. 과거 protocol의 runtime closure는 이전 Production 해시를 계속 보존하므로 변경된 현재 코드를 과거 승인으로 실행할 수 없다.
+- `scripts/diagnose_task11_search_submit_transition_sst4.py`는 기존 단일 제출 runner의 versioned 후속이다. SST4 identity/path/scope를 사용하고, 기존 34개 역사 기준 외에 소비된 SST3 승인·marker·trace의 해시 3개도 검증한다. 새 protocol의 60개 runtime closure에서 변경한 항목은 위 Production observer 파일뿐이다. 새 프레임워크나 제출 경로는 만들지 않았다.
+- SST4 runner SHA-256: `2a8cb74b5209bf6d499496a3e9540473314d01a90581515ebc847f347ade8490`.
+- SST4 protocol SHA-256: `53b2d3a20a8e8c4a9cf766c8ead1ead6b0f8b106d7f6e240c79896228d6410d9`.
+- Production module SHA-256: `d1db3f5034fc7b03b8b676e78fb615ebc7876134b14014fc338a7cd536724b42`.
+- 이 준비 시점에는 SST4 authorization/marker/live trace가 없다. 실제 실행의 정확한 HEAD와 결과는 이후 실행 기록으로 구분한다.
 
 ## 2026-10-16 SST3 승인 Live 결과
 

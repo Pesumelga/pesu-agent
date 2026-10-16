@@ -1083,6 +1083,8 @@ JS_PROBE_POST_SUBMIT_INPUT_STATE = r"""
 
 JS_PROBE_POST_WAIT_SEARCH_STATE = r"""
 (() => {
+    const searchViews = Array.from(document.querySelectorAll('[data-qa="search_view"]')).filter(el => el && el.isConnected);
+    const searchView = searchViews.length === 1 ? searchViews[0] : null;
     let surfaceQueryAfter = null;
     try {
         const url = new URL(window.location.href);
@@ -1095,22 +1097,26 @@ JS_PROBE_POST_WAIT_SEARCH_STATE = r"""
         }
     } catch (e) {}
 
-    if (!surfaceQueryAfter) {
-        const header = document.querySelector('[data-qa="search_header_query"], [data-qa="search_query"], .c-search_header__title, [class*="titleContent"]');
-        if (header && (header.textContent || '').trim()) {
-            surfaceQueryAfter = header.textContent.trim();
+    // Query-only fields retain their literal contents. Presentation titles may
+    // prepend Slack's observed localized label; remove that label once, anchored
+    // at the beginning, never by matching the requested query as a substring.
+    let headerQuery = null;
+    let ambiguousHeader = false;
+    if (searchView) {
+        const fields = Array.from(searchView.querySelectorAll('[data-qa="search_header_query"], [data-qa="search_query"]')).filter(el => el && el.isConnected);
+        const headers = fields.length ? fields : Array.from(searchView.querySelectorAll('.c-search_header__title, [class*="titleContent"]')).filter(el => el && el.isConnected);
+        ambiguousHeader = headers.length > 1;
+        if (headers.length === 1) {
+            const raw = (headers[0].textContent || '').trim();
+            headerQuery = (fields.length ? raw : raw.replace(/^다음에 대한 결과:\s*/, '')).trim() || null;
         }
     }
-
-    if (!surfaceQueryAfter) {
-        const inputElem = document.querySelector('[data-qa="search_input_box"] .ql-editor');
-        if (inputElem && (inputElem.textContent || '').trim()) {
-            surfaceQueryAfter = inputElem.textContent.trim();
-        }
+    if (!searchView || ambiguousHeader || (surfaceQueryAfter && headerQuery && surfaceQueryAfter !== headerQuery)) {
+        surfaceQueryAfter = null;
+    } else {
+        surfaceQueryAfter = surfaceQueryAfter || headerQuery;
     }
-
-    const searchViews = Array.from(document.querySelectorAll('[data-qa="search_view"]')).filter(el => el && el.isConnected);
-    const searchView = searchViews.length === 1 ? searchViews[0] : null;
+    // An editor echo alone cannot identify a completed search result surface.
 
     // Skeletons / Loading State (Verified against live Slack surface)
     const skeletons = searchView
