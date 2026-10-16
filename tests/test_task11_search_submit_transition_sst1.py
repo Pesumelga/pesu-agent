@@ -156,7 +156,7 @@ def test_sst1_static_safety_contracts():
 
 def test_sst1_dry_run_execution(tmp_path):
     dry_out = tmp_path / "dry_trace.json"
-    res = sst1_runner.run_sst1_qualification(dry_run=True, output_file_override=dry_out)
+    res = sst1_runner.run_sst1_qualification(dry_run=True, output_file_override=dry_out, authorization_file_override=tmp_path / "no_auth.json")
     assert res["verdict"] == "DRY_RUN_PASS"
     assert res["diagnostic_verdict"] == "SEARCH_SUBMIT_TRANSITION_SUCCESS"
     assert res["checks"]["query_entry_executed"] is True
