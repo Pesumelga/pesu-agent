@@ -99,11 +99,13 @@ JS_PROBE_SEARCH_READINESS_BEFORE_SUBMIT = r"""
 
     let fiber = getReactFiber(inputElem) || getReactFiber(inputElem.parentElement) || getReactFiber(inputElem.closest('[data-qa="search_input_box"]'));
     let searchInputBoxInstance = null;
+    let currentFiber = null;
     let depth = 0;
     while (fiber && depth < 40) {
         const node = fiber.stateNode;
         if (node && typeof node === 'object' && typeof node.getTextyOps === 'function' && (typeof node.onUserInput === 'function' || typeof node.onUserQueryChange === 'function' || typeof node.setTextyRef === 'function')) {
             searchInputBoxInstance = node;
+            currentFiber = fiber;
             break;
         }
         fiber = fiber.return;
@@ -115,57 +117,62 @@ JS_PROBE_SEARCH_READINESS_BEFORE_SUBMIT = r"""
         return report;
     }
 
+    const normalizeOpsToString = (ops) => {
+        if (!Array.isArray(ops)) return '';
+        return ops.map(op => (op && typeof op.insert === 'string' ? op.insert : '')).join('').trim();
+    };
+
     // 1. DOM text surface
-    const domText = normalizeQuery(inputElem.textContent || inputElem.innerText || '');
-    const domSynced = (domText === targetNorm && targetNorm.length > 0);
+    let domSynced = false;
+    try {
+        const domText = normalizeQuery(inputElem.textContent || inputElem.innerText || '');
+        domSynced = (domText === targetNorm && targetNorm.length > 0);
+    } catch (_) { domSynced = false; }
 
     // 2. Quill text surface
-    let quillText = '';
+    let quillTextSynced = false;
     const textyObj = searchInputBoxInstance.texty || null;
-    if (textyObj && textyObj.instance && textyObj.instance.quill && typeof textyObj.instance.quill.getText === 'function') {
-        try { quillText = normalizeQuery(textyObj.instance.quill.getText()); } catch (_) {}
-    }
-    const quillTextSynced = (quillText === targetNorm && targetNorm.length > 0);
+    try {
+        if (textyObj && textyObj.instance && textyObj.instance.quill && typeof textyObj.instance.quill.getText === 'function') {
+            const quillText = normalizeQuery(textyObj.instance.quill.getText());
+            quillTextSynced = (quillText === targetNorm && targetNorm.length > 0);
+        }
+    } catch (_) { quillTextSynced = false; }
 
     // 3. Quill delta ops surface
-    let quillDeltaText = '';
-    if (typeof searchInputBoxInstance.getTextyOps === 'function') {
-        try {
+    let quillDeltaSynced = false;
+    try {
+        if (typeof searchInputBoxInstance.getTextyOps === 'function') {
             const ops = searchInputBoxInstance.getTextyOps();
-            if (Array.isArray(ops)) {
-                quillDeltaText = normalizeQuery(ops.map(op => (op && typeof op.insert === 'string') ? op.insert : '').join(''));
-            }
-        } catch (_) {}
-    }
-    const quillDeltaSynced = (quillDeltaText === targetNorm && targetNorm.length > 0);
+            const deltaRaw = normalizeOpsToString(ops);
+            quillDeltaSynced = (normalizeQuery(deltaRaw) === targetNorm && targetNorm.length > 0);
+        }
+    } catch (_) { quillDeltaSynced = false; }
 
     // 4. Texty model getContents surface
-    let textyModelText = '';
-    if (textyObj && typeof textyObj.getContents === 'function') {
-        try {
-            const contents = textyObj.getContents();
-            if (contents && Array.isArray(contents.contents)) {
-                textyModelText = normalizeQuery(contents.contents.map(op => (op && typeof op.insert === 'string') ? op.insert : '').join(''));
-            }
-        } catch (_) {}
-    }
-    const textyModelSynced = (textyModelText === targetNorm && targetNorm.length > 0);
-
-    // 5. Display query ops / Redux stateNode surface
-    let displayQueryText = '';
+    let textyModelSynced = false;
     try {
-        const instState = searchInputBoxInstance.state || null;
-        const instProps = searchInputBoxInstance.props || null;
-        const rOps = (instState && instState.displayQuery) ? instState.displayQuery : ((instProps && instProps.initialQuery) ? instProps.initialQuery : null);
-        if (typeof rOps === 'string') {
-            displayQueryText = normalizeQuery(rOps);
-        } else if (Array.isArray(rOps)) {
-            displayQueryText = normalizeQuery(rOps.map(op => (op && typeof op.insert === 'string') ? op.insert : '').join(''));
-        } else if (rOps && Array.isArray(rOps.ops)) {
-            displayQueryText = normalizeQuery(rOps.ops.map(op => (op && typeof op.insert === 'string') ? op.insert : '').join(''));
+        if (textyObj && typeof textyObj.getContents === 'function') {
+            const contents = textyObj.getContents();
+            const tOps = (contents && Array.isArray(contents.contents)) ? contents.contents : [];
+            const tRaw = normalizeOpsToString(tOps);
+            textyModelSynced = (normalizeQuery(tRaw) === targetNorm && targetNorm.length > 0);
         }
-    } catch (_) {}
-    const displayQuerySynced = (displayQueryText === targetNorm && targetNorm.length > 0);
+    } catch (_) { textyModelSynced = false; }
+
+    // 5. Display query ops / Redux stateNode surface (Authoritative Production & QSC2 Contract Parity)
+    let displayQuerySynced = false;
+    try {
+        const propsToInspect = (currentFiber && currentFiber.memoizedProps && Object.prototype.hasOwnProperty.call(currentFiber.memoizedProps, 'displayQueryOps'))
+            ? currentFiber.memoizedProps
+            : (searchInputBoxInstance ? searchInputBoxInstance.props : null);
+
+        if (propsToInspect && Object.prototype.hasOwnProperty.call(propsToInspect, 'displayQueryOps')) {
+            const dOps = propsToInspect.displayQueryOps;
+            const rRaw = normalizeOpsToString(dOps);
+            displayQuerySynced = (normalizeQuery(rRaw) === targetNorm && targetNorm.length > 0);
+        }
+    } catch (_) { displayQuerySynced = false; }
 
     report.surfaces_synced = {
         dom: domSynced,
