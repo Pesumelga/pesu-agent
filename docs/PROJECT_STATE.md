@@ -1,0 +1,449 @@
+# PESU Agent — 현재 상태
+
+갱신: 2026-10-16. **현재 단계: Phase 13.5D / Task 11, SST3 단일 Live 검색 승인 대기.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 Phase 9 이하의 과거 기록은 역사 참고이며 현재 단계·승인·모델 선택을 대체하지 않는다.
+
+## 제품이 실제로 도달한 범위
+
+목표는 조직의 논의·결정·업무 맥락에 대해 자연어 질문을 받고, 출처가 연결된 사실·추론·모순·불확실성을 구분해 답하는 것이다. 특정 업무 도메인에 한정하지 않는다.
+
+| 영역 | 확인된 구현 / 검증 수준 | 아직 입증되지 않은 부분 |
+| --- | --- | --- |
+| 제품 화면·실행·설정 | `src/pesu_agent/ui/` 및 기존 패키징/동의/로그인 코드 존재. Phase 10–12 완료는 이전 인계 기록이다. | 이번 작업에서 패키지/사용자 화면을 새로 실행하지 않았다. |
+| Slack 검색 | 전용 WebView Host와 `webview_slack_search.py`의 안전 검색 경로 존재. SST3 실제 JS를 Node에서 실행한 non-dry runner 오프라인 경로 통과. | SST3 실제 Slack 검색 제출과 결과 화면 전환은 미실행. |
+| 근거·주장·업무항목 | `graph_models.py`, `claim_verification.py`, `workitem_synthesis.py`, `production_trace_coordinator.py`에 graph·검증·다단계 합성 구현 존재. 과거 Phase 13.5C의 composed qualification은 fixture/stub 기준 통과다. | 실제 Slack + 실제 provider를 결합한 전체 흐름 통과는 입증되지 않았다. |
+| 근거 답변과 UI 연결 | 답변 구성/표시 코드와 production-shaped 오프라인 E2E 테스트 존재. `InvestigationService._get_or_create_orchestrator()`는 현재 기존 `InvestigationOrchestrator`를 생성한다. | 새 ProductionRealTraceCoordinator 경로의 제품 UI cutover는 아직 완료로 볼 수 없다. |
+
+과거 real-model verifier qualification은 개별 단계의 역사 검증이다. 현재 실제 Slack 전체 흐름 성공으로 확대 해석하지 않는다. Stage 1A/1B/2/2.5의 기존 계약·모델·동결 증거를 임의로 다시 열지 않는다.
+
+## SST3 실행 준비와 증거
+
+- 검증된 SST3 실행 코드 기준 커밋: `2a1e58e62704c34a3c9a93c3603109f119b4ce3c`. 운영/테스트 문서 정비 커밋은 이후 HEAD를 바꾼다. **승인 대상 HEAD는 실행 직전 `git rev-parse HEAD`의 실제 값**이며 이전 승인을 재사용하지 않는다.
+- Runner SHA-256: `c3df20e5df80d2ed297e9a9d4d6ba5e792f648ae2c9a11f7ab9b2baf17664a00`.
+- Protocol SHA-256: `0d3e8c4979e7fdac486358dd4d09d271b099b238b2d207027c26e555b37c46c1`.
+- 상세 계약·수정·이전 검증: [SST3_EXECUTION_PATH_AUDIT.md](SST3_EXECUTION_PATH_AUDIT.md). 직전 집중 Python 82 PASS, Node 6 PASS는 오프라인 증거다.
+- SST1/SST2는 소비된 실패 시도다. SST3 실제 marker·authorization·live trace는 없다. 실제 Slack/LLM 실행은 이번 작업에서도 수행하지 않는다.
+- 기존 확장 테스트 143 PASS / 1 FAIL은 SST2 dry-run 테스트가 동결된 과거 Live 승인을 기본 경로에서 읽어 생긴 HEAD 불일치였다. runner/동결 승인 내용은 유지하고 테스트 fixture만 임시 경로로 격리한다. stale 승인 거부 검증은 별도로 유지한다.
+- 이전 QSC2 테스트가 비동결 dry-run 파일을 재생성한 내역은 감사 문서에 기록돼 있다. 이번에는 해당 테스트의 출력을 임시 경로로 바꿔 재발을 막는다. 이전 원본이 복원됐다고 주장하지 않는다.
+
+## 현재 운영 / 인계
+
+Engineering Lead가 [NEXT_ACTIONS.md](NEXT_ACTIONS.md)의 우선순위에 따라 승인 불필요 작업을 자율 진행한다. 실제 검색·새 실데이터 수집·실제 provider 비용/민감 처리·동결 계약 변경·중대 설계 변경·배포는 Product Owner의 별도 승인을 받는다. Slack 쓰기와 Slackbot은 금지다.
+
+현재 최우선 다음 작업은 **별도 승인된 SST3 query `26년 하반기 간담회` 최대 1회 제출과 결과 화면 확인**이다. 결과 수 0건도 허용하고 본문 수집·thread 열기·후속 검색·provider 호출·Task 12/production cutover로 확장하지 않는다. 승인 요청 전 최종 HEAD/해시/one-shot 상태와 오프라인 검증 결과를 대조한다.
+
+## 2026-10-16 운영 체계 정비 검증
+
+- 독립 조사에서 SST2 runner와 기존 실패 테스트의 Git blob이 `95ba4cf`와 `2a1e58e` 사이에 동일함을 확인했다. 과거 HEAD에서도 동일한 승인 거부가 발생했고, 올바른 임시 승인에서는 통과했다. HEAD·runner hash·protocol hash·scope가 잘못되면 거부하는 8개 오프라인 probe를 확인했다.
+- SST1/SST2/SST3, SFC2 Production guard, search safety, QSC2 observer의 관련 회귀 테스트: **145 PASS (49.95s)**. 과거의 143 PASS / 1 FAIL 기록은 덮어쓰지 않고, fixture 수정 후 결과로 구분한다.
+- 테스트 수정은 SST2/QSC2 테스트 파일에만 적용했다. Production runner·승인 gate·동결 승인/프로토콜/증거는 변경하지 않았다. 관련 테스트 뒤 기존 artifact/output **781개 해시가 모두 동일**하다.
+- 검토에서 테스트의 보안 약화나 문서 승인 경계의 추가 문제는 발견되지 않았다. SST3 실행 코드와 protocol 해시도 위 값 그대로다.
+- 근거→주장→업무항목의 추가 E2E를 포함한 합산 실행은 완료되지 않아 중단했다. 제한된 별도 재현에서도 첫 테스트 본문 진입 전 Windows `asyncio`/AnyIO 준비의 `_fallback_socketpair → accept`에서 대기했고, 40초 child timeout 후 종료를 확인했다. 진단의 네트워크 차단 guard/실행 환경 영향을 포함해 원인은 미확정이며, 제품 코드 회귀라고 단정하지 않는다. 이번에 이 E2E가 통과했다고 기록하지 않는다. 상세 stack과 종료 기록은 `.runtime/production-e2e-diagnostic-71b41723c9394c6ca690f95f80cfa414/`에 있다.
+- 이 후속 비동기 테스트 준비 문제는 별도로 관리한다. SST3는 동기식 Host/JS 호출 경로로, 현재 해당 경로의 실제 JS 오프라인 검증은 통과했다. 새로운 실제 Slack/실제 provider 전체 흐름을 주장하거나 비동기 제약을 우회해 실행하지 않는다.
+
+---
+
+# 역사 참고 — 기존 Project State & Context (Phase 9 시점, 원문 보존)
+
+> [!NOTE]
+> This document serves as the repository-local, persistent source of truth for the project state.
+> It contains no secrets, API keys, real corporate Slack raw texts, or personal data.
+
+---
+
+## 1. Project Overview & Current Phase
+
+- **Project**: PESU Agent (Autonomous Read-Only Slack Investigation Agent for Tax/Finance Ops)
+- **Current Phase**: **Phase 9.8 — User Main Hidden Lease Safety Feasibility**
+- **Second Full Main Status**: `SECOND_FULL_MAIN_INVESTIGATION_STATUS = CLOSED_NO_REPRODUCIBLE_PATH_FOUND`
+- **Recent Input State Anomaly**: `RECENT_INPUT_STATE_ANOMALY = observed (unresolved)`
+- **Slack Evidence Infrastructure Status**: `SLACK_EVIDENCE_INFRASTRUCTURE_STATUS = FROZEN`
+- **Synthetic RTS Status**: `SYNTHETIC_RTS_STATUS = FINALIZED`
+- **Synthetic Auth Status**: `SYNTHETIC_AUTH_STATUS = FINALIZED`
+- **Policy RTS Readiness**: `PROCEED_WITH_CONTROLLED_VALIDATION`
+- **In-Slack Experience Policy Status**: `GUIDELINE_UNRESOLVED_NOT_HARD_BLOCKER`
+- **Search Primitive Hardening Status**: `SEARCH_PRIMITIVE_HARDENING_STATUS = FINALIZED`
+- **Synthetic Orchestrator Status**: `SYNTHETIC_ORCHESTRATOR_STATUS = FINALIZED`
+- **Authoritative Historical Brain UUID**: `05cd34f1-6e3f-4d3c-8cfb-a4ebccfe27c1`
+- **Active Workspace**: `c:\Users\HEUM\Documents\pesu-agent`
+
+---
+
+## 2. Completed Phases Summary
+
+| Phase | Description | Status | Verification & Artifacts |
+| :--- | :--- | :---: | :--- |
+| **Phase 1** | Slack Windows App Automation & UIA DOM Inspector | **DONE** | Process lifecycle, UIA selector discovery |
+| **Phase 2** | Secondary Hidden Agent Window Isolation | **DONE** | User Main Window 100% untouched |
+| **Phase 3** | Search Modal & Thread Context Collection | **DONE** | Multi-result context crawler |
+| **Phase 4** | **Slack Evidence Infrastructure Freeze** (Closure 4.1~4.4) | **FROZEN** | Gates A, B, C, D verified (`unexpected_write_observed_in_test_scope = false`) |
+| **Phase 5** | AI Investigation Foundation (OpenRouter Provider & Analyzer) | **DONE** | ModelProvider abstraction, Grounded Analyzer, Cost tracking |
+| **Phase 6.1** | Live OpenRouter Initial Benchmark (10 PESU Cases) | **DONE** | `live_calls_total = 109`, `actual_cost_total = $0.8366 USD` (Historical Exploratory) |
+| **Phase 6.2** | Live 3-Run Stability & Failure Analysis (4 Contenders + Sol Ref) | **DONE** | `live_calls_total = 124`, `actual_cost_total = $0.3377 USD` (Historical Stability Reference) |
+| **Phase 6.3** | Evaluator Repair & Regression Fixtures | **DONE** | Fixed PESU-03/06/10 Evaluator, added 4 regression test variations (`5 passed`) |
+| **Phase 6.3.1** | Clean Live Re-Benchmark & Durable Persistence | **DONE** | 40/40 calls persisted to `output/benchmark_raw/`, `offline_rescore_verified = true`, `actual_cost = $0.0787 USD` |
+| **Phase 6.3.2** | Offline Benchmark Audit & Dominance Analysis | **DONE** | Per-case full audit, hard-case analysis, dominance verification (`NEW_EXTERNAL_CALLS = 0`) |
+| **Phase 6.3.3** | Evaluator Semantic Hardening & Minimal Stability Gate | **DONE** | Synonym clusters, canonical elapsed time, structured state primacy, 6 regression tests passed (`NEW_EXTERNAL_CALLS = 0`) |
+| **Phase 6.3.4** | Luna Medium Final Stability Gate | **FINALIZED** | 30/30 (100%) Strict Pass, Quality Mean 98.80pt (Stddev 1.49pt), 0 Hallucinations, Cost $0.00161/call (`actual_cost = $0.0315 USD`) |
+| **Phase 7** | Investigation Planner Benchmark | **DONE** | 20 calls (2 candidates × 10 cases), Intent Recall 100%, 0 Hallucinated Entities, Cost $0.0142 USD (`output/benchmark_raw/phase_7_planner/`) |
+| **Phase 8** | Synthetic End-to-End Investigation Orchestrator | **FINALIZED** | Full E2E Pipeline (`SYNTHETIC_ORCHESTRATOR_STATUS = FINALIZED`), 8/8 (100%) Strict PASS, Durable Persistence (`output/investigations/`) |
+| **Phase 8.1** | Retrieval / Selection / Sufficiency Failure Analysis & Fix | **DONE** | Root cause diagnosis across Cases C, D, E; Conclusiveness stop logic refined; 6/6 (100%) E2E PASS verified |
+| **Phase 8.2** | Multi-Round Retrieval & Clue Tracking Verification | **DONE** | Cases G & H Multi-Round Clue & Redirect Discovery verified (R1 Recall 50% ➔ R2 Recall 100%, New Gold in R2 = True), 8/8 (100%) E2E PASS, Total Cost $0.0229 USD |
+| **Phase 9.5.2** | **Safe Typed Global Search Primitive Hardening** | **FINALIZED** | Removed generic contenteditable & URL navigation fallbacks, added pre-dispatch reverification (TOCTOU defense), strict fail-closed |
+| **Phase 9.5.3** | **Verified Search UI Activation** | **FINALIZED** | Exact `button[data-qa="top_nav_search"]` activation, bounded polling input mount, fail-closed, re-frozen |
+| **Phase 9.5.4** | **PowerShell-Free Runtime Bootstrap** | **DONE** | Pure Python Windows detached process launcher, zero PowerShell, `pesu-start.cmd`, 8 unit tests passed |
+| **Phase 9.6** | **Official Slack RTS Feasibility Spike** | **DONE** | Granular scopes (`search:read.*`), OAuth PKCE semantics, in-memory zero persistence contract verified |
+| **Phase 9.6.2** | **Synthetic Slack RTS SearchBackend & Token Protocol** | **DONE** | `SlackRtsSearchBackend`, `RtsSearchResponse` schema, `(channel_id, message_ts)` mapping, budget <= 6, 6 unit tests passed |
+| **Phase 9.6.4** | **Synthetic Slack OAuth 2.0 PKCE Auth Infrastructure** | **DONE** | `SlackPkceAuthManager`, RFC 7636 S256 Public Client, Secret Redaction, TokenProvider handoff, 11 unit tests passed |
+
+---
+
+## 3. Frozen Components (`SLACK_EVIDENCE_INFRASTRUCTURE = FROZEN`)
+
+The following core components have passed rigorous read-only safety gates and are **FROZEN**. No arbitrary modifications are permitted without explicit gate re-verification:
+
+1. `src/pesu_agent/adapters/slack_cdp.py` (`SlackBootstrapAdapter`)
+2. `src/pesu_agent/lifecycle/slack_agent_window.py`
+3. `src/pesu_agent/lifecycle/slack_lifecycle.py`
+4. `src/pesu_agent/security/read_only_barrier.py`
+5. `src/pesu_agent/evidence/slack_evidence_collector.py`
+
+**Safety Metrics**:
+- `raw_cdp_direct_callers_outside_approved_adapter = 0`
+- `unexpected_write_observed_in_test_scope = false`
+- `runtime_main_agent_actions = 0`
+
+---
+
+## 4. Current Safety Boundaries
+
+- **HARD BLOCK**: `actual Slack data → external LLM = BLOCKED`
+  - `actual_slack_data_external_egress = 0` (Zero Slack messages/threads/attachments sent to external LLMs).
+  - Planner takes only the user's natural language question (no Slack text input).
+  - Analyzer is disabled during Phase 9 retrieval quality benchmarking.
+  - Evaluation is performed locally by matching metadata/identifiers (`RealSlackRetrievalEvaluator`).
+
+---
+
+## 5. Production Model Configuration
+
+```yaml
+DEFAULT_PLANNER_MODEL: "openai/gpt-5.6-luna"
+DEFAULT_PLANNER_REASONING_EFFORT: "medium"
+DEFAULT_PLANNER_STATUS: "FINALIZED"
+
+DEFAULT_ANALYZER_MODEL: "openai/gpt-5.6-luna"
+DEFAULT_ANALYZER_REASONING_EFFORT: "medium"
+DEFAULT_ANALYZER_STATUS: "FINALIZED"
+
+BUDGET_BACKGROUND_MODEL: "deepseek/deepseek-v4-flash"
+BUDGET_BACKGROUND_STATUS: "PROVISIONAL"
+```
+
+---
+
+## 6. Phase 9 Real Slack Retrieval Quality Benchmark Architecture
+
+- **Objective**: Measure real Slack evidence retrieval precision, recall, and multi-round search expansion performance without AI analysis or data egress.
+- **Search Adapter**: `src/pesu_agent/search/real_slack_backend.py` (`RealSlackSearchBackend` wrapping frozen `SlackEvidenceCollector`).
+- **Evaluator**: `src/pesu_agent/benchmark/real_slack_retrieval_evaluator.py` (`RealSlackRetrievalEvaluator`).
+- **Metrics Computed**:
+  - `retrieval_recall`: Overall gold message recall ($0.0 \sim 1.0$)
+  - `recall_at_5`, `recall_at_10`, `recall_at_20`: Top-K recall
+  - `thread_recall`: Gold thread recall
+  - `round_1_recall`: Recall after Round 1 queries
+  - `round_2_recall`: Cumulative recall after Round 2 queries
+  - `round_2_recall_gain`: Incremental gain in Round 2 ($R2 - R1$)
+  - `new_gold_in_round_2`: True if Round 2 expansion discovered new gold evidence
+  - `irrelevant_result_ratio`: Percentage of retrieved messages not matching gold criteria
+  - `duplicate_ratio`: Percentage of duplicates filtered by global deduplicator
+  - `time_to_first_gold_evidence`: Latency in ms to retrieve the first gold item
+  - `total_search_queries`: Count of executed Slack search queries
+- **Case Input Schema**: `RealSlackGoldCase` loaded from `config/real_slack_gold_cases.json` (untracked in git):
+  ```json
+  [
+    {
+      "case_id": "REAL-CASE-01",
+      "question": {"question": "...", "context_hint": "..."},
+      "gold_message_identifiers": ["https://workspace.slack.com/archives/.../p...", "...ts..."],
+      "gold_thread_identifiers": ["...ts..."],
+      "optional_time_range": {"start": "2026-08-01", "end": "2026-08-15"},
+      "optional_actor_hints": ["담당자A", "결재자B"],
+      "notes": "..."
+    }
+  ]
+  ```
+- **Execution Scripts & Tools**:
+  - `scripts/create_real_slack_gold_case.py`: Interactive CLI Gold Case Authoring Helper (no manual JSON editing required).
+  - `scripts/audit_phase_9_1_search_sanity.py`: Phase 9.1 Real Slack Search Sanity & Selector Audit Script.
+  - `scripts/run_phase_9_real_slack_retrieval_benchmark.py`: Real Slack Retrieval Benchmark Runner (Compatible with `InvestigationPlanner(provider, config)`).
+- **Slack-Native Query Compiler**: `src/pesu_agent/search/slack_query_compiler.py` (`SlackQueryCompiler` decomposing boolean expressions and parenthesized OR queries into native simple queries + union).
+- **Phase 9.1 Sanity Findings**:
+  - `REAL-CASE-01`, `REAL-CASE-02` invalidated (contained textual descriptions rather than permalinks).
+  - `REAL-CASE-03`: `gold_identifier_normalization_success = 3/3 (100%)`.
+  - Root Cause of Repeated Results: Slack search doesn't accept boolean `AND/OR/(...)` syntax; now compiled via `SlackQueryCompiler`.
+- **Test Suite Status**: **108 passed in 46.2s (0 failures, 0 warnings)**.
+
+---
+
+## 7. Next Steps
+
+1. Phase 9 Design: PII Masking & User Consent Gate Design (prior to connecting real Slack messages).
+2. SearchBackend Adapter for Read-Only Slack Infrastructure.
+
+---
+
+## 7. Next Steps
+
+1. Review Phase 8 Synthetic End-to-End Results.
+2. Architecture Design for PII Masking & User Consent Barrier (prior to connecting real Slack messages).
+3. SearchBackend Adapter for Read-Only Slack Infrastructure.
+
+---
+
+## 3. Frozen Components (`SLACK_EVIDENCE_INFRASTRUCTURE = FROZEN`)
+
+The following core components have passed rigorous read-only safety gates and are **FROZEN**. No arbitrary modifications are permitted without explicit gate re-verification:
+
+1. `src/pesu_agent/adapters/slack_cdp.py` (`SlackBootstrapAdapter`)
+2. `src/pesu_agent/lifecycle/slack_agent_window.py`
+3. `src/pesu_agent/lifecycle/slack_lifecycle.py`
+4. `src/pesu_agent/security/read_only_barrier.py`
+5. `src/pesu_agent/evidence/slack_evidence_collector.py`
+
+**Safety Metrics**:
+- `raw_cdp_direct_callers_outside_approved_adapter = 0`
+- `unexpected_write_observed_in_test_scope = false`
+- `runtime_main_agent_actions = 0`
+
+---
+
+## 4. Current Safety Boundaries
+
+- **HARD BLOCK**: `actual Slack → external LLM = BLOCKED`
+  - `EvidencePackage.is_synthetic == False` transmission is strictly prevented by `ExternalTransmissionBlockedError`.
+  - All benchmarks execute solely against synthetic fixtures (`is_synthetic == True`).
+  - `actual_company_slack_data_sent = False`
+
+---
+
+## 5. Production Model Configuration
+
+```yaml
+DEFAULT_ANALYZER_MODEL: "openai/gpt-5.6-luna"
+DEFAULT_ANALYZER_REASONING_EFFORT: "medium"
+DEFAULT_ANALYZER_STATUS: "FINALIZED"
+
+PLANNER_BEST_DEFAULT: "openai/gpt-5.6-luna (medium)"
+PLANNER_BEST_VALUE: "deepseek/deepseek-v4-flash"
+
+BUDGET_BACKGROUND_MODEL: "deepseek/deepseek-v4-flash"
+BUDGET_BACKGROUND_STATUS: "PROVISIONAL"
+```
+
+---
+
+## 6. Phase 7 Investigation Planner Benchmark Metrics
+
+- **Dataset**: 2 Candidates × 10 PESU Cases = **20 Evaluations**
+- **Persistence Directory**: `output/benchmark_raw/phase_7_planner/`
+- **Total Cost**: `$0.0142 USD` (Budget $0.10 guarded)
+
+| Candidate Model | Runs | Plan Quality Mean | Intent Recall | Actor Coverage | Temporal Coverage | Question Coverage | Query Count Mean | Hallucinated Entities | Latency Mean | Cost/Call |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **luna-medium** | 10회 | **98.1 pt** | **100.0%** | **96.0%** | **100.0%** | **100.0%** | 4.3개 | **0건** | **7,421ms** | $0.001140 |
+| **deepseek-v4-flash** | 10회 | **97.4 pt** | **100.0%** | **96.0%** | **100.0%** | 96.0% | 4.7개 | **0건** | 25,159ms | **$0.000277** |
+
+---
+
+## 7. Next Steps
+
+1. Review Phase 7 Planner Benchmark Results.
+2. Architecture Design for PII Masking & Consent Barrier (prior to connecting real Slack messages).
+3. End-to-End Synthetic Pipeline Integration Test (Planner $\to$ Evidence Collector $\to$ Analyzer).
+
+---
+
+## 3. Frozen Components (`SLACK_EVIDENCE_INFRASTRUCTURE = FROZEN`)
+
+The following core components have passed rigorous read-only safety gates and are **FROZEN**. No arbitrary modifications are permitted without explicit gate re-verification:
+
+1. `src/pesu_agent/adapters/slack_cdp.py` (`SlackBootstrapAdapter`)
+2. `src/pesu_agent/lifecycle/slack_agent_window.py`
+3. `src/pesu_agent/lifecycle/slack_lifecycle.py`
+4. `src/pesu_agent/security/read_only_barrier.py`
+5. `src/pesu_agent/evidence/slack_evidence_collector.py`
+
+**Safety Metrics**:
+- `raw_cdp_direct_callers_outside_approved_adapter = 0`
+- `unexpected_write_observed_in_test_scope = false`
+- `runtime_main_agent_actions = 0`
+
+---
+
+## 4. Current Safety Boundaries
+
+- **HARD BLOCK**: `actual Slack → external LLM = BLOCKED`
+  - `EvidencePackage.is_synthetic == False` transmission is strictly prevented by `ExternalTransmissionBlockedError`.
+  - All benchmarks execute solely against synthetic fixtures (`is_synthetic == True`).
+  - `actual_company_slack_data_sent = False`
+
+---
+
+## 5. Production Model Finalization & Routing Status
+
+```yaml
+DEFAULT_MODEL: "openai/gpt-5.6-luna"
+DEFAULT_REASONING_EFFORT: "medium"
+DEFAULT_MODEL_STATUS: "FINALIZED"
+BUDGET_BACKGROUND_MODEL: "deepseek/deepseek-v4-flash (PROVISIONAL)"
+```
+
+### Model Classification & Dominance
+- **`luna-medium`**: **FINALIZED PRODUCTION WORKHORSE** (Quality 98.80pt, Stddev 1.49pt, Strict 100%, 9.0s latency, $0.00161/call).
+- **`luna-high`**: **`DOMINATED_BY_LUNA_MEDIUM`** (Equal quality 98.80pt, but 44% higher latency and 49% higher cost).
+- **`luna-xhigh`**: **`NOT_COST_EFFECTIVE / PRACTICALLY_DOMINATED_FOR_PESU_DEFAULT`** (Equal practical quality 99.1pt vs 98.8pt (+0.3pt diff is negligible), but 2.3x higher latency (23s) and 2.2x higher cost ($0.00361)).
+- **`deepseek-v4-flash`**: **`BUDGET_BACKGROUND_PROVISIONAL`** (Quality 98.2pt, Strict 90%, Cost $0.00027/call, Latency 44.3s for batch/async).
+
+---
+
+## 6. luna-medium 30-Run Full Verification Metrics (Phase 6.3.4)
+
+- **Dataset**: 10 PESU Cases × 3 Runs = **30 Total Evaluations**
+- **Persistence Path**: `output/benchmark_raw/phase_6_3_4/luna-medium/`
+
+| Metric | Measured Value | Acceptance Threshold | Result |
+| :--- | :---: | :---: | :---: |
+| **Quality Mean** | **98.80 pt** | $\ge 90.0$ pt | **PASS (✓)** |
+| **Quality Stddev** | **1.49 pt** | $< 5.0$ pt | **PASS (✓)** |
+| **Overall Strict Success Rate** | **100.0% (30/30)** | $\ge 90.0\%$ | **PASS (✓)** |
+| **Per-Case Minimum Strict Rate** | **100% (3/3 for all 10 cases)** | $\ge 2/3$ | **PASS (✓)** |
+| **Factual Accuracy** | **100.0%** | $100.0\%$ | **PASS (✓)** |
+| **Citation Precision** | **100.0%** | $100.0\%$ | **PASS (✓)** |
+| **Citation Recall** | **100.0%** | $100.0\%$ | **PASS (✓)** |
+| **Contradiction Detection** | **92.0%** | $\ge 80.0\%$ | **PASS (✓)** |
+| **Uncertainty Calibration** | **100.0%** | $\ge 90.0\%$ | **PASS (✓)** |
+| **Unsupported Claims** | **0 건** | $= 0$ 건 | **PASS (✓)** |
+| **Hallucinated Evidence IDs** | **0 건** | $= 0$ 건 | **PASS (✓)** |
+| **Structured Field Success Rate** | **100.0% (6/6)** | $100.0\%$ | **PASS (✓)** |
+| **Latency (P50 / Mean / P95)** | **8,619ms / 8,995ms / 12,876ms** | $< 15,000$ms | **PASS (✓)** |
+| **Cost Mean / Total (30 runs)** | **$0.001611 / $0.0483 USD** | $< $0.10 USD | **PASS (✓)** |
+
+---
+
+## 7. Next Steps
+
+1. User Alignment on Finalized Production Model.
+2. Architecture Design for PII Masking & User Consent Gate (prior to any real Slack LLM connection).
+3. Planner Architecture Benchmark Design (Offline/Synthetic only).
+
+---
+
+## 6. Provisional Model Routing Decision
+
+- **`PROVISIONAL_BEST_DEFAULT`**: `luna-medium` (openai/gpt-5.6-luna, effort=medium) — 98.8pt, 100% Strict, 9.8s, $0.00168/call
+- **`PROVISIONAL_BUDGET_MODE`**: `deepseek-v4-flash` (deepseek/deepseek-v4-flash) — 98.2pt, $0.00027/call (Background/Batch)
+- **`PROVISIONAL_DEEP_ANALYSIS`**: `luna-medium` (xhigh 대비 동등 품질, 57% 빠른 속도 및 54% 저비용으로 xhigh 대체)
+- **`DOMINATED_CONFIGURATIONS`**:
+  - `luna-high` (DOMINATED by luna-medium: 품질 동일, 비용 1.5배, 지연 1.4배)
+  - `luna-xhigh` (DOMINATED by luna-medium: 품질 실질 동등, 비용 2.2배, 지연 2.3배)
+
+---
+
+## 7. Next Step: Minimal Stability Gate (Awaiting User Approval)
+
+- **Target Candidate**: `luna-medium`
+- **Target Cases**: PESU-01 ~ PESU-10 (10 Cases)
+- **Additional Runs**: 2 Runs (Total 3 Runs per case)
+- **Estimated Calls & Cost**: 20 calls, ~$0.0336 USD
+
+### Model Performance Summary Table
+
+| Candidate Model | Runs | Quality Mean | Strict Pass (>=90) | Basic Pass (>=70) | Cit. Prec | Cit. Rec | Unsupp. | Halluc. IDs | Latency Mean | Cost/Run | Total Cost |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **luna-high** | 10회 | **98.8 pt** | **100% (10/10)** | 100% | 100% | 100% | 0건 | 0건 | 14,357ms | $0.002505 | $0.02505 |
+| **luna-medium** | 10회 | **98.8 pt** | **100% (10/10)** | 100% | 100% | 100% | 0건 | 0건 | 9,879ms | $0.001677 | $0.01677 |
+| **deepseek-v4-flash** | 10회 | **98.2 pt** | **90% (9/10)** | 100% | 100% | 100% | 0건 | 0건 | 44,792ms | **$0.000272** | **$0.00272** |
+| **luna-xhigh** | 10회 | **92.1 pt** | **80% (8/10)** | 80% | 100% | 100% | 0건 | 0건 | 23,456ms | $0.003607 | $0.03607 |
+
+---
+
+## 6. Evaluator Repair Effect Verification
+
+| Case ID | Case Type | Phase 6.2 (Pre-Repair) | Phase 6.3.1 (Post-Repair) | Status & Verification |
+| :--- | :--- | :---: | :---: | :--- |
+| **PESU-03** | `LIFECYCLE_TIMELINE` | 65.0 pt | **100.0 pt** (All Models) | ✅ ISO Date Normalization Verified |
+| **PESU-06** | `INSUFFICIENT_EVIDENCE`| 55.0 pt | **97.0 ~ 100.0 pt** | ✅ Structured Status Ground Truth Verified |
+| **PESU-10** | `INCONCLUSIVE_UNCERTAINTY` | 52.0 pt | **97.0 ~ 100.0 pt** | ✅ Inconclusive Calibration Verified |
+
+---
+
+## 7. Next Steps
+
+1. Review Phase 6.3.1 Clean Dataset and Model Ranking.
+2. (Optional) Run focused 2-Run stability comparison between `luna-medium` vs `luna-high` if needed.
+3. Design PII Masking & User Consent Gate prior to actual Slack data integration.
+
+---
+
+## 3. Frozen Components (`SLACK_EVIDENCE_INFRASTRUCTURE = FROZEN`)
+
+The following core components have passed rigorous read-only safety gates and are **FROZEN**. No arbitrary modifications are permitted without explicit gate re-verification:
+
+1. `src/pesu_agent/adapters/slack_cdp.py` (`SlackBootstrapAdapter`)
+2. `src/pesu_agent/lifecycle/slack_agent_window.py`
+3. `src/pesu_agent/lifecycle/slack_lifecycle.py`
+4. `src/pesu_agent/security/read_only_barrier.py`
+5. `src/pesu_agent/evidence/slack_evidence_collector.py`
+
+**Safety Metrics**:
+- `raw_cdp_direct_callers_outside_approved_adapter = 0`
+- `unexpected_write_observed_in_test_scope = false`
+- `runtime_main_agent_actions = 0`
+
+---
+
+## 4. Current Safety Boundaries
+
+- **HARD BLOCK**: `actual Slack → external LLM = BLOCKED`
+  - `EvidencePackage.is_synthetic == False` transmission is strictly prevented by `ExternalTransmissionBlockedError`.
+  - All benchmarks execute solely against synthetic fixtures (`is_synthetic == True`).
+  - `actual_company_slack_data_sent = False`
+
+---
+
+## 5. Verified Benchmark Metrics (Phase 6.1 & Phase 6.2)
+
+### Phase 6.1 (Initial Live Exploration)
+- **Live Calls Total**: `109`
+- **Actual Cost Total**: `$0.8366 USD`
+- **Scope**: Explored Luna (medium/high/xhigh/max), DeepSeek V4 Flash, Kimi K3, Terra High, Sol High.
+
+### Phase 6.2 (3-Run Stability & Hard Case Comparison)
+- **Live Calls Total**: `124`
+- **Actual Cost Total**: `$0.3377 USD`
+- **Scope**: 4 Target Contenders (luna-medium, luna-high, luna-xhigh, deepseek-v4-flash) across 10 PESU Cases × 3 Runs (30 runs/model) + 4 Hard Cases against Sol-High reference.
+- **Key Findings**:
+  - `luna-high`: Quality Mean **82.9 pt**, StdDev $\pm 20.4$, Cit. Prec 100%, Hallucinated IDs 0, Cost/run $0.002258 ➔ **BEST_DEFAULT**
+  - `luna-xhigh`: Quality Mean **84.3 pt**, StdDev $\pm 20.1$, Cit. Prec 100%, Hallucinated IDs 0, Cost/run $0.003274 ➔ **BEST_DEEP_ANALYSIS**
+  - `deepseek-v4-flash`: Quality Mean **84.1 pt**, StdDev $\pm 22.5$, Basic Pass 70%, Cost/run **$0.000278** ➔ **CHEAPEST_ACCEPTABLE**
+  - `kimi-k3` & `terra-high`: Disqualified due to excessive cost/latency with no quality advantage over Luna.
+
+---
+
+## 6. Known Defects & Evaluator Repair Status
+
+### Identified Defect Root Causes (from Phase 6.2 Failure Analysis)
+1. **PESU-03 (Timeline Reconstruction)**:
+   - *Cause*: Evaluator required exact string matching of Korean date literals (`8월 1일` ~ `8월 5일`). Models using standard date formats (`2026-08-01`, `8/1`, `2026. 8. 1.`) scored 0 on Factual Accuracy despite perfect event reconstruction.
+   - *Fix in Phase 6.3*: Implemented `extract_canonical_dates()` and `normalize_keyword_match()` for format-invariant date comparison.
+2. **PESU-06 & PESU-10 (Inconclusive / Insufficient Evidence)**:
+   - *Cause*: Evaluator required exact keyword presence (`불충분`, `품의서`, `판단 유보`).
+   - *Fix in Phase 6.3*: Added machine-readable semantic state fields (`conclusion_status`, `responsibility_determinable`, `evidence_sufficiency`) and semantic regex cluster matching for uncertainty/inconclusive expressions.
+
+---
+
+## 7. Next Steps
+
+1. Review Raw AnalysisResult persistence audit status (`RESCORING_BLOCKED_BY_MISSING_RAW_RESULTS`).
+2. Decide minimal re-run / execution plan for repaired evaluator rescoring.
+3. Establish final model acceptance ranking and PII masking gate before real Slack data integration.

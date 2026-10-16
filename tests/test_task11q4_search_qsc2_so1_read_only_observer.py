@@ -301,9 +301,12 @@ def test_sensitive_data_audit_persistence():
     assert sanitized["nested"]["text_containing_link"] == "[REDACTED_SENSITIVE_STRING]"
 
 
-def test_dry_run_execution_generates_valid_artifact(monkeypatch):
+def test_dry_run_execution_generates_valid_artifact(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, 'audit_runtime_import_closure', lambda _: (True, []))
-    res = runner.run_qsc2_so1_qualification(dry_run=True)
+    canonical_trace = runner.DRY_RUN_OUTPUT_FILE
+    original_bytes = canonical_trace.read_bytes() if canonical_trace.exists() else None
+    dry_run_file = tmp_path / "qsc2_dry_run.json"
+    res = runner.run_qsc2_so1_qualification(dry_run=True, output_file_override=dry_run_file)
     assert res["verdict"] == "DRY_RUN_PASS"
     assert res["diagnostic_verdict"] == "QUERY_STATE_SYNCED_WITH_SAFE_SEARCH_SUGGESTION"
     assert res["checks"]["HISTORICAL_BASELINES_EXACT"] is True
@@ -313,11 +316,11 @@ def test_dry_run_execution_generates_valid_artifact(monkeypatch):
     assert res["checks"]["QSC2_SO1_STATIC_ZERO_SUBMIT_AUDIT"] is True
     assert res["checks"]["QSC2_SO1_STATIC_ZERO_INTERACTION_AUDIT"] is True
 
-    dry_run_file = REPO_ROOT / "output" / "qualification_13_5d" / "live_trace" / "task11q4_search_qsc2_so1_query_state_convergence_dry_run.json"
     assert dry_run_file.exists()
     trace_data = json.loads(dry_run_file.read_text(encoding="utf-8"))
     assert trace_data["diagnostic_run"] == "QSC2_SO1"
     assert trace_data["verdict"] == "DRY_RUN_PASS"
+    assert (canonical_trace.read_bytes() if canonical_trace.exists() else None) == original_bytes
 
 
 def test_protocol_freeze_integrity_and_34_baselines():

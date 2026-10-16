@@ -317,13 +317,36 @@ def test_sst2_static_safety_contracts():
 
 def test_sst2_dry_run_execution(tmp_path):
     dry_out = tmp_path / "dry_trace.json"
-    res = sst2_runner.run_sst2_qualification(dry_run=True, output_file_override=dry_out)
+    # A dry-run fixture must not inherit the consumed live attempt's approval.
+    res = sst2_runner.run_sst2_qualification(
+        dry_run=True,
+        output_file_override=dry_out,
+        authorization_file_override=_make_valid_auth_file(tmp_path / "offline_auth.json"),
+    )
     assert res["verdict"] == "DRY_RUN_PASS"
     assert res["diagnostic_verdict"] == "SEARCH_SUBMIT_TRANSITION_SUCCESS"
     assert res["checks"]["query_entry_executed"] is True
     assert res["checks"]["guarded_submit_executed"] is True
     assert res["checks"]["result_surface_confirmed"] is True
+    assert res["checks"]["AUTHORIZATION_VERIFIED"] is True
     assert dry_out.exists()
+
+
+def test_sst2_dry_run_still_rejects_stale_authorization(tmp_path):
+    # Preserve coverage of the rejection exposed by the historical fixture.
+    auth_file = _make_valid_auth_file(tmp_path / "offline_auth.json")
+    auth = json.loads(auth_file.read_text(encoding="utf-8"))
+    auth["approved_git_commit"] = "0" * 40
+    auth_file.write_text(json.dumps(auth), encoding="utf-8")
+    output = tmp_path / "dry_trace.json"
+    result = sst2_runner.run_sst2_qualification(
+        dry_run=True, output_file_override=output,
+        authorization_file_override=auth_file,
+    )
+    assert result["diagnostic_verdict"] == "UNAUTHORIZED_GIT_COMMIT"
+    assert result["verdict"] == "FAIL_CLOSED"
+    assert result["observed_actions"]["query_entries_executed"] == 0
+    assert not output.exists()
 
 
 def test_sst2_exact_authorization_manifest_enforcement(tmp_path, monkeypatch):
