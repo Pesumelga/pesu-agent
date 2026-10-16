@@ -31,6 +31,15 @@ Engineering Lead가 [NEXT_ACTIONS.md](NEXT_ACTIONS.md)의 우선순위에 따라
 
 사용자가 검색어 추출 수정·테스트·커밋과 새 Live 실행을 명시적으로 위임했고, 이를 **같은 query `26년 하반기 간담회`의 SST4 1회, 결과 화면 확인까지만**으로 한정해 완료했다. 정확한 새 HEAD/runner/protocol 해시에 승인 기록을 묶었으며 재시도 없이 통과했다. 다음 제품 작업은 Evidence 연결 준비다. 실제 본문 수집·저장 범위와 provider 비용/외부 전송은 별도 사용자 확인이 필요하다. 이번 승인을 thread 열기·추가 검색·provider 호출·production cutover로 확대하지 않는다.
 
+## 2026-10-16 GitHub Push Protection 정리
+
+- GitHub가 테스트용 가짜 Slack 토큰을 과거 커밋에서 감지해 푸시를 차단했다. 현재 파일만 고쳐서는 과거 탐지 내용이 남는다. 실제 인증정보를 사용하거나 탐지 우회를 선택하지 않았다.
+- 원격 `main`은 `b1ef8e38757f600308ac4cde407852a651e45f07`이며, 아직 올라가지 않은 로컬 커밋은 125개였다. 원본 브랜치 `feature/phase-13-5d-real-production-trace`는 `4a65805d6b864543015825f3b7e023fe66335a81`에 그대로 보존했다.
+- 별도 로컬 브랜치 **`codex/secret-clean-publish`**를 생성했다. 6개 테스트 파일의 과거 blob 19개에서 가짜 토큰 literal을 문자열 조합식으로 바꿨다. 실행 중 생성되는 테스트 값은 동일하고, commit 순서·작성자·작성 시각·메시지는 유지했다. 원본 ref 변경·reset·force push·동결 증거 변경은 하지 않았다.
+- 정리 직후 HEAD는 `9667af518beac6bbacdb24d9f9098c303a06ac38`이며 이후 이 문서 기록 커밋은 별도다. 원본↔정리 commit 대응과 검증 기록은 로컬 `.runtime/secret-clean/result.json` / `verification.json`에 남겼다. 동결 승인/Live 기록의 원본 실행 HEAD를 새 commit hash로 다시 쓰지 않는다.
+- 관련 마스킹 테스트 **6 PASS (3.11s)**. 푸시 대상 이력의 **1,017 objects / 400 blobs**를 검사해 탐지된 Slack 토큰 형태의 원문 **0개**를 확인했다. 변경 파일은 해당 테스트 6개뿐이며 `src/`, `scripts/`, `artifacts/`는 원본과 동일하다. SST4 성공 증거와 기존 785개 artifact/output 해시도 유지됐다.
+- 현재 선택 브랜치는 정리용 브랜치다. **원격 푸시는 아직 하지 않았으며 GitHub 서버의 최종 수락은 미검증**이다. 공개/업로드가 승인되면 이 브랜치만 일반 push한다. 원본 브랜치에는 과거 테스트 literal이 남아 있으므로 원본 브랜치나 모든 브랜치를 함께 push하지 않는다.
+
 ## 2026-10-16 SST4 승인 Live 결과
 
 - 실행 HEAD: `7ab6157b74404dccf451a50ef02e03fd4ce59a35` (검색어 추출 수정 커밋). 이 시점에 tracked tree clean, 현재 runtime closure 60개·역사 기준 34개·SST3 원본 증거 해시 3개와 미사용 상태를 대조했다. 이후 증거 보존 커밋은 별도 HEAD다.
