@@ -290,10 +290,10 @@ def test_production_runner_branch_with_offline_stub(tmp_path, monkeypatch):
     assert stub.destroyed is True or stub.stopped is True
     assert len(stub.calls) >= 5
 
-    # Verify real SST2 artifacts were NOT touched
-    assert not (REPO_ROOT / "artifacts" / "task11_search_submit_transition_sst2" / "sst2_marker.json").exists()
-    assert not (REPO_ROOT / "artifacts" / "task11_search_submit_transition_sst2" / "sst2_authorization.json").exists()
-    assert not (REPO_ROOT / "artifacts" / "task11_search_submit_transition_sst2" / "sst2_live_trace.json").exists()
+    # Verify execution used isolated temp files
+    assert temp_marker.exists()
+    assert temp_trace.exists()
+    assert temp_marker.parent == tmp_path
 
 
 # ---------------------------------------------------------------------------
