@@ -135,7 +135,7 @@ def _make_valid_auth_file(path: Path) -> Path:
         "approved_runner_sha256": sst1_runner.get_file_sha256(Path(sst1_runner.__file__)),
         "approved_protocol_sha256": sst1_runner.get_file_sha256(sst1_runner.PROTOCOL_FREEZE_FILE),
         "authorized_at_utc": "2026-10-16T00:00:00Z",
-        "authorization_scope": "TEST_OFFLINE",
+        "authorization_scope": "SST1_LIVE_SINGLE_SHOT",
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return path
@@ -228,6 +228,23 @@ def test_sst1_exact_authorization_manifest_enforcement(tmp_path, monkeypatch):
     )
     assert res4["verdict"] == "FAIL_CLOSED"
     assert res4["diagnostic_verdict"] == "UNAUTHORIZED_PROTOCOL_SHA"
+
+    # Case 5: Mismatched Authorization Scope
+    auth_bad_scope = tmp_path / "bad_scope_auth.json"
+    auth_bad_scope.write_text(json.dumps({
+        "approved_git_commit": sst1_runner.get_git_commit(),
+        "approved_runner_sha256": sst1_runner.get_file_sha256(Path(sst1_runner.__file__)),
+        "approved_protocol_sha256": sst1_runner.get_file_sha256(sst1_runner.PROTOCOL_FREEZE_FILE),
+        "authorization_scope": "UNAUTHORIZED_SCOPE_VAL",
+    }), encoding="utf-8")
+    res5 = sst1_runner.run_sst1_qualification(
+        dry_run=False,
+        marker_file_override=marker,
+        output_file_override=trace,
+        authorization_file_override=auth_bad_scope,
+    )
+    assert res5["verdict"] == "FAIL_CLOSED"
+    assert res5["diagnostic_verdict"] == "UNAUTHORIZED_SCOPE"
 
 
 def test_sst1_atomic_marker_and_concurrency_rejection(tmp_path, monkeypatch):

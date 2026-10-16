@@ -115,14 +115,32 @@ JS_PROBE_SEARCH_READINESS_BEFORE_SUBMIT = r"""
         return report;
     }
 
+    // 1. DOM text surface
     const domText = normalizeQuery(inputElem.textContent || inputElem.innerText || '');
-    let quillText = '';
-    let textyModelText = '';
-    const textyObj = searchInputBoxInstance.texty || null;
+    const domSynced = (domText === targetNorm && targetNorm.length > 0);
 
+    // 2. Quill text surface
+    let quillText = '';
+    const textyObj = searchInputBoxInstance.texty || null;
     if (textyObj && textyObj.instance && textyObj.instance.quill && typeof textyObj.instance.quill.getText === 'function') {
         try { quillText = normalizeQuery(textyObj.instance.quill.getText()); } catch (_) {}
     }
+    const quillTextSynced = (quillText === targetNorm && targetNorm.length > 0);
+
+    // 3. Quill delta ops surface
+    let quillDeltaText = '';
+    if (typeof searchInputBoxInstance.getTextyOps === 'function') {
+        try {
+            const ops = searchInputBoxInstance.getTextyOps();
+            if (Array.isArray(ops)) {
+                quillDeltaText = normalizeQuery(ops.map(op => (op && typeof op.insert === 'string') ? op.insert : '').join(''));
+            }
+        } catch (_) {}
+    }
+    const quillDeltaSynced = (quillDeltaText === targetNorm && targetNorm.length > 0);
+
+    // 4. Texty model getContents surface
+    let textyModelText = '';
     if (textyObj && typeof textyObj.getContents === 'function') {
         try {
             const contents = textyObj.getContents();
@@ -131,10 +149,42 @@ JS_PROBE_SEARCH_READINESS_BEFORE_SUBMIT = r"""
             }
         } catch (_) {}
     }
+    const textyModelSynced = (textyModelText === targetNorm && targetNorm.length > 0);
 
-    const surfacesSynced = (domText === targetNorm && (quillText === targetNorm || !quillText) && (textyModelText === targetNorm || !textyModelText));
-    report.query_state_all_synced = surfacesSynced;
-    if (!surfacesSynced) report.reasons.push('SURFACES_NOT_SYNCED');
+    // 5. Display query ops / Redux stateNode surface
+    let displayQueryText = '';
+    try {
+        const instState = searchInputBoxInstance.state || null;
+        const instProps = searchInputBoxInstance.props || null;
+        const rOps = (instState && instState.displayQuery) ? instState.displayQuery : ((instProps && instProps.initialQuery) ? instProps.initialQuery : null);
+        if (typeof rOps === 'string') {
+            displayQueryText = normalizeQuery(rOps);
+        } else if (Array.isArray(rOps)) {
+            displayQueryText = normalizeQuery(rOps.map(op => (op && typeof op.insert === 'string') ? op.insert : '').join(''));
+        } else if (rOps && Array.isArray(rOps.ops)) {
+            displayQueryText = normalizeQuery(rOps.ops.map(op => (op && typeof op.insert === 'string') ? op.insert : '').join(''));
+        }
+    } catch (_) {}
+    const displayQuerySynced = (displayQueryText === targetNorm && targetNorm.length > 0);
+
+    report.surfaces_synced = {
+        dom: domSynced,
+        quill_text: quillTextSynced,
+        quill_delta: quillDeltaSynced,
+        texty: textyModelSynced,
+        display_query_ops: displayQuerySynced
+    };
+
+    report.query_state_all_synced = Boolean(
+        domSynced &&
+        quillTextSynced &&
+        quillDeltaSynced &&
+        textyModelSynced &&
+        displayQuerySynced
+    );
+    if (!report.query_state_all_synced) {
+        report.reasons.push('SURFACES_NOT_SYNCED');
+    }
 
     const evalBoolOrFn = (source, prop) => {
         if (!source) return false;
@@ -233,12 +283,17 @@ JS_PROBE_SEARCH_READINESS_BEFORE_SUBMIT = r"""
         report.reasons.push('NO_SAFE_CANDIDATE_FOUND');
     }
 
-    report.ready = (
+    if (safeIndex >= 0 && safeCandidate && !report.candidate_dom_mapping_ok) {
+        report.reasons.push('CANDIDATE_DOM_MAPPING_FAILED');
+    }
+
+    report.ready = Boolean(
         report.input_box_found &&
         report.query_state_all_synced &&
         report.internal_flags_ok &&
         report.safe_candidate_present &&
-        report.safe_candidate_exact_match
+        report.safe_candidate_exact_match &&
+        report.candidate_dom_mapping_ok
     );
 
     return report;
@@ -363,6 +418,7 @@ def run_sst1_qualification(
             "HEAD_EXACT": False,
             "RUNNER_SHA_EXACT": False,
             "PROTOCOL_SHA_EXACT": False,
+            "AUTHORIZATION_SCOPE_EXACT": False,
             "HISTORICAL_BASELINES_EXACT": False,
             "RUNTIME_IMPORT_CLOSURE_EXACT": False,
             "STATIC_SAFETY_CONTRACTS_EXACT": False,
@@ -444,6 +500,14 @@ def run_sst1_qualification(
                 report["error"] = f"Current protocol SHA {current_proto_sha} != approved {appr_proto}"
                 return report
             report["checks"]["PROTOCOL_SHA_EXACT"] = True
+
+            auth_scope = auth_data.get("authorization_scope")
+            if auth_scope != "SST1_LIVE_SINGLE_SHOT":
+                report["verdict"] = "FAIL_CLOSED"
+                report["diagnostic_verdict"] = "UNAUTHORIZED_SCOPE"
+                report["error"] = f"Authorization scope '{auth_scope}' != 'SST1_LIVE_SINGLE_SHOT'"
+                return report
+            report["checks"]["AUTHORIZATION_SCOPE_EXACT"] = True
             report["checks"]["AUTHORIZATION_VERIFIED"] = True
         except Exception as ex:
             report["verdict"] = "FAIL_CLOSED"
