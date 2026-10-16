@@ -1,6 +1,6 @@
 # PESU Agent — 현재 상태
 
-갱신: 2026-10-16. **현재 단계: Phase 13.5D / Task 11, 검색어 추출 수정 후 SST4 실제 검색·결과 화면 전환 검증 통과. SST3 FAIL과 SST4 PASS는 별도 증거로 보존하며 둘 다 재실행하지 않는다. Evidence 원문 링크 전달을 수정하고 합성 검색→근거 답변·출처 카드 52개 테스트가 통과했다. 다음은 실제 본문 수집 범위의 승인 경계다.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 Phase 9 이하의 과거 기록은 역사 참고이며 현재 단계·승인·모델 선택을 대체하지 않는다.
+갱신: 2026-10-16. **현재 단계: Phase 13.5D / Task 11, 검색어 추출 수정 후 SST4 실제 검색·결과 화면 전환 검증 통과. SST3 FAIL과 SST4 PASS는 별도 증거로 보존하며 둘 다 재실행하지 않는다. Evidence 원문 링크 전달을 수정하고 합성 검색→근거 답변·출처 카드 52개 테스트가 통과했다. 이후 승인된 실제 Evidence 연결 시도는 본문 추출 전 FAIL_CLOSED로 종료됐다. 다음은 Production 추출 진입 조건의 오프라인 보강이다.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 Phase 9 이하의 과거 기록은 역사 참고이며 현재 단계·승인·모델 선택을 대체하지 않는다.
 
 ## 제품이 실제로 도달한 범위
 
@@ -30,6 +30,14 @@
 Engineering Lead가 [NEXT_ACTIONS.md](NEXT_ACTIONS.md)의 우선순위에 따라 승인 불필요 작업을 자율 진행한다. 실제 검색·새 실데이터 수집·실제 provider 비용/민감 처리·동결 계약 변경·중대 설계 변경·배포는 Product Owner의 별도 승인을 받는다. Slack 쓰기와 Slackbot은 금지다.
 
 사용자가 검색어 추출 수정·테스트·커밋과 새 Live 실행을 명시적으로 위임했고, 이를 **같은 query `26년 하반기 간담회`의 SST4 1회, 결과 화면 확인까지만**으로 한정해 완료했다. 정확한 새 HEAD/runner/protocol 해시에 승인 기록을 묶었으며 재시도 없이 통과했다. 다음 제품 작업은 Evidence 연결 준비다. 실제 본문 수집·저장 범위와 provider 비용/외부 전송은 별도 사용자 확인이 필요하다. 이번 승인을 thread 열기·추가 검색·provider 호출·production cutover로 확대하지 않는다.
+
+## 2026-10-16 승인된 실제 Evidence 연결 시도 — FAIL_CLOSED
+
+- 사용자는 같은 query `26년 하반기 간담회` 검색 1회, 새 결과 최대 5개 본문·출처의 로컬 저장, 이전 화면 최대 10개 본문의 메모리 비교를 승인했다. thread·첨부·LLM·재시도는 제외했다. 소비된 SST3/SST4를 다시 실행하지 않고 기존 backend를 호출했다.
+- 실행 HEAD `095279ba1b7a1921582082175109864c3adf2acc`, 로컬 실행 스크립트 SHA-256 `4d0aba9ff309601b4de4c03fc8a6721638df0369014beb9fbe2a8d5b752988df`, backend SHA-256 `fec3baacfed1b073b2c3f00b9cef1bc35ff000b410efe092b1aae2d610223b49`. 시작 `2026-10-16T08:02:09.386994+00:00`, 종료 `2026-10-16T08:02:55.444282+00:00`.
+- 결과 **FAIL_CLOSED**, child exit 1. query setter와 atomic submit 각각 1회, 안전한 검색 suggestion 클릭 성공, generic default OnEnter 미사용. post-wait 관측 4회 후 `RuntimeError`로 종료했다. 본문 extraction dispatch **0회**, 이전 화면 본문도 0개였다. 본문 결과/실패 본문 파일은 생성되지 않았다. Host cleanup 완료, 자동 재시도와 추가 Slack 관측 없음.
+- 실제 오류의 상세 메시지·마지막 surface 값은 실행 report에 포함하지 않아 어떤 세부 조건이 중단을 일으켰는지 단정하지 않는다. 이후 **합성 Host만 사용한 오프라인 재현**에서는 query 미확정·search view 부재 상태에서도 기존 backend가 추출을 시도하고 실행 wrapper의 엄격한 gate가 이를 차단함을 확인했다. 이 재현을 실제 마지막 화면 관측으로 간주하지 않는다. 다음은 Production 추출 진입 조건의 오프라인 보강이며 새 Live는 이 승인으로 재시도하지 않는다.
+- 기존 artifact/output **788개 해시 동일**. 승인된 시도의 로컬 기록은 Git 제외 경로 `.runtime/slack-evidence-validation/`에 보존했다. `attempt.json` SHA-256 `811961347e54d113f06bcfa77160b0a59496badebdcb6d35d938039f4df5ae5c`, `report.json` SHA-256 `97a6edc9ba241810c74c08d87ba131c6c7c6f89131a8f24904a2c58b3030984c`. 원본 실행 스크립트도 그대로 보존한다.
 
 ## 2026-10-16 Evidence 원문 링크 연결 수정 (오프라인)
 
