@@ -1,6 +1,6 @@
 # PESU Agent — 현재 상태
 
-갱신: 2026-10-16. **현재 단계: Phase 13.5D / Task 11, 검색어 추출 수정 후 SST4 실제 검색·결과 화면 전환 검증 통과. SST3 FAIL과 SST4 PASS는 별도 증거로 보존하며 둘 다 재실행하지 않는다. 다음은 Evidence 연결 준비 및 실제 본문 수집 범위의 승인 경계다.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 Phase 9 이하의 과거 기록은 역사 참고이며 현재 단계·승인·모델 선택을 대체하지 않는다.
+갱신: 2026-10-16. **현재 단계: Phase 13.5D / Task 11, 검색어 추출 수정 후 SST4 실제 검색·결과 화면 전환 검증 통과. SST3 FAIL과 SST4 PASS는 별도 증거로 보존하며 둘 다 재실행하지 않는다. Evidence 원문 링크 전달을 수정하고 합성 검색→근거 답변·출처 카드 52개 테스트가 통과했다. 다음은 실제 본문 수집 범위의 승인 경계다.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 Phase 9 이하의 과거 기록은 역사 참고이며 현재 단계·승인·모델 선택을 대체하지 않는다.
 
 ## 제품이 실제로 도달한 범위
 
@@ -30,6 +30,15 @@
 Engineering Lead가 [NEXT_ACTIONS.md](NEXT_ACTIONS.md)의 우선순위에 따라 승인 불필요 작업을 자율 진행한다. 실제 검색·새 실데이터 수집·실제 provider 비용/민감 처리·동결 계약 변경·중대 설계 변경·배포는 Product Owner의 별도 승인을 받는다. Slack 쓰기와 Slackbot은 금지다.
 
 사용자가 검색어 추출 수정·테스트·커밋과 새 Live 실행을 명시적으로 위임했고, 이를 **같은 query `26년 하반기 간담회`의 SST4 1회, 결과 화면 확인까지만**으로 한정해 완료했다. 정확한 새 HEAD/runner/protocol 해시에 승인 기록을 묶었으며 재시도 없이 통과했다. 다음 제품 작업은 Evidence 연결 준비다. 실제 본문 수집·저장 범위와 provider 비용/외부 전송은 별도 사용자 확인이 필요하다. 이번 승인을 thread 열기·추가 검색·provider 호출·production cutover로 확대하지 않는다.
+
+## 2026-10-16 Evidence 원문 링크 연결 수정 (오프라인)
+
+- 실제 `WebViewSlackSearchBackend.search()`가 검색 결과 URL을 `message_identifier`에만 넣어, `permalink`를 읽는 seed graph와 최종 출처 카드에서 원문 링크가 사라지는 결함을 재현했다. Production 수정은 `permalink=res.result_url` 전달 한 줄이다. URL이 없으면 내부 식별자를 링크로 만들지 않는다.
+- 합성 typed 검색 결과에서 실제 backend 매핑 → Evidence graph → Claim → WorkItem → grounded answer/presenter까지 검증했다. 수정 전 관련 두 테스트가 링크 누락으로 실패했고 수정 후 통과했다. 기존 미추적 Evidence integration 테스트 파일은 이번에 명시적으로 버전 관리에 포함한다.
+- 관련 회귀 **52 PASS (4.86s)**. 별도 검토에서 추가 결함은 발견되지 않았다. 결과는 `.runtime/evidence-link-results.xml`에 있다. 실제 Slack 접근·본문 수집·외부 LLM 호출·제품 UI cutover는 수행하지 않았다.
+- 이전 비동기 E2E 준비 대기는 제한된 Windows 실행 환경의 asyncio loopback 준비에서 재현됐다. 같은 최소 재현은 허용된 실행 환경에서 성공했고 기존 비동기 E2E 8개도 통과했다. 제품 event loop 코드는 변경하지 않았다. 아래 과거 미확정 기록은 당시 상태로 보존한다.
+- 작업 전 artifact/output **788개 해시 동일**. SST3 실패와 SST4 성공, 승인·marker·protocol은 변경하지 않았다. 현재 Production 매핑 변경은 소비된 SST4 승인 범위에 소급 포함되지 않는다.
+- 다음 실제 검증은 별도 승인 대상이다. 기존 backend를 사용하면 새 결과 최대 5개 외에 freshness 비교를 위해 이전 화면 최대 10개 본문을 메모리에서 읽을 수 있다. 실제 실행 전 이 범위와 로컬 보관 위치·실패 중단을 명시한다. thread·첨부·외부 provider로 확대하지 않는다.
 
 ## 2026-10-16 GitHub Push Protection 정리
 

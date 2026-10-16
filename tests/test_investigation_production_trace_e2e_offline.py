@@ -111,16 +111,29 @@ def _make_evidence_item(
 # ---------------------------------------------------------------------------
 
 @pytest.mark.anyio
-async def test_scenario_a_clear_progress_completion():
+async def test_scenario_a_clear_progress_completion(monkeypatch):
     """Scenario A: Clear evidence results in verified claim, COMPLETED WorkItem, and complete trace."""
-    candidates = [
-        _make_evidence_item(
-            evidence_id="E_DEP_01",
-            text="AuthService v2.4.0 rollout completed successfully at 14:00. All checks passed.",
-            author="Alice",
-            permalink="https://slack.com/archives/C_PROD/p1400",
-        )
-    ]
+    source = _make_evidence_item(
+        evidence_id="E_DEP_01",
+        text="AuthService v2.4.0 rollout completed successfully at 14:00. All checks passed.",
+        author="Alice",
+        permalink="https://fixture.slack.com/archives/C0123456789/p1724738400123456",
+    )
+    # Enter through the real retrieval-to-domain mapping, rather than giving
+    # the coordinator a hand-built EvidenceItem with an already populated URL.
+    from pesu_agent.investigation.models import SearchQuery
+    from pesu_agent.search.slack_search import SlackSearchResult
+    from pesu_agent.search.webview_slack_search import WebViewSlackSearchBackend
+    from pesu_agent.parsers.slack_permalink_parser import parse_slack_message_permalink
+    assert parse_slack_message_permalink(source.permalink) is not None
+    backend = WebViewSlackSearchBackend()
+    row = SlackSearchResult(
+        result_index=1, query="AuthService rollout", text=source.text,
+        author=source.author, timestamp_raw=source.timestamp,
+        result_url=source.permalink, message_fingerprint="synthetic-deployment-result",
+    )
+    monkeypatch.setattr(backend, "search_messages", lambda *_args, **_kwargs: [row])
+    candidates = await backend.search(SearchQuery(query="AuthService rollout", purpose="offline E2E fixture"))
 
     assessor = StubEvidenceAssessor(
         InvestigationAssessment(
@@ -211,7 +224,20 @@ async def test_scenario_a_clear_progress_completion():
     assert chain.governing_claim_ids == ["C1"]
     assert len(chain.claim_traces) == 1
     assert chain.claim_traces[0].evidence_ids == ["E1"]
-    assert chain.claim_traces[0].citations[0]["permalink"] == "https://slack.com/archives/C_PROD/p1400"
+    assert chain.claim_traces[0].citations[0]["permalink"] == source.permalink
+
+    from pesu_agent.ui.grounded_answer_builder import GroundedWorkItemAnswerBuilder
+    from pesu_agent.ui.result_presenter import present_grounded_investigation_result
+    answer = GroundedWorkItemAnswerBuilder.build_answer(
+        question=res.question, graph=res.graph, work_items=res.work_items,
+        traceability_chains=res.traceability_chains, stop_reason=res.stop_reason,
+    )
+    presented = present_grounded_investigation_result("offline-retrieval-e2e", answer)
+    assert "[완료]" in presented["answer"]
+    assert "AuthService v2.4.0 rollout completed successfully" in presented["answer"]
+    assert presented["has_evidence"] is True
+    assert presented["evidence"][0]["permalink"] == source.permalink
+    assert presented["evidence"][0]["has_valid_permalink"] is True
 
 
 # ---------------------------------------------------------------------------

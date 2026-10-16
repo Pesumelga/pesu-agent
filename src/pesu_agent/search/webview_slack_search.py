@@ -2275,6 +2275,7 @@ class WebViewSlackSearchBackend(SearchBackend):
                 text=res.text,
                 channel=res.channel_name or res.channel_id,
                 message_identifier=canonical_id,
+                permalink=res.result_url,
                 thread_identifier=res.gold_thread_ts,
                 has_thread=res.has_thread,
                 has_attachments=False,
