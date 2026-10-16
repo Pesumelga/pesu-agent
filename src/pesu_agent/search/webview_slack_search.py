@@ -436,7 +436,8 @@ JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
             query_has_changed: false,
             query_has_been_submitted: false,
             is_updating_display_query: false,
-            is_in_composition: false
+            is_in_composition: false,
+            flag_inspection_error: null
         },
         suggestions_count: 0,
         autocomplete_selected_index: null,
@@ -523,17 +524,25 @@ JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
         return ops.map(op => (typeof op.insert === 'string' ? op.insert : '')).join('').trim();
     };
 
+    const normalizeQuery = (text) => {
+        if (typeof text !== 'string') return '';
+        return text.replace(/\r\n/g, '\n').replace(/\n+$/, '').trim();
+    };
+    const targetNormalized = normalizeQuery(targetQuery);
+
     // DOM
     try {
-        const domText = (inputElem.textContent || inputElem.innerText || '').trim();
-        report.surfaces_synced.dom = domText.includes(targetQuery);
+        const domRaw = (inputElem.textContent || inputElem.innerText || '');
+        const domNorm = normalizeQuery(domRaw);
+        report.surfaces_synced.dom = (domNorm === targetNormalized && domRaw.includes(targetQuery));
     } catch (e) { report.surfaces_synced.dom = false; }
 
     // QuillText
     try {
         if (textyObj.instance && textyObj.instance.quill && typeof textyObj.instance.quill.getText === 'function') {
-            const qText = textyObj.instance.quill.getText().trim();
-            report.surfaces_synced.quill_text = qText.includes(targetQuery);
+            const qRaw = textyObj.instance.quill.getText();
+            const qNorm = normalizeQuery(qRaw);
+            report.surfaces_synced.quill_text = (qNorm === targetNormalized && qRaw.includes(targetQuery));
         }
     } catch (e) { report.surfaces_synced.quill_text = false; }
 
@@ -541,8 +550,9 @@ JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
     try {
         if (typeof searchInputBoxInstance.getTextyOps === 'function') {
             const ops = searchInputBoxInstance.getTextyOps();
-            const deltaStr = normalizeOpsToString(ops);
-            report.surfaces_synced.quill_delta = deltaStr.includes(targetQuery);
+            const deltaRaw = normalizeOpsToString(ops);
+            const deltaNorm = normalizeQuery(deltaRaw);
+            report.surfaces_synced.quill_delta = (deltaNorm === targetNormalized && deltaRaw.includes(targetQuery));
         }
     } catch (e) { report.surfaces_synced.quill_delta = false; }
 
@@ -551,8 +561,9 @@ JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
         if (typeof textyObj.getContents === 'function') {
             const tContents = textyObj.getContents();
             const tOps = (tContents && tContents.contents) ? tContents.contents : (Array.isArray(tContents) ? tContents : []);
-            const tStr = normalizeOpsToString(tOps);
-            report.surfaces_synced.texty = tStr.includes(targetQuery);
+            const tRaw = normalizeOpsToString(tOps);
+            const tNorm = normalizeQuery(tRaw);
+            report.surfaces_synced.texty = (tNorm === targetNormalized && tRaw.includes(targetQuery));
         }
     } catch (e) { report.surfaces_synced.texty = false; }
 
@@ -564,8 +575,9 @@ JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
 
         if (propsToInspect && Object.prototype.hasOwnProperty.call(propsToInspect, 'displayQueryOps')) {
             const dOps = propsToInspect.displayQueryOps;
-            const rStr = normalizeOpsToString(dOps);
-            report.surfaces_synced.redux = rStr.includes(targetQuery);
+            const rRaw = normalizeOpsToString(dOps);
+            const rNorm = normalizeQuery(rRaw);
+            report.surfaces_synced.redux = (rNorm === targetNormalized && rRaw.includes(targetQuery));
         }
     } catch (e) { report.surfaces_synced.redux = false; }
 
@@ -573,17 +585,48 @@ JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
     report.query_state_all_synced = (surfaces.dom && surfaces.quill_text && surfaces.quill_delta && surfaces.texty && surfaces.redux);
 
     // Internal Component Flags
+    // SFC2 Remediation: Authoritative inspection from instance properties, composition detectors, and fail-closed error handling
+    let flagInspectionError = null;
     try {
-        if (searchInputBoxInstance.state) {
-            report.internal_flags.query_has_changed = Boolean(searchInputBoxInstance.state.queryHasChanged);
-            report.internal_flags.query_has_been_submitted = Boolean(searchInputBoxInstance.state.queryHasBeenSubmitted);
-            report.internal_flags.is_updating_display_query = Boolean(searchInputBoxInstance.state._isUpdatingDisplayQuery);
-            report.internal_flags.is_in_composition = Boolean(searchInputBoxInstance.state.isInComposition);
-        }
-    } catch (e) {}
+        const inst = searchInputBoxInstance;
+        const st = inst.state || null;
+
+        const isUpdating = Boolean(
+            inst._isUpdatingDisplayQuery ||
+            (st && st._isUpdatingDisplayQuery)
+        );
+
+        const inComp = Boolean(
+            inst.isInComposition ||
+            (st && st.isInComposition) ||
+            (textyObj && typeof textyObj.isInComposition === 'function' && textyObj.isInComposition()) ||
+            (inputElem && (inputElem.getAttribute('data-is-composing') === 'true' || !!inputElem.closest('[data-is-composing="true"]')))
+        );
+
+        const hasSubmitted = Boolean(
+            inst.queryHasBeenSubmitted ||
+            (st && st.queryHasBeenSubmitted)
+        );
+
+        const hasChanged = Boolean(
+            (st && st.queryHasChanged) ||
+            inst.queryHasChanged
+        );
+
+        report.internal_flags.query_has_changed = hasChanged;
+        report.internal_flags.query_has_been_submitted = hasSubmitted;
+        report.internal_flags.is_updating_display_query = isUpdating;
+        report.internal_flags.is_in_composition = inComp;
+    } catch (e) {
+        flagInspectionError = String(e);
+        report.internal_flags.flag_inspection_error = flagInspectionError;
+    }
 
     const flags = report.internal_flags;
-    const internalFlagsOk = (!flags.is_updating_display_query && !flags.is_in_composition);
+    const internalFlagsOk = (!flags.flag_inspection_error &&
+                             !flags.is_updating_display_query &&
+                             !flags.is_in_composition &&
+                             !flags.query_has_been_submitted);
 
     report.preconditions_satisfied = (report.query_state_all_synced && internalFlagsOk);
 
@@ -689,6 +732,22 @@ JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
     const safeIndex = safeCandidate.index;
     const targetSuggestion = safeCandidate.suggestion;
     report.selected_safe_candidate_index = safeIndex;
+
+    // SFC2 Contract: Safe candidate exact-query correlation check
+    const candidateQuery = (
+        targetSuggestion.string ||
+        targetSuggestion.query ||
+        targetSuggestion.text ||
+        targetSuggestion.label ||
+        null
+    );
+    if (typeof candidateQuery === 'string' && candidateQuery.trim().length > 0) {
+        const candidateNorm = normalizeQuery(candidateQuery);
+        if (candidateNorm !== targetNormalized) {
+            report.search_submission_target_safe = false;
+            return { error: 'SAFE_CANDIDATE_QUERY_MISMATCH', report };
+        }
+    }
 
     // Contract 4: Atomic TOCTOU re-validation of candidate identity
     if (suggestions[safeIndex] !== targetSuggestion || !isExactSafeKeywordSearch(suggestions[safeIndex])) {
