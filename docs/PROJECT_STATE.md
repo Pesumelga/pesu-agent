@@ -38,7 +38,7 @@ Engineering Lead가 [NEXT_ACTIONS.md](NEXT_ACTIONS.md)의 우선순위에 따라
 - 별도 로컬 브랜치 **`codex/secret-clean-publish`**를 생성했다. 6개 테스트 파일의 과거 blob 19개에서 가짜 토큰 literal을 문자열 조합식으로 바꿨다. 실행 중 생성되는 테스트 값은 동일하고, commit 순서·작성자·작성 시각·메시지는 유지했다. 원본 ref 변경·reset·force push·동결 증거 변경은 하지 않았다.
 - 정리 직후 HEAD는 `9667af518beac6bbacdb24d9f9098c303a06ac38`이며 이후 이 문서 기록 커밋은 별도다. 원본↔정리 commit 대응과 검증 기록은 로컬 `.runtime/secret-clean/result.json` / `verification.json`에 남겼다. 동결 승인/Live 기록의 원본 실행 HEAD를 새 commit hash로 다시 쓰지 않는다.
 - 관련 마스킹 테스트 **6 PASS (3.11s)**. 푸시 대상 이력의 **1,017 objects / 400 blobs**를 검사해 탐지된 Slack 토큰 형태의 원문 **0개**를 확인했다. 변경 파일은 해당 테스트 6개뿐이며 `src/`, `scripts/`, `artifacts/`는 원본과 동일하다. SST4 성공 증거와 기존 785개 artifact/output 해시도 유지됐다.
-- 현재 선택 브랜치는 정리용 브랜치다. **원격 푸시는 아직 하지 않았으며 GitHub 서버의 최종 수락은 미검증**이다. 공개/업로드가 승인되면 이 브랜치만 일반 push한다. 원본 브랜치에는 과거 테스트 literal이 남아 있으므로 원본 브랜치나 모든 브랜치를 함께 push하지 않는다.
+- 사용자의 명시적 승인 후 `codex/secret-clean-publish`만 일반 push했다. **GitHub가 최초 push `5d3f5320507cc16d422283069e81c2e5c76823a7`을 수락했고 원격 ref 일치를 확인해 Secret Scanning 푸시 차단 해소를 검증했다.** 기존 원격 `main`은 `b1ef8e38757f600308ac4cde407852a651e45f07`, 원본 로컬 브랜치는 `4a65805d6b864543015825f3b7e023fe66335a81`로 유지됐다. 동결 증거는 그대로다. 원본 브랜치에는 과거 테스트 literal이 남아 있으므로 원본 브랜치나 모든 브랜치를 함께 push하지 않는다. PR 생성·병합·force push는 하지 않았다.
 
 ## 2026-10-16 SST4 승인 Live 결과
 
