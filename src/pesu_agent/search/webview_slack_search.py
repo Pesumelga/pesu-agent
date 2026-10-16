@@ -783,24 +783,57 @@ JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
     const acList = document.querySelector('#c-search_autocomplete__suggestion_list, [data-qa="search_autocomplete"], .c-search_autocomplete, [role="listbox"]');
     if (acList) {
         const options = Array.from(acList.querySelectorAll('[role="option"], .c-search_autocomplete__suggestion_item, [data-qa="search_autocomplete_item"]'));
-        let safeOption = options.find(el => {
+        // SFC2 Closeout: Strict Candidate-to-DOM Option Resolution (Fail-Closed)
+        // Never trust raw array position without verifiable identity correlation.
+        let safeOption = null;
+        const matchingByIndex = options.filter(el => {
             const dIdx = el.getAttribute('data-index');
             return dIdx !== null && parseInt(dIdx, 10) === safeIndex;
         });
-        if (!safeOption && options[safeIndex]) {
-            const dIdx = options[safeIndex].getAttribute('data-index');
-            if (dIdx === null || parseInt(dIdx, 10) === safeIndex) {
-                const optType = options[safeIndex].getAttribute('data-type');
-                if (optType === 'queryUser' || optType === targetSuggestion.type) {
-                    safeOption = options[safeIndex];
-                }
+
+        if (matchingByIndex.length === 1) {
+            safeOption = matchingByIndex[0];
+        } else if (matchingByIndex.length > 1) {
+            report.candidate_dom_mapping_error = 'AMBIGUOUS_DUPLICATE_DOM_INDEX';
+        } else {
+            // If data-index is absent, check for direct React Fiber suggestion object identity
+            const matchingByFiber = options.filter(el => {
+                try {
+                    const optKeys = Object.keys(el);
+                    const k = optKeys.find(key => key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$'));
+                    if (k && el[k]) {
+                        let f = el[k];
+                        let depth = 0;
+                        while (f && depth < 10) {
+                            if (f.memoizedProps && (f.memoizedProps.suggestion === targetSuggestion || f.memoizedProps.item === targetSuggestion)) {
+                                return true;
+                            }
+                            f = f.return;
+                            depth++;
+                        }
+                    }
+                } catch (_) {}
+                return false;
+            });
+            if (matchingByFiber.length === 1) {
+                safeOption = matchingByFiber[0];
+            } else if (matchingByFiber.length > 1) {
+                report.candidate_dom_mapping_error = 'AMBIGUOUS_DUPLICATE_FIBER_MATCH';
+            } else {
+                report.candidate_dom_mapping_error = 'NO_VERIFIED_DOM_OR_FIBER_MATCH';
             }
         }
 
         if (safeOption) {
-            const hasBotId = safeOption.hasAttribute('data-bot-id');
+            const hasBotId = safeOption.hasAttribute('data-bot-id') ||
+                             safeOption.hasAttribute('data-is-slackbot') ||
+                             (safeOption.getAttribute('data-type') || '').toLowerCase().includes('slackbot') ||
+                             (safeOption.getAttribute('data-qa') || '').toLowerCase().includes('slackbot');
             const isNav = (safeOption.getAttribute('data-is-navigational') === 'true');
-            if (!hasBotId && !isNav) {
+            const optType = safeOption.getAttribute('data-type');
+            const typeMismatch = (optType && optType !== 'queryUser' && optType !== targetSuggestion.type);
+
+            if (!hasBotId && !isNav && !typeMismatch) {
                 try {
                     safeOption.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, view: window }));
                     safeOption.click();
@@ -809,6 +842,10 @@ JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
                 } catch (e) {
                     report.onenter_invocation_exception = String(e);
                 }
+            } else {
+                if (hasBotId) report.candidate_dom_mapping_error = 'WRITE_CAPABLE_DOM_MARKER_DETECTED';
+                if (isNav) report.candidate_dom_mapping_error = 'NAVIGATIONAL_DOM_MARKER_DETECTED';
+                if (typeMismatch) report.candidate_dom_mapping_error = 'DOM_OPTION_TYPE_MISMATCH';
             }
         }
 

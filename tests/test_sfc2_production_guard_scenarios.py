@@ -172,16 +172,40 @@ function createSlackSearchEnvironment(opts = {}) {
     const suggestions = inst.props.suggestions || [];
     for (let i = 0; i < suggestions.length; i++) {
         const s = suggestions[i];
-        const opt = new MockElement('div', {
+        let dIdx = String(i);
+        if (opts.domOptionIndexMismatch) dIdx = String(i + 99);
+        if (opts.domOptionNoIndex) dIdx = null;
+        if (opts.domOptionDuplicateIndex) dIdx = '0';
+
+        const optAttrs = {
             'role': 'option',
-            'data-index': opts.domOptionIndexMismatch ? String(i + 99) : String(i),
-            'data-type': s.type || ''
-        });
+            'data-type': opts.domOptionTypeMismatch ? 'channel' : (s.type || '')
+        };
+        if (dIdx !== null) optAttrs['data-index'] = dIdx;
+        if (opts.domOptionNavigational) optAttrs['data-is-navigational'] = 'true';
+
+        const opt = new MockElement('div', optAttrs);
         if (s.is_type_slackbot || s.type === 'querySlackbot' || opts.domOptionHasBotId) {
             opt.setAttribute('data-bot-id', 'B001');
         }
+        if (opts.domOptionFiberMatch) {
+            opt['__reactFiber$test'] = {
+                memoizedProps: { suggestion: s },
+                return: null
+            };
+        }
         opt.parentElement = acList;
         acList.children.push(opt);
+    }
+
+    if (opts.domOptionDuplicateIndex) {
+        const dupOpt = new MockElement('div', {
+            'role': 'option',
+            'data-index': '0',
+            'data-type': 'queryUser'
+        });
+        dupOpt.parentElement = acList;
+        acList.children.push(dupOpt);
     }
 
     global.window = { location: { href: "https://app.slack.com/client/T001/C001" } };
@@ -562,3 +586,57 @@ def test_sfc2_scenario_18_dom_option_bot_id_blocks_click():
     assert res.get("ok") is not True
     assert res.get("error") == "SAFE_SEARCH_ACTIVATION_FAILED"
     assert res["_clickedElementIndex"] == -1
+
+
+def test_sfc2_scenario_19_dom_option_missing_index_fails_closed():
+    res = run_js_pre_submit({
+        "domOptionNoIndex": True,
+        "autocompleteSelectedIndex": None
+    })
+    assert res.get("ok") is not True
+    assert res.get("error") == "SAFE_SEARCH_ACTIVATION_FAILED"
+    assert res["report"]["candidate_dom_mapping_error"] == "NO_VERIFIED_DOM_OR_FIBER_MATCH"
+    assert res["_clickedElementIndex"] == -1
+
+
+def test_sfc2_scenario_20_dom_option_duplicate_index_fails_closed():
+    res = run_js_pre_submit({
+        "domOptionDuplicateIndex": True,
+        "autocompleteSelectedIndex": None
+    })
+    assert res.get("ok") is not True
+    assert res.get("error") == "SAFE_SEARCH_ACTIVATION_FAILED"
+    assert res["report"]["candidate_dom_mapping_error"] == "AMBIGUOUS_DUPLICATE_DOM_INDEX"
+    assert res["_clickedElementIndex"] == -1
+
+
+def test_sfc2_scenario_21_dom_option_navigational_marker_fails_closed():
+    res = run_js_pre_submit({
+        "domOptionNavigational": True,
+        "autocompleteSelectedIndex": None
+    })
+    assert res.get("ok") is not True
+    assert res.get("error") == "SAFE_SEARCH_ACTIVATION_FAILED"
+    assert res["report"]["candidate_dom_mapping_error"] == "NAVIGATIONAL_DOM_MARKER_DETECTED"
+    assert res["_clickedElementIndex"] == -1
+
+
+def test_sfc2_scenario_22_dom_option_type_mismatch_fails_closed():
+    res = run_js_pre_submit({
+        "domOptionTypeMismatch": True,
+        "autocompleteSelectedIndex": None
+    })
+    assert res.get("ok") is not True
+    assert res.get("error") == "SAFE_SEARCH_ACTIVATION_FAILED"
+    assert res["report"]["candidate_dom_mapping_error"] == "DOM_OPTION_TYPE_MISMATCH"
+    assert res["_clickedElementIndex"] == -1
+
+
+def test_sfc2_scenario_23_dom_option_fiber_match_when_index_missing_succeeds():
+    res = run_js_pre_submit({
+        "domOptionNoIndex": True,
+        "domOptionFiberMatch": True
+    })
+    assert res.get("ok") is True
+    assert res.get("error") is None
+    assert res["_clickedElementIndex"] == 0
