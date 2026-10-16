@@ -585,32 +585,44 @@ JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
     report.query_state_all_synced = (surfaces.dom && surfaces.quill_text && surfaces.quill_delta && surfaces.texty && surfaces.redux);
 
     // Internal Component Flags
-    // SFC2 Remediation: Authoritative inspection from instance properties, composition detectors, and fail-closed error handling
+    // SFC2 Remediation: Authoritative inspection distinguishing booleans and functions, with fail-closed error handling
     let flagInspectionError = null;
     try {
         const inst = searchInputBoxInstance;
         const st = inst.state || null;
 
+        const evalBoolOrFn = (source, prop) => {
+            if (!source) return false;
+            const val = source[prop];
+            if (typeof val === 'function') {
+                return Boolean(val.call(source));
+            }
+            if (typeof val === 'boolean') {
+                return val;
+            }
+            return false;
+        };
+
         const isUpdating = Boolean(
-            inst._isUpdatingDisplayQuery ||
-            (st && st._isUpdatingDisplayQuery)
+            evalBoolOrFn(inst, '_isUpdatingDisplayQuery') ||
+            evalBoolOrFn(st, '_isUpdatingDisplayQuery')
         );
 
         const inComp = Boolean(
-            inst.isInComposition ||
-            (st && st.isInComposition) ||
-            (textyObj && typeof textyObj.isInComposition === 'function' && textyObj.isInComposition()) ||
+            evalBoolOrFn(inst, 'isInComposition') ||
+            evalBoolOrFn(st, 'isInComposition') ||
+            evalBoolOrFn(textyObj, 'isInComposition') ||
             (inputElem && (inputElem.getAttribute('data-is-composing') === 'true' || !!inputElem.closest('[data-is-composing="true"]')))
         );
 
         const hasSubmitted = Boolean(
-            inst.queryHasBeenSubmitted ||
-            (st && st.queryHasBeenSubmitted)
+            evalBoolOrFn(inst, 'queryHasBeenSubmitted') ||
+            evalBoolOrFn(st, 'queryHasBeenSubmitted')
         );
 
         const hasChanged = Boolean(
-            (st && st.queryHasChanged) ||
-            inst.queryHasChanged
+            evalBoolOrFn(st, 'queryHasChanged') ||
+            evalBoolOrFn(inst, 'queryHasChanged')
         );
 
         report.internal_flags.query_has_changed = hasChanged;
@@ -733,20 +745,25 @@ JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
     const targetSuggestion = safeCandidate.suggestion;
     report.selected_safe_candidate_index = safeIndex;
 
-    // SFC2 Contract: Safe candidate exact-query correlation check
-    const candidateQuery = (
-        targetSuggestion.string ||
-        targetSuggestion.query ||
-        targetSuggestion.text ||
-        targetSuggestion.label ||
-        null
+    // SFC2 Closeout: Strict candidate exact-query correlation check (Fail-Closed)
+    // Authoritative source: Slack queryUser / query-echo stores the raw echo string in .string (or .query)
+    const rawCandidateQuery = (
+        (typeof targetSuggestion.string === 'string' && targetSuggestion.string.trim().length > 0)
+            ? targetSuggestion.string
+            : ((typeof targetSuggestion.query === 'string' && targetSuggestion.query.trim().length > 0)
+                ? targetSuggestion.query
+                : null)
     );
-    if (typeof candidateQuery === 'string' && candidateQuery.trim().length > 0) {
-        const candidateNorm = normalizeQuery(candidateQuery);
-        if (candidateNorm !== targetNormalized) {
-            report.search_submission_target_safe = false;
-            return { error: 'SAFE_CANDIDATE_QUERY_MISMATCH', report };
-        }
+
+    if (rawCandidateQuery === null) {
+        report.search_submission_target_safe = false;
+        return { error: 'SAFE_CANDIDATE_QUERY_MISSING_OR_INVALID', report };
+    }
+
+    const candidateNorm = normalizeQuery(rawCandidateQuery);
+    if (candidateNorm !== targetNormalized) {
+        report.search_submission_target_safe = false;
+        return { error: 'SAFE_CANDIDATE_QUERY_MISMATCH', report };
     }
 
     // Contract 4: Atomic TOCTOU re-validation of candidate identity
@@ -771,9 +788,12 @@ JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
             return dIdx !== null && parseInt(dIdx, 10) === safeIndex;
         });
         if (!safeOption && options[safeIndex]) {
-            const optType = options[safeIndex].getAttribute('data-type');
-            if (optType === 'queryUser' || optType === targetSuggestion.type) {
-                safeOption = options[safeIndex];
+            const dIdx = options[safeIndex].getAttribute('data-index');
+            if (dIdx === null || parseInt(dIdx, 10) === safeIndex) {
+                const optType = options[safeIndex].getAttribute('data-type');
+                if (optType === 'queryUser' || optType === targetSuggestion.type) {
+                    safeOption = options[safeIndex];
+                }
             }
         }
 
@@ -824,8 +844,8 @@ JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER = r"""
         }
     }
 
-    // Fiber fallback for safe activation if DOM element query was not ready
-    if (!activated) {
+    // Fiber fallback for safe activation ONLY if autocompleteSelectedIndex is explicitly safeIndex
+    if (!activated && autocompleteSelectedIndex === safeIndex) {
         try {
             let f = currentFiber;
             let onAcceptFn = null;
