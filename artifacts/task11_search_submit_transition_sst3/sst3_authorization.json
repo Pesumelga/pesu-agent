@@ -1,0 +1,19 @@
+{
+  "approved_git_commit": "7fc0675cf08ae4d22447cea4fcfca1ecce745ae4",
+  "approved_runner_sha256": "c3df20e5df80d2ed297e9a9d4d6ba5e792f648ae2c9a11f7ab9b2baf17664a00",
+  "approved_protocol_sha256": "0d3e8c4979e7fdac486358dd4d09d271b099b238b2d207027c26e555b37c46c1",
+  "authorization_scope": "SST3_LIVE_SINGLE_SHOT",
+  "authorized_at_utc": "2026-10-16T06:56:28.641574+00:00",
+  "authorization_source": "Explicit Product Owner message in this chat approving the stated HEAD and hashes",
+  "target_query": "26년 하반기 간담회",
+  "maximum_query_entries": 1,
+  "maximum_guarded_submits": 1,
+  "allowed_scope": "Search result surface transition verification only",
+  "forbidden_actions": [
+    "message_or_thread_body_collection",
+    "slack_write",
+    "slackbot",
+    "llm_provider_calls",
+    "automatic_retry"
+  ]
+}

@@ -1,6 +1,6 @@
 # PESU Agent — 현재 상태
 
-갱신: 2026-10-16. **현재 단계: Phase 13.5D / Task 11, SST3 단일 Live 검색 승인 대기.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 Phase 9 이하의 과거 기록은 역사 참고이며 현재 단계·승인·모델 선택을 대체하지 않는다.
+갱신: 2026-10-16. **현재 단계: Phase 13.5D / Task 11, 승인된 SST3 Live 1회 실행 종료 — FAIL_CLOSED / TRANSITION_TIMED_OUT. SST3 소비 완료, 재실행 금지.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 Phase 9 이하의 과거 기록은 역사 참고이며 현재 단계·승인·모델 선택을 대체하지 않는다.
 
 ## 제품이 실제로 도달한 범위
 
@@ -9,7 +9,7 @@
 | 영역 | 확인된 구현 / 검증 수준 | 아직 입증되지 않은 부분 |
 | --- | --- | --- |
 | 제품 화면·실행·설정 | `src/pesu_agent/ui/` 및 기존 패키징/동의/로그인 코드 존재. Phase 10–12 완료는 이전 인계 기록이다. | 이번 작업에서 패키지/사용자 화면을 새로 실행하지 않았다. |
-| Slack 검색 | 전용 WebView Host와 `webview_slack_search.py`의 안전 검색 경로 존재. SST3 실제 JS를 Node에서 실행한 non-dry runner 오프라인 경로 통과. | SST3 실제 Slack 검색 제출과 결과 화면 전환은 미실행. |
+| Slack 검색 | 전용 WebView Host와 안전 검색 경로 존재. SST3 Live에서 입력 1회·guarded submit 1회 수행. 로딩 완료 search view 및 결과 DOM 20개 관측. | 검증기가 query 앞의 지역화 제목까지 읽어 정확한 query 일치에 실패했다. 공식 전환 qualification은 FAIL이며 결과 DOM 20개는 전체 검색 결과 수를 뜻하지 않는다. |
 | 근거·주장·업무항목 | `graph_models.py`, `claim_verification.py`, `workitem_synthesis.py`, `production_trace_coordinator.py`에 graph·검증·다단계 합성 구현 존재. 과거 Phase 13.5C의 composed qualification은 fixture/stub 기준 통과다. | 실제 Slack + 실제 provider를 결합한 전체 흐름 통과는 입증되지 않았다. |
 | 근거 답변과 UI 연결 | 답변 구성/표시 코드와 production-shaped 오프라인 E2E 테스트 존재. `InvestigationService._get_or_create_orchestrator()`는 현재 기존 `InvestigationOrchestrator`를 생성한다. | 새 ProductionRealTraceCoordinator 경로의 제품 UI cutover는 아직 완료로 볼 수 없다. |
 
@@ -21,7 +21,7 @@
 - Runner SHA-256: `c3df20e5df80d2ed297e9a9d4d6ba5e792f648ae2c9a11f7ab9b2baf17664a00`.
 - Protocol SHA-256: `0d3e8c4979e7fdac486358dd4d09d271b099b238b2d207027c26e555b37c46c1`.
 - 상세 계약·수정·이전 검증: [SST3_EXECUTION_PATH_AUDIT.md](SST3_EXECUTION_PATH_AUDIT.md). 직전 집중 Python 82 PASS, Node 6 PASS는 오프라인 증거다.
-- SST1/SST2는 소비된 실패 시도다. SST3 실제 marker·authorization·live trace는 없다. 실제 Slack/LLM 실행은 이번 작업에서도 수행하지 않는다.
+- SST1/SST2는 소비된 실패 시도다. SST3도 아래의 승인 Live 실행으로 소비됐다. 실제 marker·authorization·live trace를 보존하며 재실행하지 않는다. LLM 호출과 본문/스레드 수집은 수행하지 않았다.
 - 기존 확장 테스트 143 PASS / 1 FAIL은 SST2 dry-run 테스트가 동결된 과거 Live 승인을 기본 경로에서 읽어 생긴 HEAD 불일치였다. runner/동결 승인 내용은 유지하고 테스트 fixture만 임시 경로로 격리한다. stale 승인 거부 검증은 별도로 유지한다.
 - 이전 QSC2 테스트가 비동결 dry-run 파일을 재생성한 내역은 감사 문서에 기록돼 있다. 이번에는 해당 테스트의 출력을 임시 경로로 바꿔 재발을 막는다. 이전 원본이 복원됐다고 주장하지 않는다.
 
@@ -29,7 +29,25 @@
 
 Engineering Lead가 [NEXT_ACTIONS.md](NEXT_ACTIONS.md)의 우선순위에 따라 승인 불필요 작업을 자율 진행한다. 실제 검색·새 실데이터 수집·실제 provider 비용/민감 처리·동결 계약 변경·중대 설계 변경·배포는 Product Owner의 별도 승인을 받는다. Slack 쓰기와 Slackbot은 금지다.
 
-현재 최우선 다음 작업은 **별도 승인된 SST3 query `26년 하반기 간담회` 최대 1회 제출과 결과 화면 확인**이다. 결과 수 0건도 허용하고 본문 수집·thread 열기·후속 검색·provider 호출·Task 12/production cutover로 확장하지 않는다. 승인 요청 전 최종 HEAD/해시/one-shot 상태와 오프라인 검증 결과를 대조한다.
+승인된 query `26년 하반기 간담회`의 단일 실행은 종료됐다. 실패 증거를 보존하고 보고한 뒤, 다음 개발 작업은 아래 관측에 근거한 query 추출/상관 검사의 최소 오프라인 개선으로 관리한다. 새로운 Live 시도는 별도 계획과 명시적 승인이 필요하다. 이번 실행을 본문 수집·thread 열기·후속 검색·provider 호출·Task 12/production cutover로 확장하지 않는다.
+
+## 2026-10-16 SST3 승인 Live 결과
+
+- 실행 기준: HEAD `7fc0675cf08ae4d22447cea4fcfca1ecce745ae4`, 위 runner/protocol 해시. Product Owner가 이 대화에서 정확한 identity와 1회 범위를 명시적으로 승인했다. 실행 전 tracked tree clean, 34 역사 기준·60 runtime hash 일치 및 실제 artifact 부재를 확인했다.
+- 시작 기록: **15:56:56 KST** (`2026-10-16T06:56:56.136798+00:00`). 기존 전용 프로필/Host의 인증 사전 점검 후 marker를 획득했다. 승인된 원본 CLI를 **1회만** 실행했고 exit code는 **1**이다.
+- 공식 결과: **FAIL_CLOSED / TRANSITION_TIMED_OUT**. Query 입력 1회, readiness poll 1회, guarded submit 시도/성공 각각 1회, 전환 관측 86회. 자동 재시도 0회.
+- 첫 로딩 완료 관측은 poll 11, 약 **1,250.65ms**였다. `search_view_mounted=true`, `loading_detected_after=false`, `skeleton_count=0`, `result_root_count=20`이었으며 마지막 관측에서도 유지됐다. 결과 원문은 읽거나 저장하지 않았다.
+- 기록된 `surface_query_after`는 `다음에 대한 결과: 26년 하반기 간담회`였다. 현재 runner의 `sq.strip() == TARGET_QUERY` 조건에 맞지 않아 관측 제한 10초 내 성공 판정을 못 했다. 이는 제목/검색어 추출과 검증 조건의 불일치를 뒷받침한다. 원본 FAIL을 PASS로 재분류하거나 동결 계약을 바꾸지 않는다.
+- 본문/스레드 수집, Slack 쓰기/Slackbot, LLM provider 호출은 하지 않았다. 실행 후 Host cleanup 경로를 거쳐 종료했다. 실패 후 추가 Host 관측이나 검색은 하지 않았다.
+- 실행 전부터 있던 artifact/output **781개 해시 모두 동일**. Runner/protocol 및 SST1/SST2 증거도 유지됐다. 새 SST3 파일은 아래 세 개만 추가됐다.
+
+| 보존 파일 (`artifacts/task11_search_submit_transition_sst3/`) | SHA-256 |
+| --- | --- |
+| `sst3_authorization.json` | `590dc24fb3fc5749baf88b5606acbabe15f07406c2efc324159ff8279e5d5619` |
+| `sst3_marker.json` | `8251e401b2c1956aac0023494dc43e8825a5d7815302e1111f1d22a16b57a612` |
+| `sst3_live_trace.json` | `6d4198920ec4994705856040683481bd2e5f208d87e8b70aeba43bccbc2488dc` |
+
+CLI stdout/stderr는 `.runtime/sst3-approved-live.stdout.json` / `.runtime/sst3-approved-live.stderr.log`에 추가 보존했다. stdout은 runner 반환 report, stderr는 0바이트다. 이 실행의 승인 HEAD는 이후 결과 기록 커밋의 HEAD와 구분하며, 해당 승인을 재사용하지 않는다.
 
 ## 2026-10-16 운영 체계 정비 검증
 
