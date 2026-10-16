@@ -1,0 +1,19 @@
+{
+  "approved_git_commit": "7ab6157b74404dccf451a50ef02e03fd4ce59a35",
+  "approved_runner_sha256": "2a8cb74b5209bf6d499496a3e9540473314d01a90581515ebc847f347ade8490",
+  "approved_protocol_sha256": "53b2d3a20a8e8c4a9cf766c8ead1ead6b0f8b106d7f6e240c79896228d6410d9",
+  "authorization_scope": "SST4_LIVE_SINGLE_SHOT",
+  "authorized_at_utc": "2026-10-16T07:18:53.122932+00:00",
+  "authorization_source": "Product Owner explicitly delegated offline fix, tests, commit and new Live execution in the latest user message; Engineering Lead bounds this to one SST4 result-surface verification",
+  "target_query": "26년 하반기 간담회",
+  "maximum_query_entries": 1,
+  "maximum_guarded_submits": 1,
+  "allowed_scope": "Search result surface transition verification only",
+  "forbidden_actions": [
+    "message_or_thread_body_collection",
+    "slack_write",
+    "slackbot",
+    "llm_provider_calls",
+    "automatic_retry"
+  ]
+}

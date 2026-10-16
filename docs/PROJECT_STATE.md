@@ -1,6 +1,6 @@
 # PESU Agent — 현재 상태
 
-갱신: 2026-10-16. **현재 단계: Phase 13.5D / Task 11, 검색어 추출 수정의 오프라인 검증 완료, 사용자 위임 범위의 새 SST4 Live 1회 준비. SST3는 FAIL_CLOSED / TRANSITION_TIMED_OUT으로 소비 완료, 재실행 금지.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 Phase 9 이하의 과거 기록은 역사 참고이며 현재 단계·승인·모델 선택을 대체하지 않는다.
+갱신: 2026-10-16. **현재 단계: Phase 13.5D / Task 11, 검색어 추출 수정 후 SST4 실제 검색·결과 화면 전환 검증 통과. SST3 FAIL과 SST4 PASS는 별도 증거로 보존하며 둘 다 재실행하지 않는다. 다음은 Evidence 연결 준비 및 실제 본문 수집 범위의 승인 경계다.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 Phase 9 이하의 과거 기록은 역사 참고이며 현재 단계·승인·모델 선택을 대체하지 않는다.
 
 ## 제품이 실제로 도달한 범위
 
@@ -9,7 +9,7 @@
 | 영역 | 확인된 구현 / 검증 수준 | 아직 입증되지 않은 부분 |
 | --- | --- | --- |
 | 제품 화면·실행·설정 | `src/pesu_agent/ui/` 및 기존 패키징/동의/로그인 코드 존재. Phase 10–12 완료는 이전 인계 기록이다. | 이번 작업에서 패키지/사용자 화면을 새로 실행하지 않았다. |
-| Slack 검색 | 전용 WebView Host와 안전 검색 경로 존재. SST3 Live에서 입력 1회·guarded submit 1회 수행. 로딩 완료 search view 및 결과 DOM 20개 관측. | 검증기가 query 앞의 지역화 제목까지 읽어 정확한 query 일치에 실패했다. 공식 전환 qualification은 FAIL이며 결과 DOM 20개는 전체 검색 결과 수를 뜻하지 않는다. |
+| Slack 검색 | SST3의 제목/query 불일치를 최소 수정하고 SST4 Live에서 입력·guarded submit 각각 1회, 정확한 query와 로딩 완료 search view를 확인했다. 공식 결과 QUALIFICATION_PASS. | 결과 DOM 20개는 전체 검색 결과 수가 아니다. 메시지 본문·스레드 수집과 실제 Evidence 연결은 이번 검증에 포함하지 않았다. |
 | 근거·주장·업무항목 | `graph_models.py`, `claim_verification.py`, `workitem_synthesis.py`, `production_trace_coordinator.py`에 graph·검증·다단계 합성 구현 존재. 과거 Phase 13.5C의 composed qualification은 fixture/stub 기준 통과다. | 실제 Slack + 실제 provider를 결합한 전체 흐름 통과는 입증되지 않았다. |
 | 근거 답변과 UI 연결 | 답변 구성/표시 코드와 production-shaped 오프라인 E2E 테스트 존재. `InvestigationService._get_or_create_orchestrator()`는 현재 기존 `InvestigationOrchestrator`를 생성한다. | 새 ProductionRealTraceCoordinator 경로의 제품 UI cutover는 아직 완료로 볼 수 없다. |
 
@@ -29,9 +29,24 @@
 
 Engineering Lead가 [NEXT_ACTIONS.md](NEXT_ACTIONS.md)의 우선순위에 따라 승인 불필요 작업을 자율 진행한다. 실제 검색·새 실데이터 수집·실제 provider 비용/민감 처리·동결 계약 변경·중대 설계 변경·배포는 Product Owner의 별도 승인을 받는다. Slack 쓰기와 Slackbot은 금지다.
 
-SST3의 단일 실행은 종료됐다. 이후 사용자는 검색어 추출·검증 불일치의 오프라인 재현·최소 수정·테스트·커밋과 새 Live 실행을 명시적으로 위임했다. Engineering Lead는 이를 **같은 query `26년 하반기 간담회`의 새 SST4 1회, 결과 화면 확인까지만**으로 한정한다. 커밋 후 새 HEAD/runner/protocol 해시에 승인 기록을 묶고, 실패 시 자동 재시도 없이 원본을 보존한다. 본문 수집·thread 열기·provider 호출·Task 12/production cutover로 확장하지 않는다.
+사용자가 검색어 추출 수정·테스트·커밋과 새 Live 실행을 명시적으로 위임했고, 이를 **같은 query `26년 하반기 간담회`의 SST4 1회, 결과 화면 확인까지만**으로 한정해 완료했다. 정확한 새 HEAD/runner/protocol 해시에 승인 기록을 묶었으며 재시도 없이 통과했다. 다음 제품 작업은 Evidence 연결 준비다. 실제 본문 수집·저장 범위와 provider 비용/외부 전송은 별도 사용자 확인이 필요하다. 이번 승인을 thread 열기·추가 검색·provider 호출·production cutover로 확대하지 않는다.
 
-## 2026-10-16 검색어 추출 수정 / SST4 준비
+## 2026-10-16 SST4 승인 Live 결과
+
+- 실행 HEAD: `7ab6157b74404dccf451a50ef02e03fd4ce59a35` (검색어 추출 수정 커밋). 이 시점에 tracked tree clean, 현재 runtime closure 60개·역사 기준 34개·SST3 원본 증거 해시 3개와 미사용 상태를 대조했다. 이후 증거 보존 커밋은 별도 HEAD다.
+- 시작 기록: **16:19:10 KST** (`2026-10-16T07:19:10.112787+00:00`). 원본 SST4 CLI 1회 실행, exit code **0**.
+- 공식 결과: **QUALIFICATION_PASS / SEARCH_SUBMIT_TRANSITION_SUCCESS**. 입력 1회, readiness poll 1회, guarded submit 시도/성공 각각 1회. 전환 poll 6에서 **914.89ms**에 `search_view_mounted=true`, `loading_detected_after=false`, `skeleton_count=0`, `surface_query_after=26년 하반기 간담회`, `result_root_count=20`을 관측했다.
+- 첫 관측은 로딩 중·query 미확정이었고 완료 관측에서 정확한 query가 확인됐다. 단순 제목 포함 여부나 editor echo로 성공시키지 않았다. 결과 DOM 수는 화면에 감지된 항목 수이며 전체 검색 결과 수는 아니다.
+- 자동 재시도·본문 수집·thread 열기·Slack 쓰기/Slackbot·LLM 호출은 없다. Host cleanup 후 종료했고 추가 Host 관측/검색은 하지 않았다. CLI stdout/stderr는 `.runtime/sst4-approved-live.stdout.json` / `.runtime/sst4-approved-live.stderr.log`에 보존했으며 stderr는 0바이트다.
+- 실행 직전부터 있던 artifact/output **785개 해시 모두 동일**. SST1/SST2/SST3의 이전 증거와 원자적 제출 guard를 보존했다. SST4는 소비됐으며 다음 단계에서 재사용하지 않는다.
+
+| 보존 파일 (`artifacts/task11_search_submit_transition_sst4/`) | SHA-256 |
+| --- | --- |
+| `sst4_authorization.json` | `dc315fe08ab12a50af7771474b69e2ab5b171cd3a636a53cec0a3ad3379a04c1` |
+| `sst4_marker.json` | `11347596e2f4649d4cf10fdd374e55fb0198139569ac05cd3901900e18f31802` |
+| `sst4_live_trace.json` | `1738dc322710e7ca960ac7f5724a890ea443bcdeba6ff1bee8a882a922c95d22` |
+
+## 2026-10-16 검색어 추출 수정 / SST4 준비 기록
 
 - Production 변경은 `JS_PROBE_POST_WAIT_SEARCH_STATE`에 한정했다. 유일한 search view 안의 query 전용 필드는 그대로 읽고, presentation title에서만 관측된 UI 안내 문구 `다음에 대한 결과:`를 시작 위치에서 한 번 제거한다. 업무 도메인/정답 규칙은 추가하지 않았다.
 - URL/header query가 다르거나 header/search view가 모호하면 query를 확정하지 않는다. 입력창 echo만으로 결과 검색어를 증명하는 fallback을 제거했다. 완료 판정의 정확한 query 일치·로딩 해제 조건 및 기존 원자적 제출 가드는 그대로다.
@@ -42,7 +57,7 @@ SST3의 단일 실행은 종료됐다. 이후 사용자는 검색어 추출·검
 - SST4 runner SHA-256: `2a8cb74b5209bf6d499496a3e9540473314d01a90581515ebc847f347ade8490`.
 - SST4 protocol SHA-256: `53b2d3a20a8e8c4a9cf766c8ead1ead6b0f8b106d7f6e240c79896228d6410d9`.
 - Production module SHA-256: `d1db3f5034fc7b03b8b676e78fb615ebc7876134b14014fc338a7cd536724b42`.
-- 이 준비 시점에는 SST4 authorization/marker/live trace가 없다. 실제 실행의 정확한 HEAD와 결과는 이후 실행 기록으로 구분한다.
+- 이 준비 시점에는 SST4 authorization/marker/live trace가 없었다. 이후 승인된 실행 결과와 증거는 위의 별도 Live 기록을 따른다.
 
 ## 2026-10-16 SST3 승인 Live 결과
 

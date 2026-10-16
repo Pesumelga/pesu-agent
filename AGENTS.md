@@ -17,7 +17,7 @@ PESU Agent는 Slack의 논의·결정·진행 상황을 근거로 조직 지식�
 - 새로운 범위의 실제 Slack 콘텐츠 추출·저장·외부 전송, 실제 LLM 비용·민감 데이터 처리, frozen evidence/검증 계약 변경, 중대한 아키텍처/요구사항 변경, 배포·외부 쓰기·force push·위험한 reset·대규모 삭제는 별도 승인이 필요하다.
 - 도구·샌드박스 권한을 준수한다. 개발 권한을 Live 실행 권한으로 해석하지 않는다.
 - 승인 요청은 작업·이유·효과·위험/영향·실패 대응·권장 선택·정확한 실행 범위를 포함한다. SST3 승인은 최종 HEAD, runner/protocol SHA-256, query, 한 번의 제출에 묶는다. 승인이 없으면 실제 marker/authorization/live trace를 만들지 않는다.
-- SST1/SST2 및 SST3는 소비된 시도다. 재실행하거나 marker/trace/승인 파일을 덮어쓰지 않는다. SST3의 2026-10-16 승인 실행은 `FAIL_CLOSED / TRANSITION_TIMED_OUT`이며 화면 관측을 근거로 PASS로 다시 쓰지 않는다. Stage 1A/1B/2/2.5의 동결 증거와 계약도 보존한다.
+- SST1/SST2/SST3 및 SST4는 소비된 시도다. 재실행하거나 marker/trace/승인 파일을 덮어쓰지 않는다. SST3의 2026-10-16 실행은 `FAIL_CLOSED / TRANSITION_TIMED_OUT`, 별도로 수정·검증한 SST4는 `QUALIFICATION_PASS`다. SST3 FAIL을 PASS로 다시 쓰지 않는다. Stage 1A/1B/2/2.5의 동결 증거와 계약도 보존한다.
 
 ## 개발·검증·Git
 

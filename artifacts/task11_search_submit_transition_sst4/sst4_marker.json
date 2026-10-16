@@ -1,0 +1,12 @@
+{
+  "task_id": "TASK_11_SEARCH_SUBMIT_TRANSITION_SST4",
+  "protocol": "TASK_11_SEARCH_SUBMIT_TRANSITION_SST4",
+  "diagnostic_run": "SST4",
+  "timestamp_utc": "2026-10-16T07:19:10.112787+00:00",
+  "git_commit": "7ab6157b74404dccf451a50ef02e03fd4ce59a35",
+  "runner_sha256": "2a8cb74b5209bf6d499496a3e9540473314d01a90581515ebc847f347ade8490",
+  "protocol_sha256": "53b2d3a20a8e8c4a9cf766c8ead1ead6b0f8b106d7f6e240c79896228d6410d9",
+  "target_query": "26\ub144 \ud558\ubc18\uae30 \uac04\ub2f4\ud68c",
+  "action_contract": "SINGLE_SHOT_GUARDED_SUBMIT_AND_TRANSITION_OBSERVE",
+  "zero_write_asserted": true
+}
