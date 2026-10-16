@@ -96,8 +96,6 @@ class MockHostForSST3:
                 "ready": is_ready,
                 "auth_required": not self.auth_ok,
                 "search_button_count": 1 if is_ready else 0,
-                "authenticated": self.auth_ok,
-                "client_ready": is_ready,
             }
 
         if "searchButtons" in script and "dispatchEvent" in script:
@@ -106,7 +104,7 @@ class MockHostForSST3:
 
         if "searchModalCandidates" in script:
             # JS_CHECK_SEARCH_INPUT_READINESS
-            return {"input_ready": self.input_ready}
+            return {"ready": self.input_ready, "ambiguous": False}
 
         if "setContents" in script:
             # JS_SET_TEXTY_QUERY
@@ -346,6 +344,8 @@ def test_js_evaluation_failure_no_marker(tmp_path, monkeypatch):
 
         assert res["verdict"] == "FAIL_CLOSED"
         assert not marker.exists(), "One-shot marker MUST NOT be acquired on JS evaluation failure!"
+        assert res["diagnostic_verdict"] == "AUTH_PREFLIGHT_JS_ERROR"
+        assert "Simulated JS evaluation failure" in res["error"]
     finally:
         sst3_runner.AUTH_PREFLIGHT_OBSERVATION_TIMEOUT_MS = orig_timeout
         sst3_runner.MAX_AUTH_PREFLIGHT_POLLS = orig_polls
@@ -473,3 +473,210 @@ def test_sst3_dry_run_execution(tmp_path):
     assert res["verdict"] == "DRY_RUN_PASS"
     assert res["diagnostic_verdict"] == "SEARCH_SUBMIT_TRANSITION_SUCCESS"
     assert dry_out.exists()
+
+
+class ProductionJSHost:
+    """Execute the runner's exact expressions in Node, using the existing guard DOM fixture."""
+
+    def __init__(self):
+        self.calls = []
+        self.destroyed = False
+        self.entered = False
+        self.submitted = False
+
+    def destroy(self):
+        self.destroyed = True
+
+    def evaluate_js(self, script):
+        import subprocess
+        from tests.test_sfc2_production_guard_scenarios import NODE_MOCK_HARNESS
+
+        self.calls.append(script)
+        source = NODE_MOCK_HARNESS + "\n" + r'''
+const query = __QUERY__;
+const env = createSlackSearchEnvironment({targetQuery: query});
+let entered = __ENTERED__, submitted = __SUBMITTED__;
+env.inst.onEnter = () => { throw new Error('Generic onEnter forbidden'); };
+env.inst.texty.setContents = (contents) => {
+    if (contents.contents[0].insert !== query) throw new Error('Wrong query');
+    entered = true;
+};
+env.input.offsetWidth = 100;
+env.input.getClientRects = () => [{}];
+for (const option of env.acList.children) option.click = () => { submitted = true; };
+const oldAll = document.querySelectorAll;
+document.querySelectorAll = (selector) => {
+    if (selector.includes('top_nav_search')) return [{dispatchEvent: () => true}];
+    if (selector === '[data-qa="search_view"]') return submitted ? [{isConnected:true, querySelectorAll:()=>[]}] : [];
+    return oldAll(selector);
+};
+window.location.href = 'https://app.slack.com/client/T001/C001' + (submitted ? '?q=' + encodeURIComponent(query) : '');
+const result = eval(__SCRIPT__);
+console.log(JSON.stringify({result, entered, submitted}));
+'''
+        for key, value in {"QUERY": sst3_runner.TARGET_QUERY, "ENTERED": self.entered,
+                           "SUBMITTED": self.submitted, "SCRIPT": script}.items():
+            source = source.replace("__" + key + "__", json.dumps(value))
+        proc = subprocess.run(["node", "-"], input=source, capture_output=True, text=True, encoding="utf-8")
+        assert proc.returncode == 0, proc.stderr
+        data = json.loads(proc.stdout)
+        self.entered, self.submitted = data["entered"], data["submitted"]
+        return data["result"]
+
+
+def _offline_execution(tmp_path, monkeypatch, host):
+    # Only temporary fixtures authorize the offline stub; never use real artifact paths.
+    monkeypatch.setattr(sst3_runner, "verify_clean_working_tree", lambda: (True, "CLEAN"))
+    monkeypatch.setattr(sst3_runner.time, "sleep", lambda _: None)
+    return sst3_runner.run_sst3_qualification(
+        marker_file_override=tmp_path / "marker.json",
+        output_file_override=tmp_path / "trace.json",
+        authorization_file_override=_make_valid_auth_file(tmp_path / "auth.json"),
+        host_factory=lambda: host,
+    )
+
+
+def test_real_production_js_complete_runner_path(tmp_path, monkeypatch):
+    host = ProductionJSHost()
+    assert host.evaluate_js(sst3_runner.JS_CHECK_AUTH_AND_READINESS) == {
+        "ready": True, "auth_required": False, "search_button_count": 1,
+    }
+    host.calls.clear()
+    result = _offline_execution(tmp_path, monkeypatch, host)
+    assert result["diagnostic_verdict"] == "SEARCH_SUBMIT_TRANSITION_SUCCESS", result
+    assert host.entered and host.submitted and host.destroyed
+    assert result["observed_actions"]["query_entries_executed"] == 1
+    assert result["observed_actions"]["guarded_submit_attempts"] == 1
+    assert host.calls[:2] == [sst3_runner.JS_CHECK_AUTH_AND_READINESS] * 2
+    original = (tmp_path / "trace.json").read_bytes()
+    again = _offline_execution(tmp_path, monkeypatch, host)
+    assert again["diagnostic_verdict"] == "LIVE_TRACE_ALREADY_EXISTS"
+    assert (tmp_path / "trace.json").read_bytes() == original
+
+
+@pytest.mark.parametrize("response", [
+    {"ready": True, "auth_required": True, "authenticated": True, "client_ready": True},
+    {"authenticated": True, "client_ready": True},
+    {"ready": True, "auth_required": False},
+    {"ready": "yes", "auth_required": False, "search_button_count": 1},
+    {"ready": True, "auth_required": False, "search_button_count": 2},
+    None, "TypeError", [],
+])
+def test_auth_requires_real_strict_production_schema(tmp_path, monkeypatch, response):
+    host = MockHostForSST3()
+    host.evaluate_js = lambda _: response
+    result = _offline_execution(tmp_path, monkeypatch, host)
+    assert result["verdict"] == "FAIL_CLOSED"
+    assert not (tmp_path / "marker.json").exists()
+
+
+@pytest.mark.parametrize("activation", [None, {"error": "BUTTON_CARDINALITY_NOT_ONE"}, {"activated": False}])
+def test_activation_failure_never_enters_query(tmp_path, monkeypatch, activation):
+    host = MockHostForSST3()
+    evaluate = host.evaluate_js
+    host.evaluate_js = lambda s: activation if s == sst3_runner.JS_ACTIVATE_SEARCH else evaluate(s)
+    result = _offline_execution(tmp_path, monkeypatch, host)
+    assert result["diagnostic_verdict"] == "SEARCH_ACTIVATION_FAILED"
+    assert result["observed_actions"]["query_entries_executed"] == 0
+
+
+def test_delayed_input_mount_is_observed_without_reactivation(tmp_path, monkeypatch):
+    host = MockHostForSST3()
+    evaluate = host.evaluate_js
+    responses = iter([{"ready": False, "ambiguous": False}, {"ready": True, "ambiguous": False}])
+    def delayed(script):
+        if script == sst3_runner.JS_CHECK_SEARCH_INPUT_READINESS:
+            host.calls.append(script)
+            return next(responses)
+        return evaluate(script)
+    host.evaluate_js = delayed
+    result = _offline_execution(tmp_path, monkeypatch, host)
+    assert result["verdict"] == "QUALIFICATION_PASS", result
+    assert host.calls.count(sst3_runner.JS_ACTIVATE_SEARCH) == 1
+    assert host.calls.count(sst3_runner.JS_CHECK_SEARCH_INPUT_READINESS) == 2
+
+
+def test_marker_race_cannot_overwrite_winner_trace(tmp_path, monkeypatch):
+    host = MockHostForSST3()
+    evaluate = host.evaluate_js
+    def racing(script):
+        if script == sst3_runner.JS_CHECK_AUTH_AND_READINESS:
+            (tmp_path / "marker.json").write_text('winner marker')
+            (tmp_path / "trace.json").write_text('winner trace')
+        return evaluate(script)
+    host.evaluate_js = racing
+    result = _offline_execution(tmp_path, monkeypatch, host)
+    assert result["diagnostic_verdict"] == "ATTEMPT_ALREADY_EXISTS"
+    assert (tmp_path / "trace.json").read_text(encoding="utf-8") == 'winner trace'
+
+
+def test_preflight_failure_does_not_block_later_readiness(tmp_path, monkeypatch):
+    result = _offline_execution(tmp_path, monkeypatch, MockHostForSST3(auth_ok=False))
+    assert result["diagnostic_verdict"] == "AUTH_OR_CLIENT_NOT_READY"
+    assert not (tmp_path / "marker.json").exists()
+    assert not (tmp_path / "trace.json").exists()
+    assert _offline_execution(tmp_path, monkeypatch, MockHostForSST3())["verdict"] == "QUALIFICATION_PASS"
+
+
+@pytest.mark.parametrize("stage, counter", [
+    ("JS_SET_TEXTY_QUERY", "query_entries_executed"),
+    ("JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER", "guarded_submit_attempts"),
+])
+def test_action_evaluation_exception_retains_attempt_without_retry(tmp_path, monkeypatch, stage, counter):
+    host = MockHostForSST3()
+    evaluate = host.evaluate_js
+    script = f"({getattr(sst3_runner, stage)})({json.dumps(sst3_runner.TARGET_QUERY)})"
+    def throwing(expression):
+        if expression == script:
+            host.calls.append(expression)
+            raise TimeoutError("Response lost after dispatch")
+        return evaluate(expression)
+    host.evaluate_js = throwing
+    result = _offline_execution(tmp_path, monkeypatch, host)
+    assert result["diagnostic_verdict"] == "RUNTIME_EXCEPTION"
+    assert result["observed_actions"][counter] == 1
+    assert host.calls.count(script) == 1
+    assert (tmp_path / "marker.json").exists()
+    before = len(host.calls)
+    assert _offline_execution(tmp_path, monkeypatch, host)["verdict"] == "FAIL_CLOSED"
+    assert len(host.calls) == before
+
+
+@pytest.mark.parametrize("response", [None, "error", {}, {
+    "search_view_mounted": True, "surface_query_after": sst3_runner.TARGET_QUERY,
+}])
+def test_missing_transition_fields_cannot_pass(tmp_path, monkeypatch, response):
+    host = MockHostForSST3()
+    evaluate = host.evaluate_js
+    host.evaluate_js = lambda s: response if s == sst3_runner.JS_PROBE_POST_WAIT_SEARCH_STATE else evaluate(s)
+    result = _offline_execution(tmp_path, monkeypatch, host)
+    assert result["diagnostic_verdict"] == "TRANSITION_TIMED_OUT"
+    assert result["observed_actions"]["guarded_submit_attempts"] == 1
+
+
+def test_default_host_construction_start_and_fallback_adapters(tmp_path, monkeypatch):
+    host = MockHostForSST3()
+    def construct(**kwargs):
+        inspect.signature(PesuWebViewHost).bind(**kwargs)
+        assert kwargs["user_data_folder"] == str(DIRECT_SLACK_PROFILE_PATH)
+        assert kwargs["initial_url"] == "https://app.slack.com/client"
+        return host
+    monkeypatch.setattr(sst3_runner, "PesuWebViewHost", construct)
+    monkeypatch.setattr(sst3_runner, "verify_clean_working_tree", lambda: (True, "CLEAN"))
+    result = sst3_runner.run_sst3_qualification(
+        marker_file_override=tmp_path / "marker.json",
+        output_file_override=tmp_path / "trace.json",
+        authorization_file_override=_make_valid_auth_file(tmp_path / "auth.json"),
+    )
+    assert result["verdict"] == "QUALIFICATION_PASS"
+    assert host.started and host.destroyed
+
+    class LegacyHost:
+        def evaluate_javascript(self, script):
+            return script
+        def stop(self):
+            self.stopped = True
+    legacy = LegacyHost()
+    assert sst3_runner._evaluate_host_js(legacy, "expression") == "expression"
+    sst3_runner._cleanup_host(legacy)
+    assert legacy.stopped

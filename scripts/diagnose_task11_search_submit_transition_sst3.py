@@ -417,6 +417,17 @@ def _cleanup_host(host: Any) -> None:
         logger.warning(f"Error during host cleanup: {ex}")
 
 
+def _auth_ready(result: Any) -> bool:
+    """Accept only the production probe's unambiguous authenticated state."""
+    return (
+        isinstance(result, dict)
+        and result.get("ready") is True
+        and result.get("auth_required") is False
+        and type(result.get("search_button_count")) is int
+        and result["search_button_count"] == 1
+    )
+
+
 def run_sst3_qualification(
     dry_run: bool = False,
     timeout: float = 60.0,
@@ -671,6 +682,7 @@ def run_sst3_qualification(
 
         report["harness_phases"].append("READ_ONLY_AUTH_PREFLIGHT")
         auth_preflight_ok = False
+        auth_preflight_error = None
         start_auth_wait = time.monotonic()
 
         for a_idx in range(MAX_AUTH_PREFLIGHT_POLLS):
@@ -680,14 +692,12 @@ def run_sst3_qualification(
 
             try:
                 auth_res = _evaluate_host_js(host, JS_CHECK_AUTH_AND_READINESS)
+                auth_preflight_error = None
             except Exception as js_ex:
                 auth_res = None
+                auth_preflight_error = sanitize_trace_data(str(js_ex))
 
-            # Support both direct JS schema (ready/auth_required) and legacy mock schema (authenticated/client_ready)
-            auth_ok = bool(auth_res and (not auth_res.get("auth_required", True) or auth_res.get("authenticated", False)))
-            ready_ok = bool(auth_res and (auth_res.get("ready", False) or auth_res.get("client_ready", False)))
-
-            if auth_ok and ready_ok:
+            if _auth_ready(auth_res):
                 auth_preflight_ok = True
                 break
 
@@ -697,6 +707,9 @@ def run_sst3_qualification(
             report["verdict"] = "FAIL_CLOSED"
             report["diagnostic_verdict"] = "AUTH_OR_CLIENT_NOT_READY"
             report["error"] = "Auth check returned unauthenticated or client not ready during read-only preflight; marker acquisition aborted"
+            if auth_preflight_error is not None:
+                report["diagnostic_verdict"] = "AUTH_PREFLIGHT_JS_ERROR"
+                report["error"] = auth_preflight_error
             return report
 
         report["checks"]["auth_and_readiness_preflight_passed"] = True
@@ -717,27 +730,42 @@ def run_sst3_qualification(
 
         # Step 3c: Recheck Auth & Readiness on Same Host
         auth_recheck = _evaluate_host_js(host, JS_CHECK_AUTH_AND_READINESS)
-        recheck_auth_ok = bool(auth_recheck and (not auth_recheck.get("auth_required", True) or auth_recheck.get("authenticated", False)))
-        recheck_ready_ok = bool(auth_recheck and (auth_recheck.get("ready", False) or auth_recheck.get("client_ready", False)))
-        if not recheck_auth_ok or not recheck_ready_ok:
+        if not _auth_ready(auth_recheck):
             report["verdict"] = "FAIL_CLOSED"
             report["diagnostic_verdict"] = "AUTH_OR_CLIENT_NOT_READY"
             report["error"] = "Auth recheck failed on active host after marker acquisition"
             return report
         report["checks"]["auth_and_readiness_verified"] = True
 
-        _evaluate_host_js(host, JS_ACTIVATE_SEARCH)
-        input_ready = _evaluate_host_js(host, JS_CHECK_SEARCH_INPUT_READINESS)
-        if not input_ready or not input_ready.get("input_ready"):
+        activation = _evaluate_host_js(host, JS_ACTIVATE_SEARCH)
+        if not isinstance(activation, dict) or activation.get("activated") is not True or activation.get("error"):
+            report["verdict"] = "FAIL_CLOSED"
+            report["diagnostic_verdict"] = "SEARCH_ACTIVATION_FAILED"
+            return report
+
+        input_ready = False
+        input_start = time.monotonic()
+        for _ in range(MAX_READINESS_POLLS):
+            if (time.monotonic() - input_start) * 1000 > READINESS_OBSERVATION_TIMEOUT_MS:
+                break
+            probe = _evaluate_host_js(host, JS_CHECK_SEARCH_INPUT_READINESS)
+            if isinstance(probe, dict):
+                if probe.get("ambiguous") is not False:
+                    break
+                if probe.get("ready") is True and not probe.get("error"):
+                    input_ready = True
+                    break
+            time.sleep(READINESS_POLL_INTERVAL_MS / 1000.0)
+        if not input_ready:
             report["verdict"] = "FAIL_CLOSED"
             report["diagnostic_verdict"] = "SEARCH_INPUT_NOT_READY"
             return report
         report["checks"]["auth_and_readiness_verified"] = True
 
         report["harness_phases"].append("QUERY_ENTRY")
-        entry_res = _evaluate_host_js(host, f"({JS_SET_TEXTY_QUERY})({json.dumps(TARGET_QUERY)})")
         report["observed_actions"]["query_entries_executed"] = 1
-        if not entry_res or not entry_res.get("ok"):
+        entry_res = _evaluate_host_js(host, f"({JS_SET_TEXTY_QUERY})({json.dumps(TARGET_QUERY)})")
+        if not isinstance(entry_res, dict) or entry_res.get("ok") is not True or entry_res.get("error"):
             report["verdict"] = "FAIL_CLOSED"
             report["diagnostic_verdict"] = "QUERY_ENTRY_FAILED"
             report["error"] = sanitize_trace_data(str(entry_res))
@@ -754,7 +782,9 @@ def run_sst3_qualification(
             if elapsed_r > READINESS_OBSERVATION_TIMEOUT_MS:
                 break
 
-            r_probe = _evaluate_host_js(host, f"({JS_PROBE_SEARCH_READINESS_BEFORE_SUBMIT})({json.dumps(TARGET_QUERY)})") or {}
+            r_probe = _evaluate_host_js(host, f"({JS_PROBE_SEARCH_READINESS_BEFORE_SUBMIT})({json.dumps(TARGET_QUERY)})")
+            if not isinstance(r_probe, dict):
+                r_probe = {}
             r_polls.append({
                 "poll_index": r_idx + 1,
                 "elapsed_ms": round(elapsed_r, 2),
@@ -765,7 +795,7 @@ def run_sst3_qualification(
                 "safe_cand_match": bool(r_probe.get("safe_candidate_exact_match")),
             })
 
-            if r_probe.get("ready"):
+            if r_probe.get("ready") is True:
                 readiness_converged = True
                 report["readiness_telemetry"] = {
                     "converged_poll_index": r_idx + 1,
@@ -786,12 +816,12 @@ def run_sst3_qualification(
         report["checks"]["readiness_before_submit_converged"] = True
 
         report["harness_phases"].append("GUARDED_SUBMIT")
-        submit_res = _evaluate_host_js(host, f"({JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER})({json.dumps(TARGET_QUERY)})")
         report["observed_actions"]["guarded_submit_attempts"] = 1
-        if not submit_res or not submit_res.get("ok"):
+        submit_res = _evaluate_host_js(host, f"({JS_ATOMIC_PRE_SUBMIT_AND_INVOKE_ONENTER})({json.dumps(TARGET_QUERY)})")
+        if not isinstance(submit_res, dict) or submit_res.get("ok") is not True or submit_res.get("error"):
             report["verdict"] = "FAIL_CLOSED"
             report["diagnostic_verdict"] = "SEARCH_GUARD_BLOCKED_SUBMISSION"
-            report["error"] = sanitize_trace_data(str(submit_res.get("error") if submit_res else "SUBMIT_NULL"))
+            report["error"] = sanitize_trace_data(str(submit_res))
             return report
         report["observed_actions"]["guarded_submit_successes"] = 1
         report["checks"]["guarded_submit_executed"] = True
@@ -806,9 +836,12 @@ def run_sst3_qualification(
             if elapsed_ms > TRANSITION_OBSERVATION_TIMEOUT_MS:
                 break
 
-            probe = _evaluate_host_js(host, JS_PROBE_POST_WAIT_SEARCH_STATE) or {}
-            sv_mounted = bool(probe.get("search_view_mounted", False))
-            loading = bool(probe.get("loading_detected_after", False)) or (probe.get("skeleton_count", 0) > 0)
+            probe = _evaluate_host_js(host, JS_PROBE_POST_WAIT_SEARCH_STATE)
+            if not isinstance(probe, dict):
+                probe = {}
+            sv_mounted = probe.get("search_view_mounted") is True
+            skeleton_count = probe.get("skeleton_count")
+            loading = not (probe.get("loading_detected_after") is False and type(skeleton_count) is int and skeleton_count == 0)
             sq = probe.get("surface_query_after")
             res_count = probe.get("result_root_count", 0)
 
@@ -822,7 +855,7 @@ def run_sst3_qualification(
                 "surface_query_after": sq,
             })
 
-            if sv_mounted and not loading and sq and sq.strip() == TARGET_QUERY:
+            if sv_mounted and not loading and isinstance(sq, str) and sq.strip() == TARGET_QUERY:
                 transition_confirmed = True
                 report["transition_telemetry"] = {
                     "poll_count": p_idx + 1,
@@ -856,8 +889,15 @@ def run_sst3_qualification(
         if host:
             _cleanup_host(host)
 
-        with open(output_file, "w", encoding="utf-8") as of:
-            json.dump(sanitize_trace_data(report), of, indent=2, ensure_ascii=False)
+        # Only the marker owner writes a live trace. Preflight failures remain
+        # available in the returned report without consuming the live output path.
+        if report["checks"]["attempt_marker_written"]:
+            try:
+                with open(output_file, "x", encoding="utf-8") as of:
+                    json.dump(sanitize_trace_data(report), of, indent=2, ensure_ascii=False)
+            except FileExistsError:
+                report["verdict"] = "FAIL_CLOSED"
+                report["diagnostic_verdict"] = "LIVE_TRACE_ALREADY_EXISTS"
 
     return report
 
