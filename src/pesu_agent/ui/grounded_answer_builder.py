@@ -153,7 +153,10 @@ class GroundedWorkItemAnswerBuilder:
 
                     # Check for explicit blocker signal or relation
                     signal_str = str(getattr(trace, "lifecycle_signal", "") or "")
-                    if "BLOCKER" in signal_str or status_str == "BLOCKED":
+                    if "BLOCKER" in signal_str or (
+                        not signal_str and status_str == "BLOCKED"
+                        and trace.claim_id in chain.governing_claim_ids
+                    ):
                         if statement and statement not in blocker_details:
                             blocker_details.append(statement)
 

@@ -12,6 +12,9 @@ GitHub 푸시 차단은 테스트용 가짜 토큰의 과거 이력을 정리해
 
 현재 완료한 오프라인 준비:
 
+- **사용자 확인용 결과물:** `.runtime/product-preview/index.html`에서 완료·차단 공존·근거 부족·분석 실패 4개 고정 합성 예시를 볼 수 있다. 실제 근거 매핑·coordinator(명시적 의미 stub)·상태 결정·답변·제품 renderer를 연결했다. 임의 질문의 실제 AI 분석은 아니다. 업무별 상태/판단/차단/불확실성/출처 카드와 원문 확인을 제공한다. 재생성: `python scripts/build_offline_product_preview.py`.
+- 답변 builder의 완료 보고/차단 요인 혼합을 회귀 재현 후 수정했다. 표시 한도에 따른 업무·출처 생략도 안내한다. 관련 **45 PASS**, 실제 브라우저의 4상황/원문 모달 확인, 기존 증거·Live 기록 **794개 동일**. 기존 기본 서비스의 coordinator cutover나 실제 provider 검증은 하지 않았다.
+
 - SST3 실제 JS 호출/반환 계약, Host 인터페이스와 one-shot 수명주기 감사·수정: `2a1e58e62704c34a3c9a93c3603109f119b4ce3c` 및 [감사 기록](SST3_EXECUTION_PATH_AUDIT.md).
 - 지속 운영 지침과 상태 문서 정비. 기존 PROJECT_STATE의 과거 내용은 아래 역사 기록으로 보존한다.
 - SST2 dry-run 실패의 원인은 과거 Live 승인에 종속된 테스트 fixture다. 임시 fixture로 분리하고, stale 승인 거부 검증을 유지한다.

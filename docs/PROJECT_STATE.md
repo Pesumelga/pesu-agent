@@ -1,6 +1,6 @@
 # PESU Agent — 현재 상태
 
-갱신: 2026-10-19. **현재 단계: Phase 13.5D / Task 11, 검색어 추출 수정 후 SST4 실제 검색·결과 화면 전환 검증 통과. SST3 FAIL과 SST4 PASS는 별도 증거로 보존하며 둘 다 재실행하지 않는다. Evidence 원문 링크 전달을 수정하고 합성 검색→근거 답변·출처 카드 52개 테스트가 통과했다. 이후 승인된 실제 Evidence 연결 시도는 본문 추출 전 FAIL_CLOSED로 종료됐다. Production 추출 진입 조건을 오프라인에서 보강했고 관련 회귀 125개가 통과했다. 후속 실제 검색·본문 검증에는 새 승인이 필요하다.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 Phase 9 이하의 과거 기록은 역사 참고이며 현재 단계·승인·모델 선택을 대체하지 않는다.
+갱신: 2026-10-19. **현재 단계: Phase 13.5D / Task 11, 검색어 추출 수정 후 SST4 실제 검색·결과 화면 전환 검증 통과. SST3 FAIL과 SST4 PASS는 별도 증거로 보존하며 둘 다 재실행하지 않는다. Evidence 원문 링크 전달을 수정하고 합성 검색→근거 답변·출처 카드 52개 테스트가 통과했다. 이후 승인된 실제 Evidence 연결 시도는 본문 추출 전 FAIL_CLOSED로 종료됐다. Production 추출 진입 조건을 오프라인에서 보강했고 관련 회귀 125개가 통과했다. 제품 renderer에 업무별 상태·판단 근거·차단 요인·불확실성·출처 표시를 연결한 오프라인 결과물도 추가했다. 후속 실제 검색·본문 검증에는 새 승인이 필요하다.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 Phase 9 이하의 과거 기록은 역사 참고이며 현재 단계·승인·모델 선택을 대체하지 않는다.
 
 ## 제품이 실제로 도달한 범위
 
@@ -30,6 +30,17 @@
 Engineering Lead가 [NEXT_ACTIONS.md](NEXT_ACTIONS.md)의 우선순위에 따라 승인 불필요 작업을 자율 진행한다. 실제 검색·새 실데이터 수집·실제 provider 비용/민감 처리·동결 계약 변경·중대 설계 변경·배포는 Product Owner의 별도 승인을 받는다. Slack 쓰기와 Slackbot은 금지다.
 
 사용자가 검색어 추출 수정·테스트·커밋과 새 Live 실행을 명시적으로 위임했고, 이를 **같은 query `26년 하반기 간담회`의 SST4 1회, 결과 화면 확인까지만**으로 한정해 완료했다. 정확한 새 HEAD/runner/protocol 해시에 승인 기록을 묶었으며 재시도 없이 통과했다. 다음 제품 작업은 Evidence 연결 준비다. 실제 본문 수집·저장 범위와 provider 비용/외부 전송은 별도 사용자 확인이 필요하다. 이번 승인을 thread 열기·추가 검색·provider 호출·production cutover로 확대하지 않는다.
+
+## 2026-10-19 사용자 확인용 근거 답변 결과물 (합성 데이터)
+
+- 기존 grounded answer presenter가 잃어버리던 업무별 구조를 제품 화면에 전달한다. 업무 상태·판단 근거·차단 요인·불확실성·표시된 출처 ID를 별도 카드로 렌더링하며 기존 legacy payload는 기존 텍스트 표시를 유지한다. 모든 동적 문구는 textContent/createTextNode로 표시한다.
+- 실제 화면에서 기존 답변 builder가 완료 보고까지 차단 요인으로 묶는 결함을 발견해 합성 end-to-end 실패로 재현했다. lifecycle BLOCKER 또는 신호가 없는 역사 fixture의 governing claim만 차단 요인으로 투영하도록 수정했다. Stage 의미/결정 규칙은 바꾸지 않았다.
+- 검토에서 업무·근거의 무표시 절단과 표시 한도를 넘은 출처 누락을 지적했다. 전역 생략 안내 및 업무별 미표시 출처 수를 추가했고 회귀로 검증했다.
+- 결과물: `.runtime/product-preview/index.html` (CSS·제품 JS·합성 데이터를 포함한 독립 HTML), `examples.json` (단계별 합성 trace), `preview.png` (실제 브라우저 화면). `python scripts/build_offline_product_preview.py`로 재생성한다. localhost `http://127.0.0.1:8766/`는 사용자 확인용 로컬 서버이며 외부 공개/배포가 아니다.
+- 합성 검색 결과→실제 backend Evidence 매핑→기존 coordinator(의미 판단 provider는 명시적 stub)→기존 결정 규칙→실제 answer builder/presenter→실제 제품 JS 경로를 사용한다. 완료·완료 보고와 차단 요인 공존·근거 부족·분석 실패 4개 고정 예시다. 임의 질문을 분석하는 오프라인 AI 기능으로 주장하지 않는다. 화면에 합성 데이터와 AI/Slack 미연결을 명시한다.
+- 재현 가능한 결과물을 위해 기존 미추적 UI 자산 `index.html`/`app.js`/`app.css`를 이번 변경과 함께 명시적으로 버전 관리에 포함한다. 다른 미추적 파일은 보존한다.
+- 관련 회귀 **45 PASS (1.61s)**. 실제 브라우저에서 4개 상황 전환, 완료 보고/차단 원인 분리, 출처 원문 모달, 근거 부족/분석 실패의 다른 안내 문구를 확인했다. 결과는 `.runtime/product-result-final.xml`에 있다. 독립 코드 검토의 두 지적을 반영했다.
+- 기존 artifact/output와 이전 Live 로컬 기록 **794개 해시 동일**. 새 Slack/LLM 호출·실제 본문 수집·push·설치 패키지 실행은 없다. `InvestigationService`의 기본 legacy 경로를 새 coordinator로 전환하지 않았다. 실제 Slack/실제 provider/제품 기본 경로 전체 완성은 여전히 미입증이다.
 
 ## 2026-10-19 Production 본문 추출 진입 조건 보강 (오프라인)
 

@@ -224,6 +224,35 @@ def present_grounded_investigation_result(
                 })
 
     bounded_cards = evidence_cards[:MAX_EVIDENCE_CARDS]
+    visible_ids = {item["id"] for item in bounded_cards}
+    source_work_items = getattr(payload, "work_item_cards", [])
+    content_truncated = (
+        len(source_work_items) > 10 or len(evidence_cards) > MAX_EVIDENCE_CARDS
+        or len(getattr(payload, "formatted_markdown_answer", "") or "") > MAX_ANSWER_LENGTH
+        or any(len(card.title) > MAX_SNIPPET_LENGTH
+               or len(card.decisive_claims) > 5 or len(card.blocker_details) > 5
+               or any(len(text) > MAX_SNIPPET_LENGTH for text in card.decisive_claims + card.blocker_details)
+               for card in source_work_items)
+    )
+    work_items = [
+        {
+            "id": card.work_item_id,
+            "title": card.title[:MAX_SNIPPET_LENGTH],
+            "status": card.status,
+            "status_label": card.status_label_ko,
+            "decisive_claims": [text[:MAX_SNIPPET_LENGTH] for text in card.decisive_claims[:5]],
+            "blocker_details": [text[:MAX_SNIPPET_LENGTH] for text in card.blocker_details[:5]],
+            "evidence_ids": list(dict.fromkeys(
+                cit["evidence_id"] for cit in card.evidence_citations
+                if cit.get("evidence_id") in visible_ids
+            )),
+            "omitted_evidence_count": len({
+                cit["evidence_id"] for cit in card.evidence_citations
+                if cit.get("evidence_id") and cit["evidence_id"] not in visible_ids
+            }),
+        }
+        for card in getattr(payload, "work_item_cards", [])[:10]
+    ]
     has_evidence = len(bounded_cards) > 0
     resolved_stop_reason = stop_reason or getattr(payload, "stop_reason", "COMPLETED")
 
@@ -237,6 +266,11 @@ def present_grounded_investigation_result(
     return {
         "investigation_id": investigation_id,
         "answer": full_answer,
+        "summary_headline": str(getattr(payload, "summary_headline", ""))[:MAX_SNIPPET_LENGTH],
+        "is_conclusive": bool(getattr(payload, "is_conclusive", False)),
+        "uncertainty_explanation": str(getattr(payload, "uncertainty_explanation", "") or "")[:MAX_ANSWER_LENGTH],
+        "work_items": work_items,
+        "content_truncated": content_truncated,
         "has_evidence": has_evidence,
         "evidence_count": getattr(payload, "evidence_count", len(evidence_cards)),
         "evidence": bounded_cards,

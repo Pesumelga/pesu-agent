@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PESU Agent</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="logo-mark">P</div>
+        <div class="brand-text">
+          <h1 class="brand-title">PESU</h1>
+          <span class="brand-subtitle">업무 조사 도우미</span>
+        </div>
+      </div>
+      <div class="header-status">
+        <span class="capability-badge" id="slack-capability-badge">Slack &middot; 읽기 전용 (확인 전)</span>
+        <span class="provider-badge" id="provider-badge">AI &middot; 확인 중</span>
+        <button type="button" id="header-history-btn" class="history-trigger-btn" title="조사 기록">&#128220; 기록</button>
+        <button type="button" id="header-settings-btn" class="settings-trigger-btn" title="설정">&#9881; 설정</button>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Input Section -->
+      <section class="query-section">
+        <label for="query-input" class="section-label">질문 입력</label>
+        <div class="textarea-wrapper">
+          <textarea
+            id="query-input"
+            rows="3"
+            placeholder="Slack에서 확인하고 싶은 업무 현황이나 논의 내용을 자연어로 입력하세요..."
+          ></textarea>
+        </div>
+        <div class="query-action-bar">
+          <div class="status-box">
+            <span class="status-dot" id="status-dot"></span>
+            <span class="status-text" id="status-text">상태: 준비 중...</span>
+          </div>
+          <div class="query-action-controls">
+            <span class="keyboard-hint"><kbd>Enter</kbd> 질문 &middot; <kbd>Shift+Enter</kbd> 줄바꿈</span>
+            <button id="submit-btn" class="btn btn-primary" disabled>
+              <span id="btn-text">실행</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Results Section -->
+      <section class="result-section">
+        <!-- Past Investigation Banner -->
+        <div id="past-result-banner" class="past-result-banner hidden">
+          <div class="past-banner-info">
+            <span class="past-banner-tag">&#128220; 과거 조사 결과</span>
+            <span id="past-result-date" class="past-banner-date">2026.09.04 12:30</span>
+          </div>
+          <button type="button" id="btn-return-composer" class="btn btn-secondary btn-sm">&#10010; 새 질문</button>
+        </div>
+
+        <h2 class="section-title">조사 결과</h2>
+        <div id="result-card" class="card result-card">
+          <div id="result-placeholder" class="ready-placeholder">
+            <div class="ready-icon">&#128172;</div>
+            <h3 class="ready-title">무엇을 찾아볼까요?</h3>
+            <p class="ready-desc">Slack의 업무 논의와 현황을 검색하여 근거와 함께 정리해 드립니다.</p>
+            <div class="ready-suggestions">
+              <span class="suggestion-chip">예: &ldquo;지난주 프로젝트 릴리즈 논의 정리해줘&rdquo;</span>
+              <span class="suggestion-chip">예: &ldquo;배포 일정 관련 최근 결정 사항&rdquo;</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Evidence Section -->
+      <section class="evidence-section hidden" id="evidence-section">
+        <h2 class="section-title" id="evidence-heading">근거</h2>
+        <div id="evidence-card" class="card evidence-card">
+          <p id="evidence-placeholder" class="placeholder-text">-</p>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <span>PESU Agent &middot; 개인 AI 조사 도구 (읽기 전용)</span>
+    </footer>
+
+    <!-- External Analysis Consent Modal -->
+    <div id="consent-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="consent-title">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="consent-title" class="modal-title">외부 AI 분석 허용</h3>
+        </div>
+        <div class="modal-body">
+          <p class="modal-desc">
+            질문에 답하기 위해 검색된 Slack 메시지 일부와<br>
+            입력한 질문이 설정된 AI 모델 제공자에게 전송될 수 있습니다.
+          </p>
+          <div class="modal-notice-box">
+            <p class="modal-notice">
+              &bull; 이 허용은 PESU를 종료할 때까지 유지됩니다.<br>
+              &bull; Slack 메시지를 작성하거나 전송하는 권한은 포함되지 않습니다.
+            </p>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="consent-cancel-btn" class="btn btn-secondary">취소</button>
+          <button type="button" id="consent-grant-btn" class="btn btn-primary">이번 실행 중 허용</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- OpenRouter API Key Setup Modal -->
+    <div id="api-key-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="api-key-title">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="api-key-title" class="modal-title">OpenRouter API 키 설정</h3>
+        </div>
+        <div class="modal-body">
+          <p class="modal-desc">
+            PESU의 AI 분석 기능을 사용하려면 OpenRouter API 키를 설정해 주세요.<br>
+            입력하신 키는 이 Windows 사용자 계정에 암호화되어 안전하게 저장됩니다.
+          </p>
+          <div class="api-key-input-wrapper">
+            <input
+              type="password"
+              id="api-key-input"
+              class="api-key-input"
+              placeholder="sk-or-v1-..."
+              autocomplete="off"
+            />
+          </div>
+          <div class="modal-notice-box">
+            <p class="modal-notice">
+              &bull; 저장된 키는 평문으로 노출되거나 디스크에 남지 않습니다.<br>
+              &bull; 언제든지 키를 다시 변경하거나 제거할 수 있습니다.
+            </p>
+          </div>
+          <div id="api-key-error" class="api-key-error hidden"></div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="api-key-remove-btn" class="btn btn-secondary hidden">키 제거</button>
+          <button type="button" id="api-key-cancel-btn" class="btn btn-secondary">취소</button>
+          <button type="button" id="api-key-save-btn" class="btn btn-primary">저장</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Product Settings Modal -->
+    <div id="settings-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <div class="modal-card settings-card">
+        <div class="modal-header">
+          <h3 id="settings-title" class="modal-title">PESU 설정</h3>
+          <button type="button" id="settings-close-x-btn" class="modal-close-btn" aria-label="닫기">&times;</button>
+        </div>
+        <div class="modal-body settings-body">
+          <!-- Section 1: General (일반) -->
+          <div class="settings-section">
+            <h4 class="settings-section-title">일반</h4>
+            <div class="settings-row">
+              <div class="settings-row-info">
+                <span class="settings-label">Windows 로그인 시 PESU 자동 실행:</span>
+                <span id="settings-autostart-status" class="settings-value">꺼짐</span>
+              </div>
+              <button type="button" id="settings-autostart-toggle-btn" class="btn btn-secondary btn-sm">켜기</button>
+            </div>
+            <p id="settings-autostart-desc" class="settings-note">&bull; 켜면 Windows 로그인 후 PESU가 시스템 트레이에서 자동으로 시작됩니다.</p>
+          </div>
+
+          <!-- Section 2: Slack Connection -->
+          <div class="settings-section">
+            <h4 class="settings-section-title">Slack 연결</h4>
+            <div class="settings-row">
+              <div class="settings-row-info">
+                <span class="settings-label">상태:</span>
+                <span id="settings-slack-status" class="settings-value">확인 전 (첫 질문 시 연결됩니다)</span>
+              </div>
+              <button type="button" id="settings-slack-login-btn" class="btn btn-secondary btn-sm">Slack 로그인</button>
+            </div>
+            <p class="settings-note">&bull; 안전을 위해 읽기 전용 모드로 동작하며 메시지 작성/전송 기능은 없습니다.</p>
+          </div>
+
+          <!-- Section 2: OpenRouter AI Provider -->
+          <div class="settings-section">
+            <h4 class="settings-section-title">AI 모델 (OpenRouter)</h4>
+            <div class="settings-row">
+              <div class="settings-row-info">
+                <span class="settings-label">API 키:</span>
+                <span id="settings-ai-status" class="settings-value">확인 중...</span>
+              </div>
+              <div class="settings-actions">
+                <button type="button" id="settings-ai-setup-btn" class="btn btn-secondary btn-sm">키 설정</button>
+                <button type="button" id="settings-ai-remove-btn" class="btn btn-secondary btn-sm hidden">키 제거</button>
+              </div>
+            </div>
+            <p id="settings-ai-desc" class="settings-note">&bull; API 키는 Windows DPAPI로 암호화되어 안전하게 보관됩니다.</p>
+          </div>
+
+          <!-- Section 3: Privacy & Session Consent -->
+          <div class="settings-section">
+            <h4 class="settings-section-title">개인정보 및 권한</h4>
+            <div class="settings-row">
+              <div class="settings-row-info">
+                <span class="settings-label">외부 AI 분석:</span>
+                <span id="settings-consent-status" class="settings-value">필요할 때 확인</span>
+              </div>
+            </div>
+            <p class="settings-note">&bull; 허용은 현재 PESU 실행 동안만 유지되며 종료 시 자동 초기화됩니다.</p>
+          </div>
+
+          <!-- Section 4: Data Management (데이터) -->
+          <div class="settings-section">
+            <h4 class="settings-section-title">데이터</h4>
+            <div class="settings-row">
+              <div class="settings-row-info">
+                <span class="settings-label">조사 기록:</span>
+                <span id="settings-history-status" class="settings-value">0건 저장됨</span>
+              </div>
+              <button type="button" id="settings-history-clear-btn" class="btn btn-danger btn-sm">조사 기록 전체 삭제</button>
+            </div>
+            <p class="settings-note">&bull; 조사 기록은 이 PC의 사용자 데이터 폴더에 저장됩니다.</p>
+          </div>
+
+          <!-- Section 5: Help & Guide -->
+          <div class="settings-section">
+            <h4 class="settings-section-title">도움말</h4>
+            <div class="settings-row">
+              <span class="settings-label">사용 안내:</span>
+              <button type="button" id="settings-reopen-onboarding-btn" class="btn btn-secondary btn-sm">시작 안내 다시 보기</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="settings-close-btn" class="btn btn-primary">닫기</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Key Delete Confirmation Modal -->
+    <div id="key-confirm-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="key-confirm-title">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="key-confirm-title" class="modal-title">API 키 제거 확인</h3>
+        </div>
+        <div class="modal-body">
+          <p class="modal-desc">
+            저장된 OpenRouter API 키를 제거하시겠습니까?<br>
+            제거 후에는 AI 분석 질문 시 다시 키를 설정해야 합니다.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="key-confirm-cancel-btn" class="btn btn-secondary">취소</button>
+          <button type="button" id="key-confirm-ok-btn" class="btn btn-danger">키 제거</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- History Clear Confirmation Modal -->
+    <div id="history-confirm-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="history-confirm-title">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h3 id="history-confirm-title" class="modal-title">조사 기록 전체 삭제</h3>
+        </div>
+        <div class="modal-body">
+          <p class="modal-desc">
+            저장된 조사 기록을 모두 삭제할까요?<br>
+            이 작업은 되돌릴 수 없습니다.
+          </p>
+        </div>
+        <div class="modal-footer">
+          <button type="button" id="history-confirm-cancel-btn" class="btn btn-secondary">취소</button>
+          <button type="button" id="history-confirm-ok-btn" class="btn btn-danger">모두 삭제</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- First-Run Onboarding Modal -->
+    <div id="onboarding-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+      <div class="modal-card onboarding-card">
+        <div class="onboarding-stepper">
+          <div class="step-dot active" id="step-dot-1">1</div>
+          <div class="step-line" id="step-line-1"></div>
+          <div class="step-dot" id="step-dot-2">2</div>
+          <div class="step-line" id="step-line-2"></div>
+          <div class="step-dot" id="step-dot-3">3</div>
+        </div>
+
+        <!-- Step 1: Introduction -->
+        <div id="onboarding-step-1" class="onboarding-step">
+          <div class="modal-header">
+            <h3 id="onboarding-title" class="modal-title">PESU에 오신 것을 환영합니다</h3>
+          </div>
+          <div class="modal-body">
+            <p class="modal-desc">
+              PESU는 필요한 업무 정보를 찾아 근거와 함께 정리해 주는 개인 AI 도우미입니다.
+            </p>
+            <div class="modal-notice-box">
+              <p class="modal-notice">
+                &bull; 현재 Slack 연결은 읽기 전용입니다. PESU가 Slack 메시지를 작성하거나 전송하지 않습니다.<br>
+                &bull; 데이터는 안전하게 보호되며 사용자의 질문에 의해서만 검색됩니다.
+              </p>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" id="onboarding-skip-btn" class="btn btn-secondary">나중에 설정</button>
+            <button type="button" id="onboarding-next-1-btn" class="btn btn-primary">다음</button>
+          </div>
+        </div>
+
+        <!-- Step 2: AI Connection -->
+        <div id="onboarding-step-2" class="onboarding-step hidden">
+          <div class="modal-header">
+            <h3 class="modal-title">AI 모델 연결 (OpenRouter)</h3>
+          </div>
+          <div class="modal-body">
+            <div id="onboarding-ai-configured" class="onboarding-status-card hidden">
+              <span class="status-icon-check">&#10003;</span>
+              <div class="onboarding-status-text">
+                <strong>OpenRouter 설정됨</strong>
+                <p>AI 모델이 연결되어 바로 조사를 진행할 수 있습니다.</p>
+              </div>
+            </div>
+            <div id="onboarding-ai-missing" class="onboarding-status-card">
+              <p class="modal-desc">
+                PESU의 분석 기능을 사용하려면 OpenRouter API 키가 필요합니다.
+              </p>
+              <button type="button" id="onboarding-ai-setup-btn" class="btn btn-secondary btn-sm">API 키 설정</button>
+            </div>
+            <div class="modal-notice-box" style="margin-top: 14px;">
+              <p class="modal-notice">
+                &bull; Slack 내용을 외부 AI로 분석해야 할 때는 실행 중 별도로 허용을 요청합니다.<br>
+                &bull; API 키는 Windows DPAPI로 안전하게 암호화 보관됩니다.
+              </p>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" id="onboarding-prev-2-btn" class="btn btn-secondary">이전</button>
+            <button type="button" id="onboarding-next-2-btn" class="btn btn-primary">다음</button>
+          </div>
+        </div>
+
+        <!-- Step 3: Slack -->
+        <div id="onboarding-step-3" class="onboarding-step hidden">
+          <div class="modal-header">
+            <h3 class="modal-title">Slack 연결 안내</h3>
+          </div>
+          <div class="modal-body">
+            <p class="modal-desc">
+              PESU는 전용 Slack 세션을 통해 필요한 대화를 읽기 전용으로 검색합니다.<br>
+              이미 로그인되어 있다면 별도 설정 없이 다음 조사에서 사용할 수 있습니다.
+            </p>
+            <div class="onboarding-slack-action-box">
+              <span class="settings-label">필요한 경우:</span>
+              <button type="button" id="onboarding-slack-login-btn" class="btn btn-secondary btn-sm">Slack 로그인</button>
+            </div>
+            <div class="modal-notice-box" style="margin-top: 14px;">
+              <p class="modal-notice">
+                &bull; 처음 질문 시 Slack 로그인이 필요하면 자동으로 다시 안내됩니다.<br>
+                &bull; 설정 메뉴에서 언제든지 상태를 확인하고 변경할 수 있습니다.
+              </p>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" id="onboarding-prev-3-btn" class="btn btn-secondary">이전</button>
+            <button type="button" id="onboarding-finish-btn" class="btn btn-primary">PESU 시작</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- History Drawer -->
+    <div id="history-drawer" class="history-drawer hidden" role="dialog" aria-modal="true" aria-label="조사 기록">
+      <div class="drawer-header">
+        <div class="drawer-title-box">
+          <h3 class="drawer-title">&#128220; 조사 기록</h3>
+          <span id="history-count-badge" class="history-count-badge">0</span>
+        </div>
+        <button type="button" id="history-drawer-close-btn" class="drawer-close-btn" aria-label="닫기">&times;</button>
+      </div>
+      <div class="drawer-body">
+        <div id="history-list" class="history-list"></div>
+        <div id="history-empty" class="history-empty hidden">
+          <div class="empty-icon">&#128196;</div>
+          <p class="empty-text">저장된 조사 기록이 없습니다.</p>
+        </div>
+        <div id="history-load-more" class="history-load-more hidden">
+          <button type="button" id="history-load-more-btn" class="btn btn-secondary btn-sm">더 보기</button>
+        </div>
+      </div>
+    </div>
+    <div id="history-drawer-backdrop" class="drawer-backdrop hidden"></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

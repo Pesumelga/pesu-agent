@@ -185,3 +185,38 @@ def test_no_evidence_payload():
     assert res["evidence"] == []
     assert res["no_evidence_message"] is not None
     assert "확정할 수 없습니다" in res["no_evidence_message"] or "구체적으로" in res["no_evidence_message"]
+
+
+def test_structured_workitems_preserve_reasoning_and_source_references():
+    payload = _build_sample_payload(status="BLOCKED", status_label_ko="[차단됨]",
+        blocker_details=["승인 대기"], is_conclusive=True)
+    result = present_grounded_investigation_result("structured", payload)
+    assert result["summary_headline"] == payload.summary_headline
+    assert result["is_conclusive"] is True
+    assert result["work_items"][0]["status"] == "BLOCKED"
+    assert result["work_items"][0]["blocker_details"] == ["승인 대기"]
+    assert result["work_items"][0]["evidence_ids"] == ["E1"]
+
+
+def test_structured_unknown_preserves_uncertainty_for_product_ui():
+    payload = _build_sample_payload(status="UNKNOWN", status_label_ko="[확인 불가]",
+        is_conclusive=False, uncertainty_explanation="완료 여부에 대한 근거가 상충합니다.")
+    result = present_grounded_investigation_result("unknown", payload)
+    assert result["is_conclusive"] is False
+    assert result["uncertainty_explanation"] == payload.uncertainty_explanation
+    assert result["work_items"][0]["status"] == "UNKNOWN"
+
+
+def test_structured_display_reports_omitted_reasoning():
+    payload = _build_sample_payload(decisive_claims=[f"Claim {i}" for i in range(6)])
+    result = present_grounded_investigation_result("bounded", payload)
+    assert len(result["work_items"][0]["decisive_claims"]) == 5
+    assert result["content_truncated"] is True
+
+
+def test_structured_display_discloses_sources_outside_visible_limit():
+    payload = _build_sample_payload(evidence_count=MAX_EVIDENCE_CARDS + 1)
+    result = present_grounded_investigation_result("sources-bounded", payload)
+    assert len(result["evidence"]) == MAX_EVIDENCE_CARDS
+    assert result["work_items"][0]["omitted_evidence_count"] == 1
+    assert result["content_truncated"] is True
