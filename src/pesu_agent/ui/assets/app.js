@@ -484,7 +484,9 @@
       const title = document.createElement('h4');
       title.textContent = item.title || '업무 항목';
       card.appendChild(title);
-      for (const [label, values] of [['판단 근거', item.decisive_claims], ['차단 요인', item.blocker_details]]) {
+      const reasoning = Array.isArray(item.findings) && item.findings.length
+        ? item.findings.map(row => `${row.label}: ${row.statement}`) : item.decisive_claims;
+      for (const [label, values] of [['판단 근거', reasoning], ['차단 요인', item.blocker_details]]) {
         if (!Array.isArray(values) || !values.length) continue;
         const heading = document.createElement('p');
         heading.className = 'workitem-section-label';

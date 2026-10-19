@@ -55,6 +55,7 @@ class GroundedWorkItemCard(BaseModel):
     status: str  # "COMPLETED" | "IN_PROGRESS" | "BLOCKED" | "PLANNED" | "UNKNOWN"
     status_label_ko: str  # "[완료]" | "[진행 중]" | "[차단됨]" | "[계획됨]" | "[확인 불가]"
     decisive_claims: list[str] = Field(default_factory=list)
+    findings: list[dict[str, str]] = Field(default_factory=list)
     blocker_details: list[str] = Field(default_factory=list)
     evidence_citations: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -138,6 +139,7 @@ class GroundedWorkItemAnswerBuilder:
 
             # Extract decisive claims and blocker details
             decisive_claims: list[str] = []
+            findings: list[dict[str, str]] = []
             blocker_details: list[str] = []
             seen_claims: set[str] = set()
 
@@ -150,6 +152,20 @@ class GroundedWorkItemAnswerBuilder:
                     if statement and statement not in seen_claims:
                         seen_claims.add(statement)
                         decisive_claims.append(statement)
+                        claim = graph.claim_nodes.get(trace.claim_id)
+                        kind = str(getattr(getattr(claim, "kind", None), "value", ""))
+                        verified = str(getattr(getattr(claim, "status", None), "value", "")) == "SUPPORTED"
+                        if "CONTRADICTION" in str(trace.relation):
+                            label = "상충하는 근거"
+                        elif kind == "INFERENCE":
+                            label = "추론"
+                        elif kind == "DERIVED":
+                            label = "근거에서 도출한 내용"
+                        elif kind == "FACT" and verified:
+                            label = "확인된 사실"
+                        else:
+                            label = "확인 필요"
+                        findings.append({"label": label, "statement": statement})
 
                     # Check for explicit blocker signal or relation
                     signal_str = str(getattr(trace, "lifecycle_signal", "") or "")
@@ -208,6 +224,7 @@ class GroundedWorkItemAnswerBuilder:
                     status=status_str,
                     status_label_ko=status_label,
                     decisive_claims=decisive_claims,
+                    findings=findings,
                     blocker_details=blocker_details,
                     evidence_citations=evidence_citations,
                 )
@@ -258,8 +275,11 @@ class GroundedWorkItemAnswerBuilder:
             md_parts.append(f"### {card.status_label_ko} {card.title}")
 
             if card.decisive_claims:
-                facts_list = "\n".join(f"- {c}" for c in card.decisive_claims)
-                md_parts.append(f"**확인된 사실:**\n{facts_list}")
+                facts_list = (
+                    "\n".join(f"- {row['label']}: {row['statement']}" for row in card.findings)
+                    if card.findings else "\n".join(f"- {c}" for c in card.decisive_claims)
+                )
+                md_parts.append(f"**판단 근거:**\n{facts_list}")
 
             if card.blocker_details:
                 blockers_list = "\n".join(f"- {b}" for b in card.blocker_details)

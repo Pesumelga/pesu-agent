@@ -1,6 +1,6 @@
 # PESU Agent — 현재 상태
 
-갱신: 2026-10-19. **현재 단계: Phase 13.5D / Task 11, 검색어 추출 수정 후 SST4 실제 검색·결과 화면 전환 검증 통과. SST3 FAIL과 SST4 PASS는 별도 증거로 보존하며 둘 다 재실행하지 않는다. Evidence 원문 링크 전달을 수정하고 합성 검색→근거 답변·출처 카드 52개 테스트가 통과했다. 이후 승인된 실제 Evidence 연결 시도는 본문 추출 전 FAIL_CLOSED로 종료됐다. Production 추출 진입 조건을 오프라인에서 보강했고 관련 회귀 125개가 통과했다. 제품 renderer에 업무별 상태·판단 근거·차단 요인·불확실성·출처 표시를 연결한 오프라인 결과물도 추가했다. 후속 실제 검색·본문 검증에는 새 승인이 필요하다.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 Phase 9 이하의 과거 기록은 역사 참고이며 현재 단계·승인·모델 선택을 대체하지 않는다.
+갱신: 2026-10-19. **현재 결과물: PESU 1.0.0-rc5 Windows 포터블 실행 패키지. 실제 제품 기본 실행 경로를 자연어 계획→Slack 검색→근거·주장 검증→업무 상태→출처 답변으로 연결했다. 관련 오프라인 109 PASS, 최종 EXE의 네이티브 시작 검증 PASS다. 실제 Slack+실제 provider 전체 흐름은 아직 실행하지 않았으며 별도 승인 경계다. 기존 실패/동결 증거 794개는 해시 동일하다.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 과거 기록은 당시 상태이며 현재 승인이나 검증을 대체하지 않는다.
 
 ## 제품이 실제로 도달한 범위
 
@@ -8,10 +8,10 @@
 
 | 영역 | 확인된 구현 / 검증 수준 | 아직 입증되지 않은 부분 |
 | --- | --- | --- |
-| 제품 화면·실행·설정 | `src/pesu_agent/ui/` 및 기존 패키징/동의/로그인 코드 존재. Phase 10–12 완료는 이전 인계 기록이다. | 이번 작업에서 패키지/사용자 화면을 새로 실행하지 않았다. |
+| 제품 화면·실행·설정 | RC5 EXE 빌드 및 실제 WebView2·트레이·닫기/재열기·종료 검증 PASS. | 실제 Slack와 provider를 함께 쓰는 사용자 전체 흐름은 미검증이다. |
 | Slack 검색 | SST3의 제목/query 불일치를 최소 수정하고 SST4 Live에서 입력·guarded submit 각각 1회, 정확한 query와 로딩 완료 search view를 확인했다. 공식 결과 QUALIFICATION_PASS. | 결과 DOM 20개는 전체 검색 결과 수가 아니다. 메시지 본문·스레드 수집과 실제 Evidence 연결은 이번 검증에 포함하지 않았다. |
 | 근거·주장·업무항목 | `graph_models.py`, `claim_verification.py`, `workitem_synthesis.py`, `production_trace_coordinator.py`에 graph·검증·다단계 합성 구현 존재. 과거 Phase 13.5C의 composed qualification은 fixture/stub 기준 통과다. | 실제 Slack + 실제 provider를 결합한 전체 흐름 통과는 입증되지 않았다. |
-| 근거 답변과 UI 연결 | 답변 구성/표시 코드와 production-shaped 오프라인 E2E 테스트 존재. `InvestigationService._get_or_create_orchestrator()`는 현재 기존 `InvestigationOrchestrator`를 생성한다. | 새 ProductionRealTraceCoordinator 경로의 제품 UI cutover는 아직 완료로 볼 수 없다. |
+| 근거 답변과 UI 연결 | 실제 기본 service가 기존 검색 orchestrator와 authoritative trace coordinator를 연결한다. 실제 builder/presenter/기록까지 외부 transport 경계만 대체한 회귀가 통과했다. | 실제 Slack·provider 결합 결과 품질은 별도 검증이 필요하다. |
 
 과거 real-model verifier qualification은 개별 단계의 역사 검증이다. 현재 실제 Slack 전체 흐름 성공으로 확대 해석하지 않는다. Stage 1A/1B/2/2.5의 기존 계약·모델·동결 증거를 임의로 다시 열지 않는다.
 
@@ -30,6 +30,16 @@
 Engineering Lead가 [NEXT_ACTIONS.md](NEXT_ACTIONS.md)의 우선순위에 따라 승인 불필요 작업을 자율 진행한다. 실제 검색·새 실데이터 수집·실제 provider 비용/민감 처리·동결 계약 변경·중대 설계 변경·배포는 Product Owner의 별도 승인을 받는다. Slack 쓰기와 Slackbot은 금지다.
 
 사용자가 검색어 추출 수정·테스트·커밋과 새 Live 실행을 명시적으로 위임했고, 이를 **같은 query `26년 하반기 간담회`의 SST4 1회, 결과 화면 확인까지만**으로 한정해 완료했다. 정확한 새 HEAD/runner/protocol 해시에 승인 기록을 묶었으며 재시도 없이 통과했다. 다음 제품 작업은 Evidence 연결 준비다. 실제 본문 수집·저장 범위와 provider 비용/외부 전송은 별도 사용자 확인이 필요하다. 이번 승인을 thread 열기·추가 검색·provider 호출·production cutover로 확대하지 않는다.
+
+## 2026-10-19 실제 제품 기본 경로와 RC5 실행 패키지
+
+- 납품 파일: `release/PESU-1.0.0-rc5/PESU/PESU.exe`, `release/PESU-1.0.0-rc5-win-x64-portable.zip`. 기존 RC1–RC4와 원본 브랜치는 보존한다. `pesu-start.cmd`도 RC5를 우선 실행한다. 아래 HTML 미리보기는 과거 합성 검토물이며 제품 납품물이 아니다.
+- 기본 factory는 실제 provider와 기존 authoritative Stage 조립 함수를 사용한다. 기존 검색·actor/temporal 제약·동의·로그인·자격 증명·출처·기록을 유지하며 legacy freeform 분석 대신 검증된 trace를 화면에 투영한다. Stage 1A/1B/2/2.5 모델·추론 설정·의미는 유지했다. 추론을 확인된 사실로 표시하지 않는다.
+- 요청별 공유 예산: 모델 요청 최대 16회, 누적 보고 비용 $0.05에 도달하면 다음 호출 차단, transport 자동 재시도 0회. 마지막 호출로 비용을 초과할 수 있어 절대 과금 상한은 아니다. 종료 시작 뒤 추가 모델 호출도 차단한다. typed 로그인 오류를 화면까지 보존한다.
+- 실제 기본 factory/worker부터 graph·판단·답변·기록까지 검증했으며 외부 Slack backend/OpenRouter transport만 합성 경계로 대체했다. 실패·근거 부족·동의 거부·예산·로그인·요청 상태 격리·종료 회귀 포함 **109 PASS (4.62s)**. 결과: `.runtime/product-delivery-verified-tests.xml`.
+- 최종 패키지 `--version`은 RC5, 기존 네이티브 시작 검증은 **PASS (7.25s)**. WebView2·UI handshake·트레이·닫기/재열기·명시적 종료 확인, Slack Host 시작 0회·잔여 프로세스/스레드 0개. 결과: `.runtime/product-delivery/final-startup.stdout.json`. 시작 검증은 검색/LLM 검증이 아니다.
+- 실행 재현에 필요한 기존 미추적 CLI·UI service/bridge/window·history/platform·빌드 spec/의존성/native 빌드 스크립트를 명시적으로 버전 관리한다. 다른 미추적 파일은 보존한다. 조사 출력은 사용자 LocalAppData에 저장한다. 자격 증명·실제 원문은 패키지/커밋에 넣지 않는다.
+- 기존 실패·동결 증거 794개 해시 동일. 새 검색·실제 본문 수집·실제 provider 비용·push·배포는 없다. 실행 가능한 제품은 제공하지만 실데이터 전체 흐름 통과나 제품 최종 완성을 선언하지 않는다. 다음 승인 경계는 아래 NEXT_ACTIONS의 실제 제품 검증이다.
 
 ## 2026-10-19 사용자 확인용 근거 답변 결과물 (합성 데이터)
 

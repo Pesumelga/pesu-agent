@@ -55,6 +55,8 @@ from pesu_agent.search.webview_thread_reader import (
 from pesu_agent.llm.config import LLMConfig
 from pesu_agent.llm.provider import ModelProvider
 from pesu_agent.llm.usage import LLMUsageTracker
+from pesu_agent.llm.budgeted import BudgetedProvider
+from pesu_agent.investigation.production_trace_coordinator import ProductionRealTraceCoordinator, ProductionTraceResult
 from pesu_agent.search.webview_slack_search import (
     WebViewSearchError,
     WebViewSearchFailureCode,
@@ -95,6 +97,7 @@ class InvestigationAuditRecord(BaseModel):
     """민감정보가 제거된 구조화된 조사 실행 감사 기록."""
 
     investigation_id: str
+    failure_code: Optional[str] = None
     question_summary: str
     state: InvestigationState
     stop_reason: InvestigationStopReason
@@ -129,6 +132,8 @@ class InvestigationResult(BaseModel):
     state: InvestigationState
     stop_reason: InvestigationStopReason
     error_message: Optional[str] = None
+    production_trace: Optional[ProductionTraceResult] = None
+    failure_code: Optional[str] = None
 
 
 class InvestigationOrchestrator:
@@ -140,11 +145,13 @@ class InvestigationOrchestrator:
         search_backend: SearchBackend,
         config: Optional[OrchestratorConfig] = None,
         llm_config: Optional[LLMConfig] = None,
+        trace_coordinator: Optional[ProductionRealTraceCoordinator] = None,
     ):
         self.provider = provider
         self.search_backend = search_backend
         self.config = config or OrchestratorConfig()
         self.llm_config = llm_config or LLMConfig()
+        self.trace_coordinator = trace_coordinator
         
         self.planner = InvestigationPlanner(provider=provider, config=self.llm_config)
         self.analyzer = InvestigationAnalyzer(provider=provider, config=self.llm_config)
@@ -226,12 +233,17 @@ class InvestigationOrchestrator:
             f"expr='{resolved_actor_scope.source_expression}'"
         )
 
-        usage_tracker = LLMUsageTracker()
+        if isinstance(self.provider, BudgetedProvider):
+            self.provider.reset()
+            usage_tracker = self.provider.usage_tracker
+        else:
+            usage_tracker = LLMUsageTracker()
         state = InvestigationState.CREATED
         stop_reason = InvestigationStopReason.EVIDENCE_SUFFICIENT
 
         plan: Optional[InvestigationPlan] = None
         analysis: Optional[AnalysisResult] = None
+        production_trace: Optional[ProductionTraceResult] = None
         evidence_package: Optional[EvidencePackage] = None
 
         all_candidates: list[EvidenceItem] = []
@@ -243,6 +255,7 @@ class InvestigationOrchestrator:
         thread_expansions_performed = 0
         overall_thread_context_status: Optional[str] = ThreadContextStatus.NOT_ATTEMPTED.value
         error_message: Optional[str] = None
+        failure_code: Optional[str] = None
 
         logger.info(f"🚀 [INVESTIGATION_START] id={inv_id} question='{question.question[:50]}...'")
 
@@ -270,7 +283,8 @@ class InvestigationOrchestrator:
                     max_search_queries=available_query_budget,
                     search_target=self.config.search_target,
                 )
-                usage_tracker.record_call(plan_usage)
+                if not isinstance(self.provider, BudgetedProvider):
+                    usage_tracker.record_call(plan_usage)
                 self._save_atomic_json(plan_path, plan)
 
             # Check fail-closed for ambiguous / unresolved strict temporal intent (Phase 12.6d)
@@ -449,14 +463,40 @@ class InvestigationOrchestrator:
                 state = InvestigationState.ANALYZING
                 if on_progress:
                     on_progress("analyzing_evidence", "수집된 증거 분석 중...")
-                analysis, analysis_usage = await self.analyzer.analyze(
-                    question=question,
-                    package=evidence_package,
-                    model=self.config.analyzer_model,
-                    reasoning_effort=self.config.analyzer_reasoning_effort,
-                    allow_real_slack_external_analysis=self.config.allow_real_slack_external_analysis,
-                )
-                usage_tracker.record_call(analysis_usage)
+                if self.trace_coordinator is not None:
+                    if not evidence_package.is_synthetic and not self.config.allow_real_slack_external_analysis:
+                        raise InvestigationError("EXTERNAL_ANALYSIS_CONSENT_REQUIRED")
+                    production_trace = await self.trace_coordinator.trace_and_synthesize_async(
+                        question=question.question, candidates=evidence_package.evidence_items,
+                        investigation_objective=plan.objective,
+                        temporal_scope=resolved_temporal_scope, actor_scope=resolved_actor_scope,
+                        candidate_query_provenance=candidate_query_provenance,
+                    )
+                    self._save_atomic_json(inv_dir / "production_trace.json", production_trace)
+                    if not production_trace.success:
+                        failure = production_trace.stop_reason
+                        if "LLM_BUDGET_REACHED" in (production_trace.error_message or ""):
+                            failure = "LLM_BUDGET_REACHED"
+                        raise InvestigationError(failure)
+                    conclusive = production_trace.stop_reason == "COMPLETED"
+                    # This legacy envelope only controls continuation/audit. The UI
+                    # renders the validated trace, never an additional freeform answer.
+                    analysis = AnalysisResult(
+                        summary="근거와 업무 상태 검증을 완료했습니다." if conclusive else "현재 근거만으로 업무 상태를 확정할 수 없습니다.",
+                        assessment="", uncertainty="" if conclusive else production_trace.stop_reason,
+                        conclusion_status="CONFIRMED" if conclusive else "INCONCLUSIVE",
+                        evidence_sufficiency="SUFFICIENT" if conclusive else "INSUFFICIENT",
+                    )
+                else:
+                    analysis, analysis_usage = await self.analyzer.analyze(
+                        question=question,
+                        package=evidence_package,
+                        model=self.config.analyzer_model,
+                        reasoning_effort=self.config.analyzer_reasoning_effort,
+                        allow_real_slack_external_analysis=self.config.allow_real_slack_external_analysis,
+                    )
+                    if not isinstance(self.provider, BudgetedProvider):
+                        usage_tracker.record_call(analysis_usage)
                 self._save_atomic_json(inv_dir / "analysis.json", analysis)
 
                 # Check Continuation (Iterative Loop Evaluation)
@@ -510,6 +550,13 @@ class InvestigationOrchestrator:
             state = InvestigationState.ERROR
             stop_reason = InvestigationStopReason.ERROR
             error_message = str(err)
+            code = getattr(err, "failure_code", None)
+            failure_code = getattr(code, "value", code)
+            if failure_code is None and error_message in {
+                "LLM_BUDGET_REACHED", "PROVIDER_EXECUTION_FAILURE", "INVALID_PROVIDER_OUTPUT",
+                "TRACEABILITY_FAILURE", "EXTERNAL_ANALYSIS_CONSENT_REQUIRED",
+            }:
+                failure_code = error_message
 
         # -------------------------------------------------------------
         # Stage 3: Audit Trail & Final Packaging
@@ -526,6 +573,7 @@ class InvestigationOrchestrator:
 
         audit = InvestigationAuditRecord(
             investigation_id=inv_id,
+            failure_code=failure_code,
             question_summary=question.question[:100],
             state=state,
             stop_reason=stop_reason,
@@ -539,7 +587,7 @@ class InvestigationOrchestrator:
             candidate_count=len(all_candidates),
             selected_evidence_count=len(evidence_package.evidence_items) if evidence_package else 0,
             duplicates_removed=total_duplicates_removed,
-            llm_calls=usage_summary["total_calls"],
+            llm_calls=self.provider.attempt_count if isinstance(self.provider, BudgetedProvider) else usage_summary["total_calls"],
             input_tokens=usage_summary["total_input_tokens"],
             output_tokens=usage_summary["total_output_tokens"],
             total_cost_usd=usage_summary["total_cost_usd"],
@@ -568,4 +616,6 @@ class InvestigationOrchestrator:
             state=state,
             stop_reason=stop_reason,
             error_message=error_message,
+            production_trace=production_trace,
+            failure_code=failure_code,
         )

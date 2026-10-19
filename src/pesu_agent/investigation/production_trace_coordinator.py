@@ -389,6 +389,7 @@ class ProductionRealTraceCoordinator:
 def create_authoritative_synthesis_coordinator(
     synthesis_config: Optional[WorkItemSynthesisConfig] = None,
     llm_config: Optional[LLMConfig] = None,
+    provider: Optional[Any] = None,
 ) -> DecomposedWorkItemSynthesisCoordinator:
     """Constructs a DecomposedWorkItemSynthesisCoordinator wired with authoritative
     qualified OpenRouter components (GPT-5.6-Luna, qualified reasoning effort, zero temperature)
@@ -403,24 +404,28 @@ def create_authoritative_synthesis_coordinator(
 
     return DecomposedWorkItemSynthesisCoordinator(
         membership_grouper=OpenRouterEpisodeMembershipGrouper(
+            provider=provider,
             config=resolved_llm_cfg,
             model="openai/gpt-5.6-luna",
             reasoning_effort="medium",
             temperature=0.0,
         ),
         relation_verifier=OpenRouterWorkItemRelationVerifier(
+            provider=provider,
             config=resolved_llm_cfg,
             model="openai/gpt-5.6-luna",
             reasoning_effort="medium",
             temperature=0.0,
         ),
         lifecycle_verifier=OpenRouterWorkItemLifecycleVerifier(
+            provider=provider,
             config=resolved_llm_cfg,
             model="openai/gpt-5.6-luna",
             reasoning_effort="medium",
             temperature=0.0,
         ),
         authority_verifier=OpenRouterDecisiveLifecycleAuthorityVerifier(
+            provider=provider,
             config=resolved_llm_cfg,
             model="openai/gpt-5.6-luna",
             reasoning_effort="high",

@@ -3,4 +3,4 @@
 MVP 0: Microsoft UI Automation (UIA) tree inspector for Slack Desktop on Windows.
 """
 
-__version__ = "1.0.0-rc4"
+__version__ = "1.0.0-rc5"

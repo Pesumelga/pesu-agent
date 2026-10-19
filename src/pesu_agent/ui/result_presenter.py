@@ -44,6 +44,11 @@ SLACK_TEXT_EXECUTABLE_AS_HTML: bool = False
 STALE_RESULT_CAN_OVERWRITE_CURRENT_QUERY: bool = False
 
 ERROR_MAPPINGS: dict[str, str] = {
+    "LLM_BUDGET_REACHED": "이번 조사의 AI 분석 한도에 도달해 중단했습니다.",
+    "EXTERNAL_ANALYSIS_CONSENT_REQUIRED": "Slack 근거를 외부 AI로 분석하려면 동의가 필요합니다.",
+    "PROVIDER_EXECUTION_FAILURE": "AI 분석 호출에 실패했습니다. 근거가 없다는 뜻은 아닙니다.",
+    "INVALID_PROVIDER_OUTPUT": "AI 분석 결과를 검증하지 못해 안전하게 중단했습니다.",
+    "TRACEABILITY_FAILURE": "원문 출처 연결을 검증하지 못해 답변을 중단했습니다.",
     "AUTH_REQUIRED": "Slack 로그인이 필요합니다.",
     "SEARCH_UNAVAILABLE": "Slack 검색 기능에 접근할 수 없습니다.",
     "UI_CHANGED": "Slack 검색 기능에 접근할 수 없습니다.",
@@ -241,6 +246,7 @@ def present_grounded_investigation_result(
             "status": card.status,
             "status_label": card.status_label_ko,
             "decisive_claims": [text[:MAX_SNIPPET_LENGTH] for text in card.decisive_claims[:5]],
+            "findings": [{"label": row["label"], "statement": row["statement"][:MAX_SNIPPET_LENGTH]} for row in card.findings[:5]],
             "blocker_details": [text[:MAX_SNIPPET_LENGTH] for text in card.blocker_details[:5]],
             "evidence_ids": list(dict.fromkeys(
                 cit["evidence_id"] for cit in card.evidence_citations

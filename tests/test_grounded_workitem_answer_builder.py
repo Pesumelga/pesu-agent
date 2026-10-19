@@ -320,3 +320,12 @@ def test_empty_work_items_returns_clean_non_speculative_payload():
     assert payload.is_conclusive is False
     assert payload.work_item_cards == []
     assert "확인할 수 없습니다" in payload.formatted_markdown_answer or "확정할 수 없습니다" in payload.formatted_markdown_answer
+
+
+def test_inference_is_not_presented_as_confirmed_fact():
+    graph, work_items, chains = _build_test_graph_with_trace()
+    graph.claim_nodes["C1"].kind = ClaimKind.INFERENCE
+    answer = GroundedWorkItemAnswerBuilder.build_answer(question="Rollout status?",
+        graph=graph, work_items=work_items, traceability_chains=chains)
+    assert answer.work_item_cards[0].findings[0]["label"] == "추론"
+    assert "**확인된 사실:**" not in answer.formatted_markdown_answer
