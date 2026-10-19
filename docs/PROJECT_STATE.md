@@ -1,6 +1,6 @@
 # PESU Agent — 현재 상태
 
-갱신: 2026-10-16. **현재 단계: Phase 13.5D / Task 11, 검색어 추출 수정 후 SST4 실제 검색·결과 화면 전환 검증 통과. SST3 FAIL과 SST4 PASS는 별도 증거로 보존하며 둘 다 재실행하지 않는다. Evidence 원문 링크 전달을 수정하고 합성 검색→근거 답변·출처 카드 52개 테스트가 통과했다. 이후 승인된 실제 Evidence 연결 시도는 본문 추출 전 FAIL_CLOSED로 종료됐다. 다음은 Production 추출 진입 조건의 오프라인 보강이다.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 Phase 9 이하의 과거 기록은 역사 참고이며 현재 단계·승인·모델 선택을 대체하지 않는다.
+갱신: 2026-10-19. **현재 단계: Phase 13.5D / Task 11, 검색어 추출 수정 후 SST4 실제 검색·결과 화면 전환 검증 통과. SST3 FAIL과 SST4 PASS는 별도 증거로 보존하며 둘 다 재실행하지 않는다. Evidence 원문 링크 전달을 수정하고 합성 검색→근거 답변·출처 카드 52개 테스트가 통과했다. 이후 승인된 실제 Evidence 연결 시도는 본문 추출 전 FAIL_CLOSED로 종료됐다. Production 추출 진입 조건을 오프라인에서 보강했고 관련 회귀 125개가 통과했다. 후속 실제 검색·본문 검증에는 새 승인이 필요하다.** 이 요약과 [AGENTS.md](../AGENTS.md)가 현재 운영 기준이다. 아래 Phase 9 이하의 과거 기록은 역사 참고이며 현재 단계·승인·모델 선택을 대체하지 않는다.
 
 ## 제품이 실제로 도달한 범위
 
@@ -30,6 +30,16 @@
 Engineering Lead가 [NEXT_ACTIONS.md](NEXT_ACTIONS.md)의 우선순위에 따라 승인 불필요 작업을 자율 진행한다. 실제 검색·새 실데이터 수집·실제 provider 비용/민감 처리·동결 계약 변경·중대 설계 변경·배포는 Product Owner의 별도 승인을 받는다. Slack 쓰기와 Slackbot은 금지다.
 
 사용자가 검색어 추출 수정·테스트·커밋과 새 Live 실행을 명시적으로 위임했고, 이를 **같은 query `26년 하반기 간담회`의 SST4 1회, 결과 화면 확인까지만**으로 한정해 완료했다. 정확한 새 HEAD/runner/protocol 해시에 승인 기록을 묶었으며 재시도 없이 통과했다. 다음 제품 작업은 Evidence 연결 준비다. 실제 본문 수집·저장 범위와 provider 비용/외부 전송은 별도 사용자 확인이 필요하다. 이번 승인을 thread 열기·추가 검색·provider 호출·production cutover로 확대하지 않는다.
+
+## 2026-10-19 Production 본문 추출 진입 조건 보강 (오프라인)
+
+- 현재 observer가 유일한 search view와 정확한 query를 확인하고 loading=false일 때만 본문 추출로 진입한다. query 미확정/부분 일치, 화면 부재, loading/skeleton, 관측 실패에서의 이전 상태 재사용을 차단했다. 대기 시간 초과 뒤 진단용 fallback 추출도 제거했다.
+- 별도 검토에서 probe와 추출 사이 화면이 바뀌는 경합을 지적했다. Production의 두 추출 호출은 query를 6번째 인수로 전달하고, 추출 JS 안에서 기존 observer를 같은 동기 실행으로 재사용해 본문 API 접근 전에 다시 확인한다. 기존 5인수 합성 fixture 호출 호환은 유지하지만 Production은 query를 반드시 전달한다. 재검토에서 추가 중대 결함은 발견되지 않았다.
+- timeout에서는 미확정 결과를 반환하지 않고 fingerprint를 null로 남긴다. 일치한 검색 화면에서 결과 준비만 시간 초과된 경우 `RESULT_READINESS_TIMED_OUT`으로 기록해 빈 결과/새 결과 전환으로 표시하지 않는다. readiness poll에는 mounted 여부도 남긴다.
+- query 미확정/부분 일치/미탑재/loading/skeleton/probe 실패 회귀 8개, loading 값 미확정 1개, 실제 JS의 query/loading/중복 view 차단 3개를 각각 수정 전 실패로 확인했다. 실제 observer 출력으로 Production pipeline을 통과시키는 합성 검증 및 정상 본문 추출의 실제 JS 양성 검증도 포함한다. 예전 성공 fixture는 Production observer 반환 schema를 명시하도록 보완했고 stale 결과를 성공으로 기대하던 테스트는 timeout 거부를 확인하도록 수정했다.
+- 최종 관련 회귀 **125 PASS (7.54s)**. 검색 전환·본문 추출·Evidence 매핑·합성 production trace·grounded answer/presenter를 포함한다. `.runtime/extraction-gate-verified.xml`에 결과를 보관한다. Windows asyncio 준비를 위한 허용된 실행 환경에서 수행했으며 실제 Slack/LLM 호출은 없다.
+- 작업 전 artifact/output **788개**와 이전 실제 Evidence 시도의 로컬 기록 **6개**, 합계 **794개 파일 해시 동일**. 기존 atomic submit JS·SST1–4·Stage 1A/1B/2/2.5 계약·실패 기록을 유지했다. 지난 Live의 마지막 화면/상세 오류가 미기록이므로 이번 재현을 그 실패의 확정 원인으로 간주하지 않는다.
+- 이번에는 실제 검색·새 승인/marker/trace·push를 수행하지 않았다. 다음은 동일한 제한 범위의 실제 Evidence 연결 1회 검증이며 새 명시적 승인 전 실행하지 않는다. 제품 UI cutover/실제 provider 전체 흐름은 여전히 미입증이다.
 
 ## 2026-10-16 승인된 실제 Evidence 연결 시도 — FAIL_CLOSED
 

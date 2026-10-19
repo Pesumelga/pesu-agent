@@ -5,7 +5,7 @@ Validates:
 2. Hard Requirement 2: Existing setter and submit semantics are unchanged and side-effect free.
 3. Case A: Clean initial search transition from unmounted/empty to Result Set A.
 4. Case B: Stale DOM race reproduction: Q2 entered while Result Set A lingers past extraction wait.
-   Verifies current backend reads stale Result Set A and telemetry flags the unchanged fingerprint.
+   Verifies stale Result Set A cannot be returned as a successful new search.
 5. Case C: Transition never occurs: Q2 submitted but Slack surface remains un-transitioned.
 6. Zero wall-clock dependency: uses deterministic mock host / patched sleep.
 """
@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 import pytest
+from pesu_agent.search import webview_slack_search as search_module
 
 from pesu_agent.search.webview_slack_search import (
     WebViewSlackSearchBackend,
@@ -153,7 +154,7 @@ class DeterministicMockWebViewHost:
             }
 
         # 7. Post-Wait Probe
-        if "JS_PROBE_POST_WAIT_SEARCH_STATE" in script or "surface_query_after" in script:
+        if script == search_module.JS_PROBE_POST_WAIT_SEARCH_STATE:
             sq = self.surface_query
             if self.require_verified_state_for_effective_submit and self.effective_submit_triggered and not self.simulate_slack_hang_no_transition:
                 sq = self.input_value
@@ -283,8 +284,7 @@ def test_case_b_stale_dom_race_reproduction_without_wall_clock():
     """Case B: Stale DOM race reproduction.
 
     Q2 is entered and submitted, but the DOM retains Result Set A.
-    Verifies that the current backend extracts the stale Set A, and forensic telemetry
-    accurately flags RESULT_SET_UNCHANGED_AFTER_QUERY_CHANGE.
+    Verifies the backend waits for fresh results and times out without returning stale Set A.
     """
     host = DeterministicMockWebViewHost()
     backend = WebViewSlackSearchBackend(host=host)
@@ -311,25 +311,16 @@ def test_case_b_stale_dom_race_reproduction_without_wall_clock():
     host.search_view_mounted_before = True  # search view is mounted from Q1!
 
     with patch("time.sleep", return_value=None):
-        results_q2 = backend.search_messages(q2, max_results=5)
-
-    telemetry_q2 = backend.last_search_telemetry
-    forensic_q2 = telemetry_q2.get("forensic_transition", {})
-
-    # The backend extracted the stale items
-    assert len(results_q2) == 2
-    # Verify pre-submit fingerprint matched Q1's fingerprint
+        with pytest.raises(WebViewSearchError) as exc_info:
+            backend.search_messages(q2, max_results=5)
+    assert exc_info.value.failure_code == WebViewSearchFailureCode.SEARCH_RESULT_TIMEOUT
+    telemetry_q2 = exc_info.value.details
+    assert telemetry_q2["SEARCH_RESULT_READINESS"] == "TIMEOUT"
+    forensic_q2 = telemetry_q2["forensic_transition"]
     assert forensic_q2["RESULT_FINGERPRINT_BEFORE"] == fp_q1
-    # Verify post-wait fingerprint also matched Q1's fingerprint (stale read)
-    assert forensic_q2["RESULT_FINGERPRINT_AFTER"] == fp_q1
-    assert forensic_q2["RESULT_FINGERPRINT_CHANGED"] is False
-
-    # Hard Requirement 1 asserts:
-    assert forensic_q2["INPUT_MATCHES_REQUESTED"] is True
-    assert forensic_q2["SUBMIT_TRIGGERED"] is True
-    assert forensic_q2["SEARCH_SURFACE_QUERY_MATCHES_REQUESTED"] is True
-    assert forensic_q2["input_query_changed_but_result_fingerprint_unchanged"] is True
-    assert forensic_q2["TRANSITION_CLASSIFICATION"] == "RESULT_SET_UNCHANGED_AFTER_QUERY_CHANGE"
+    assert telemetry_q2["raw_items_count"] == 0
+    assert forensic_q2["RESULT_FINGERPRINT_AFTER"] is None
+    assert forensic_q2["TRANSITION_CLASSIFICATION"] == "RESULT_READINESS_TIMED_OUT"
 
 
 def test_case_c_transition_never_occurs():
@@ -521,6 +512,9 @@ def test_task11r4_t7_phrase_conjunction_quote_preservation_offline():
 
     host = DeterministicMockWebViewHost()
     backend = WebViewSlackSearchBackend(host=host)
+
+    host.input_value = q_t7
+    host.surface_query = q_t7
 
     captured_js_payloads = []
     orig_eval = host.evaluate_js
@@ -728,3 +722,75 @@ def test_task11r5_test_d_previous_result_exists_waits_for_new_result_set():
 
 
 
+
+
+class ExtractionBarrierHost(DeterministicMockWebViewHost):
+    """Uses production probe return fields and records actual extraction dispatches."""
+
+    def __init__(self, states):
+        super().__init__()
+        self.input_value = "release status"
+        self.states = iter(states)
+        self.last_state = None
+        self.extraction_states = []
+
+    def evaluate_js(self, script):
+        if script == search_module.JS_PROBE_POST_WAIT_SEARCH_STATE:
+            self.last_state = next(self.states, self.last_state)
+            if isinstance(self.last_state, Exception):
+                raise self.last_state
+            return self.last_state
+        if script.startswith("(" + search_module.JS_EXTRACT_SEARCH_RESULTS + ")"):
+            self.extraction_states.append(self.last_state)
+            return {"ok": True, "terminal_state": "RESULTS", "items": self.current_results}
+        return super().evaluate_js(script)
+
+
+def _confirmed_surface(**changes):
+    return dict({"surface_query_after": "release status", "search_view_mounted": True,
+                 "loading_detected_after": False, "skeleton_count": 0,
+                 "result_root_count": 1, "empty_element_count": 0}, **changes)
+
+
+@pytest.mark.parametrize("changes", [
+    {"surface_query_after": None},
+    {"surface_query_after": "release"},
+    {"surface_query_after": "release status extra"},
+    {"search_view_mounted": False},
+    {"loading_detected_after": True},
+    {"loading_detected_after": None},
+    {"skeleton_count": 1},
+])
+def test_unconfirmed_surface_never_dispatches_body_extraction(changes):
+    host = ExtractionBarrierHost([_confirmed_surface(**changes)])
+    host.current_results = [_make_sample_item(1, "C123", "1724738400.123456", "Fixture", "Synthetic body")]
+    backend = WebViewSlackSearchBackend(host=host, search_transition_timeout_sec=.02,
+                                        search_transition_poll_interval_sec=.01)
+    with patch("time.sleep", return_value=None):
+        with pytest.raises(WebViewSearchError):
+            backend.search_messages("release status", max_results=5)
+    assert host.extraction_states == []
+
+
+def test_unknown_surface_waits_for_confirmed_query_before_body_extraction():
+    confirmed = _confirmed_surface()
+    host = ExtractionBarrierHost([_confirmed_surface(surface_query_after=None), confirmed])
+    host.current_results = [_make_sample_item(1, "C123", "1724738400.123456", "Fixture", "Synthetic body")]
+    backend = WebViewSlackSearchBackend(host=host, search_transition_timeout_sec=.03,
+                                        search_transition_poll_interval_sec=.01)
+    with patch("time.sleep", return_value=None):
+        results = backend.search_messages("release status", max_results=5)
+    assert len(results) == 1
+    assert host.extraction_states == [confirmed]
+
+
+def test_failed_probe_cannot_reuse_last_confirmed_surface_for_extraction():
+    host = ExtractionBarrierHost([_confirmed_surface(), RuntimeError("Synthetic probe failure")])
+    # Transient empty DOM forces another observation after the first safe extraction.
+    host.current_results = []
+    backend = WebViewSlackSearchBackend(host=host, search_transition_timeout_sec=.03,
+                                        search_transition_poll_interval_sec=.01)
+    with patch("time.sleep", return_value=None):
+        with pytest.raises(WebViewSearchError):
+            backend.search_messages("release status", max_results=5)
+    assert len(host.extraction_states) == 1

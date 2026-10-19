@@ -14,6 +14,7 @@ Validates:
 
 from __future__ import annotations
 
+from pesu_agent.search.webview_slack_search import JS_PROBE_POST_WAIT_SEARCH_STATE
 import asyncio
 import inspect
 import pytest
@@ -86,6 +87,8 @@ def test_evidence_item_fidelity_and_citation_contract():
 
     class MockWindow:
         def evaluate_js(self, script: str) -> Any:
+            if script == JS_PROBE_POST_WAIT_SEARCH_STATE:
+                return {"surface_query_after": "하위작업 추가", "search_view_mounted": True, "loading_detected_after": False, "skeleton_count": 0, "result_root_count": 1, "empty_element_count": 0}
             if "JS_CHECK_AUTH_AND_READINESS" in script or "searchButtons.length === 1" in script:
                 return {"ready": True, "auth_required": False, "search_button_count": 1}
             if "JS_ACTIVATE_SEARCH" in script or "mousedownEvt" in script:
@@ -145,6 +148,8 @@ def test_dedupe_keep_first_policy_preserved():
 
     class MockDupWindow:
         def evaluate_js(self, script: str) -> Any:
+            if script == JS_PROBE_POST_WAIT_SEARCH_STATE:
+                return {"surface_query_after": "중복 테스트", "search_view_mounted": True, "loading_detected_after": False, "skeleton_count": 0, "result_root_count": 1, "empty_element_count": 0}
             if "searchButtons.length === 1" in script or "isLoginScreen" in script:
                 return {"ready": True, "auth_required": False, "search_button_count": 1}
             if "top_nav_search" in script or "mousedown" in script:

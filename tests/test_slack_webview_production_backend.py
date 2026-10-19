@@ -27,6 +27,7 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+from pesu_agent.search.webview_slack_search import JS_PROBE_POST_WAIT_SEARCH_STATE
 import inspect
 from pathlib import Path
 import pytest
@@ -185,6 +186,8 @@ def test_representation_b_mock_search_success():
 
     class MockWindow:
         def evaluate_js(self, script: str) -> Any:
+            if script == JS_PROBE_POST_WAIT_SEARCH_STATE:
+                return {"surface_query_after": "섹션 테스트", "search_view_mounted": True, "loading_detected_after": False, "skeleton_count": 0, "result_root_count": 1, "empty_element_count": 0}
             if "JS_CHECK_AUTH_AND_READINESS" in script or "searchButtons.length === 1" in script:
                 return {"ready": True, "auth_required": False, "search_button_count": 1}
             if "JS_ACTIVATE_SEARCH" in script or "mousedownEvt" in script:
@@ -230,6 +233,8 @@ def test_representation_b_conflict_or_invalid_fails_closed():
 
     class MockConflictWindow:
         def evaluate_js(self, script: str) -> Any:
+            if script == JS_PROBE_POST_WAIT_SEARCH_STATE:
+                return {"surface_query_after": "충돌 테스트", "search_view_mounted": True, "loading_detected_after": False, "skeleton_count": 0, "result_root_count": 1, "empty_element_count": 0}
             if "JS_CHECK_AUTH_AND_READINESS" in script or "searchButtons.length === 1" in script:
                 return {"ready": True, "auth_required": False, "search_button_count": 1}
             if "JS_ACTIVATE_SEARCH" in script or "mousedownEvt" in script:
@@ -308,6 +313,8 @@ def test_mock_search_and_protocol_mapping(monkeypatch):
 
     class MockWindow:
         def evaluate_js(self, script: str) -> Any:
+            if script == JS_PROBE_POST_WAIT_SEARCH_STATE:
+                return {"surface_query_after": "테스트 쿼리", "search_view_mounted": True, "loading_detected_after": False, "skeleton_count": 0, "result_root_count": 1, "empty_element_count": 0}
             if "JS_CHECK_AUTH_AND_READINESS" in script or "searchButtons.length === 1" in script:
                 return {"ready": True, "auth_required": False, "search_button_count": 1}
             if "JS_ACTIVATE_SEARCH" in script or "mousedownEvt" in script:
@@ -489,6 +496,7 @@ def test_readiness_polling_dispatches_activation_max_once():
         elif "skeleton_count" in js_code:
             return {
                 "surface_query_after": "테스트",
+                "search_view_mounted": True,
                 "loading_detected_after": False,
                 "skeleton_count": 0,
                 "result_root_count": 0,
@@ -808,8 +816,10 @@ def test_consecutive_investigations_search_after_thread_navigation():
     mock_win.get_active_team_id.return_value = "T32QA15GC"
 
     def mock_evaluate_js(script, timeout=10.0):
+        if script == JS_PROBE_POST_WAIT_SEARCH_STATE:
+            return {"surface_query_after": "26년 하반기 간담회" if current_state["search_count"] == 1 else "간담회 장소", "search_view_mounted": True, "loading_detected_after": False, "skeleton_count": 0, "result_root_count": 1, "empty_element_count": 0}
         # 1. Team ID resolution
-        if "boot_data" in script or "pathname.match" in script:
+        if ("boot_data" in script or "pathname.match" in script) and "maxSampleCount" not in script:
             return "T32QA15GC"
 
         # 2. Check auth and readiness
@@ -1021,6 +1031,7 @@ def test_search_readiness_gate_case1_delayed_mounting_succeeds():
         if "skeleton_count" in script:
             return {
                 "surface_query_after": "테스트 쿼리",
+                "search_view_mounted": True,
                 "loading_detected_after": False,
                 "skeleton_count": 0,
                 "result_root_count": 0,
@@ -1217,6 +1228,7 @@ def test_search_readiness_gate_case6_immediately_ready_has_zero_delay():
         if "skeleton_count" in script:
             return {
                 "surface_query_after": "테스트 쿼리",
+                "search_view_mounted": True,
                 "loading_detected_after": False,
                 "skeleton_count": 0,
                 "result_root_count": 0,

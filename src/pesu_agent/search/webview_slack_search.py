@@ -1152,7 +1152,16 @@ SEARCH_VIEW_SELECTOR = '[data-qa="search_view"]'
 SEARCH_RESULT_ROW_SELECTORS = '[data-qa="search_result"], [data-qa="search_message_result_item"], .c-search_result'
 
 JS_EXTRACT_SEARCH_RESULTS = r"""
-((maxSampleCount, bodyScopeSel, bodyFragSel, senderSel, timestampSel) => {
+((maxSampleCount, bodyScopeSel, bodyFragSel, senderSel, timestampSel, expectedQuery) => {
+    // Recheck in the same synchronous JS execution as body reads: the view may
+    // have changed since Python's last readiness observation.
+    if (expectedQuery !== undefined) {
+        const state = __PESU_SEARCH_SURFACE_PROBE__;
+        if (!state.search_view_mounted || state.surface_query_after !== expectedQuery ||
+            state.loading_detected_after !== false || state.skeleton_count !== 0) {
+            return { ok: false, error: 'SEARCH_SURFACE_NOT_CONFIRMED', items: [] };
+        }
+    }
     const searchViews = Array.from(document.querySelectorAll('[data-qa="search_view"]')).filter(el => el && el.isConnected);
     if (searchViews.length !== 1) {
         const emptyViews = Array.from(document.querySelectorAll('[data-qa="search_empty_view"], .c-search_empty_view')).filter(el => el && el.isConnected);
@@ -1399,7 +1408,7 @@ JS_EXTRACT_SEARCH_RESULTS = r"""
         items: itemReports
     };
 })
-"""
+""".replace("__PESU_SEARCH_SURFACE_PROBE__", JS_PROBE_POST_WAIT_SEARCH_STATE)
 
 
 from pesu_agent.investigation.models import EvidenceItem, SearchQuery
@@ -1845,6 +1854,8 @@ class WebViewSlackSearchBackend(SearchBackend):
         # 3. Explicit Empty State vs Mounted Results vs Stale Results
         for poll_idx in range(max_transition_polls):
             # Read-Only Post-Wait Probe (Hard Requirement 2: Side-effect free)
+            # A failed observation cannot authorize reads using an earlier view.
+            post_wait_probe = {}
             try:
                 res_post_wait = self._window.evaluate_js(JS_PROBE_POST_WAIT_SEARCH_STATE)
                 if isinstance(res_post_wait, dict):
@@ -1854,21 +1865,22 @@ class WebViewSlackSearchBackend(SearchBackend):
 
             surface_query_after = post_wait_probe.get("surface_query_after")
             skeleton_count = int(post_wait_probe.get("skeleton_count", 0))
-            loading_after = bool(post_wait_probe.get("loading_detected_after", False) or skeleton_count > 0)
+            loading_after = bool(post_wait_probe.get("loading_detected_after") is not False or skeleton_count > 0)
             result_root_count = int(post_wait_probe.get("result_root_count", 0))
             empty_element_count = int(post_wait_probe.get("empty_element_count", 0))
 
             norm_surf = re.sub(r"\s+", " ", surface_query_after or "").strip().lower()
             surface_query_matches = bool(
-                norm_surf and (norm_req in norm_surf or norm_surf in norm_req)
+                surface_query_after is not None and surface_query_after.strip() == validated_query
             )
+            search_view_mounted = post_wait_probe.get("search_view_mounted") is True
 
             poll_fp: Optional[str] = None
             poll_result_count: int = 0
             poll_readiness = "NOT_READY"
 
-            # Check readiness only when query transition is satisfied on surface (or mock unreadable)
-            if surface_query_matches or surface_query_after is None:
+            # Body reads require a current, uniquely mounted, matching search surface.
+            if surface_query_matches and search_view_mounted:
                 if loading_after:
                     poll_readiness = "LOADING"
                 elif empty_element_count > 0 and result_root_count == 0:
@@ -1882,7 +1894,7 @@ class WebViewSlackSearchBackend(SearchBackend):
                         f"{json.dumps(self.BODY_SCOPE_CONTAINER)}, "
                         f"{json.dumps(self.BODY_FRAGMENT_SELECTOR)}, "
                         f"{json.dumps(self.SENDER_CANONICAL_SELECTOR)}, "
-                        f"{json.dumps(self.TIMESTAMP_CANONICAL_SELECTOR)})"
+                        f"{json.dumps(self.TIMESTAMP_CANONICAL_SELECTOR)}, {json.dumps(validated_query)})"
                     )
                     res_extract = self._window.evaluate_js(js_extract)
                     if isinstance(res_extract, dict) and res_extract.get("ok"):
@@ -1908,6 +1920,7 @@ class WebViewSlackSearchBackend(SearchBackend):
             poll_record = {
                 "poll_index": poll_idx + 1,
                 "surface_query_matches": surface_query_matches,
+                "search_view_mounted": search_view_mounted,
                 "result_count": poll_result_count,
                 "result_fingerprint": poll_fp,
                 "loading_state": loading_after,
@@ -1948,24 +1961,12 @@ class WebViewSlackSearchBackend(SearchBackend):
                     f"{json.dumps(self.BODY_SCOPE_CONTAINER)}, "
                     f"{json.dumps(self.BODY_FRAGMENT_SELECTOR)}, "
                     f"{json.dumps(self.SENDER_CANONICAL_SELECTOR)}, "
-                    f"{json.dumps(self.TIMESTAMP_CANONICAL_SELECTOR)})"
+                    f"{json.dumps(self.TIMESTAMP_CANONICAL_SELECTOR)}, {json.dumps(validated_query)})"
                 )
                 res_extract = self._window.evaluate_js(js_extract)
         else:
-            # TIMEOUT: neither results nor explicit empty state confirmed
-            # If result roots exist in DOM but didn't change (test_case_b), allow fallback extract for forensic reporting
-            if result_root_count > 0:
-                js_extract = (
-                    f"({JS_EXTRACT_SEARCH_RESULTS})("
-                    f"{max_results}, "
-                    f"{json.dumps(self.BODY_SCOPE_CONTAINER)}, "
-                    f"{json.dumps(self.BODY_FRAGMENT_SELECTOR)}, "
-                    f"{json.dumps(self.SENDER_CANONICAL_SELECTOR)}, "
-                    f"{json.dumps(self.TIMESTAMP_CANONICAL_SELECTOR)})"
-                )
-                res_extract = self._window.evaluate_js(js_extract)
-            else:
-                res_extract = {"ok": True, "terminal_state": "TIMEOUT", "items": []}
+            # A timeout never authorizes a forensic body read or returning prior rows.
+            res_extract = {"ok": True, "terminal_state": "TIMEOUT", "items": []}
 
         if not (isinstance(res_extract, dict) and res_extract.get("ok")):
             telemetry["last_confirmed_stage"] = "EXTRACTION_FAILED"
@@ -2076,7 +2077,9 @@ class WebViewSlackSearchBackend(SearchBackend):
         telemetry["valid_items_count"] = len(parsed_results)
         telemetry["raw_items_evaluated"] = raw_items_evaluated
 
-        result_fingerprint_after = compute_result_set_fingerprint(raw_items_evaluated)
+        result_fingerprint_after = (
+            compute_result_set_fingerprint(raw_items_evaluated) if final_readiness != "TIMEOUT" else None
+        )
 
         # Forensic transition evaluations (Hard Requirement 1: Separate Query & Result Axes)
         norm_req = re.sub(r"\s+", " ", validated_query).strip().lower()
@@ -2087,7 +2090,7 @@ class WebViewSlackSearchBackend(SearchBackend):
 
         norm_surf = re.sub(r"\s+", " ", surface_query_after or "").strip().lower()
         surface_query_matches_requested = bool(
-            norm_surf and (norm_req in norm_surf or norm_surf in norm_req)
+            surface_query_after is not None and surface_query_after.strip() == validated_query
         )
 
         norm_before = re.sub(r"\s+", " ", surface_query_before or "").strip().lower()
@@ -2096,7 +2099,7 @@ class WebViewSlackSearchBackend(SearchBackend):
         )
 
         result_fingerprint_changed: Optional[bool] = None
-        if result_fingerprint_before is not None:
+        if result_fingerprint_before is not None and result_fingerprint_after is not None:
             result_fingerprint_changed = (result_fingerprint_before != result_fingerprint_after)
 
         # Classification ladder strictly conforming to Hard Requirement 1
@@ -2106,6 +2109,8 @@ class WebViewSlackSearchBackend(SearchBackend):
             transition_classification = "QUERY_APPLIED_BUT_NOT_SUBMITTED"
         elif not surface_query_matches_requested:
             transition_classification = "QUERY_SUBMITTED_BUT_SURFACE_NOT_TRANSITIONED"
+        elif final_readiness == "TIMEOUT":
+            transition_classification = "RESULT_READINESS_TIMED_OUT"
         elif result_fingerprint_changed is False:
             transition_classification = "RESULT_SET_UNCHANGED_AFTER_QUERY_CHANGE"
         elif result_fingerprint_changed is True:
